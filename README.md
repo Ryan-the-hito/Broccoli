@@ -3,7 +3,7 @@
 
 A simple floating helper of GPT-3. Private APIs needed.
 
-一个桌面版的 GPT-3，需要填入 API 即可使用。
+一个桌面版的 GPT-3，需要填入 API 即可使用。（M1 及以上的芯片才可使用——没办法，我没有别的开发环境，请见谅。）
 
 放两个 API，欢迎大家试用，剩余多少钱随缘，我会更新 API 的可用情况。
 
