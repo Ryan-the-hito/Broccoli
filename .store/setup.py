@@ -14,7 +14,7 @@ DATA_FILES = ['Broccolimen.icns', 'Broccolidsk.icns', 'Broccolimen.png', 'wechat
 OPTIONS = {'iconfile': 'Broccolidsk.icns',
            'packages': ['PyQt6', 'openai', 'markdown2', 'codecs', 'revChatGPT', 'anyio'],
            'plist': {
-            'CFBundleShortVersionString': '0.0.7',
+            'CFBundleShortVersionString': '0.0.8',
             'LSUIElement': True,
             },
            }
@@ -25,5 +25,5 @@ setup(
     options={'py2app': OPTIONS},
     setup_requires=['py2app'],
     author='Ryan-the-hito',
-    version='0.0.7'
+    version='0.0.8'
 )

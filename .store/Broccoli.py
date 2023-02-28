@@ -102,7 +102,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.0.7', self)
+        lbl1 = QLabel('Version 0.0.8', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -536,7 +536,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.0.7', self)
+        lbl = QLabel('Current Version: 0.0.8', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
