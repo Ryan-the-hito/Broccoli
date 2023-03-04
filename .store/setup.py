@@ -12,9 +12,9 @@ DATA_FILES = ['Broccolimen.icns', 'Broccolidsk.icns', 'Broccolimen.png', 'wechat
               'wechat10.png', 'wechat5.png', 'alipay50.png', 'alipay20.png', 
               'alipay10.png', 'alipay5.png', 'api.txt', 'output.txt', 'which.txt', 'pass.txt', 'account.txt']
 OPTIONS = {'iconfile': 'Broccolidsk.icns',
-           'packages': ['PyQt6', 'openai', 'markdown2', 'codecs', 'revChatGPT', 'anyio'],
+           'packages': ['PyQt6', 'openai', 'markdown2', 'codecs', 'revChatGPT', 'transformers'],
            'plist': {
-            'CFBundleShortVersionString': '0.0.8',
+            'CFBundleShortVersionString': '0.0.9',
             'LSUIElement': True,
             },
            }
@@ -25,5 +25,5 @@ setup(
     options={'py2app': OPTIONS},
     setup_requires=['py2app'],
     author='Ryan-the-hito',
-    version='0.0.8'
+    version='0.0.9'
 )

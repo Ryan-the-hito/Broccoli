@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import sys
+import time
+
+import revChatGPT.V1
 from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QLabel, QHBoxLayout, QVBoxLayout,
                              QSystemTrayIcon, QMenu, QDialog,
@@ -17,8 +20,7 @@ import openai
 import markdown2
 import datetime
 from revChatGPT.V1 import Chatbot
-import asyncio
-import anyio
+from revChatGPT.V3 import Chatbot
 
 app = QApplication(sys.argv)
 app.setQuitOnLastWindowClosed(False)
@@ -102,7 +104,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.0.8', self)
+        lbl1 = QLabel('Version 0.0.9', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -536,7 +538,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.0.8', self)
+        lbl = QLabel('Current Version: 0.0.9', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -729,7 +731,29 @@ class MyWidget(QWidget):  # 主窗口
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
                 try:
-                    asyncio.run(self.ChatMain())
+                    prompt = str(self.text1.toPlainText())
+                    chatbot = revChatGPT.V1.Chatbot(config={
+                        "email": AccountGPT,
+                        "password": PassGPT
+                    })
+                    prev_text = ""
+                    for data in chatbot.ask(
+                            prompt,
+                    ):
+                        message = data["message"][len(prev_text):]
+                        prev_text = data["message"]
+                        with open('output.txt', 'a', encoding='utf-8') as f1:
+                            f1.write(message)
+                        ProcessText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                        midhtml = self.md2html(ProcessText)
+                        self.real1.setHtml(midhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
 
                     with open('output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('\n\n')
@@ -774,43 +798,81 @@ class MyWidget(QWidget):  # 主窗口
                 self.text1.setReadOnly(False)
             if AccountGPT == '' or PassGPT == '':
                 self.real1.setText('You should set your accounts in Settings.')
-
-    async def ChatMain(self):
-        QApplication.processEvents()
-        QApplication.restoreOverrideCursor()
-        AccountGPT = codecs.open('account.txt', 'r', encoding='utf-8').read()
-        PassGPT = codecs.open('pass.txt', 'r', encoding='utf-8').read()
-        prompt = str(self.text1.toPlainText())
-        chatbot = Chatbot(config={
-            "email": AccountGPT,
-            "password": PassGPT
-        })
-        OldPs = ''
-        QApplication.processEvents()
-        QApplication.restoreOverrideCursor()
-        for data in chatbot.ask(
-                prompt,
-                conversation_id=chatbot.config.get("conversation"),
-                parent_id=chatbot.config.get("parent_id"),
-        ):
-            QApplication.processEvents()
-            QApplication.restoreOverrideCursor()
-            NewPs = data["message"].replace(OldPs, '')
-            OldPs = data["message"]
-            with open('output.txt', 'a', encoding='utf-8') as f1:
-                f1.write(NewPs)
-            #print(NewPs)
-            ProcessText = codecs.open('output.txt', 'r', encoding='utf-8').read()
-            midhtml = self.md2html(ProcessText)
-            self.real1.setHtml(midhtml)
-            self.real1.ensureCursorVisible()  # 游标可用
-            cursor = self.real1.textCursor()  # 设置游标
-            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-            cursor.setPosition(pos)  # 游标位置设置为尾部
-            self.real1.setTextCursor(cursor)  # 滚动到游标位置
-            QApplication.processEvents()
-            QApplication.restoreOverrideCursor()
-            sys.stdout.flush()
+        if Which == '2':
+            self.LastQ = str(self.text1.toPlainText())
+            AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
+            if AccountGPT != '' and self.text1.toPlainText() != '':
+                self.text1.setReadOnly(True)
+                md = '- Q: ' + self.text1.toPlainText() + '\n\n'
+                with open('output.txt', 'a', encoding='utf-8') as f1:
+                    f1.write(md)
+                PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                newhtml = self.md2html(PromText)
+                self.real1.setHtml(newhtml)
+                self.real1.ensureCursorVisible()  # 游标可用
+                cursor = self.real1.textCursor()  # 设置游标
+                pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                cursor.setPosition(pos)  # 游标位置设置为尾部
+                self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                try:
+                    EndMess = '- A: '
+                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write(EndMess)
+                    chatbot = revChatGPT.V3.Chatbot(api_key=AccountGPT)
+                    for data in chatbot.ask(str(self.text1.toPlainText())):
+                        with open('output.txt', 'a', encoding='utf-8') as f1:
+                            f1.write(data)
+                            AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                            endhtml = self.md2html(AllText)
+                            self.real1.setHtml(endhtml)
+                            self.real1.ensureCursorVisible()  # 游标可用
+                            cursor = self.real1.textCursor()  # 设置游标
+                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                            cursor.setPosition(pos)  # 游标位置设置为尾部
+                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                            QApplication.processEvents()
+                            QApplication.restoreOverrideCursor()
+                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('\n\n')
+                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = AllText.replace('- A: \n\t', '- A: ')
+                    AllText = AllText.replace('- A: \n', '- A: ')
+                    AllText = AllText.replace('- A: ', '- A: \n\t')
+                    AllText = AllText.replace('\n', '\n\n\t')
+                    AllText = AllText.replace('\n\n\t\n\n\t', '\n\n\t')
+                    AllText = AllText.replace('\n\n\t\t', '\n\n\t')
+                    AllText = AllText.replace('\n\n\t\n\n\t', '\n\n\t')
+                    AllText = AllText.replace('- A: \n\n\t', '- A: \n\t')
+                    AllText = AllText.replace('\t- A: ', '- A: ')
+                    AllText = AllText.replace('\t- Q: ', '- Q: ')
+                    AllText = AllText.replace('\t---', '---')
+                    AllText = AllText.rstrip('\t')
+                    AllText = AllText + '---\n\n'
+                    with open('output.txt', 'w', encoding='utf-8') as f1:
+                        f1.write(AllText)
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    self.text1.clear()
+                except:
+                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('\tError, please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    self.text1.setPlainText(self.LastQ)
+                self.text1.setReadOnly(False)
+            if AccountGPT == '':
+                self.real1.setText('You should set your API in Settings.')
 
     def ClearX(self):
         self.text1.clear()
@@ -978,13 +1040,15 @@ class window4(QWidget):  # Customization settings
         self.widget1 = QComboBox(self)
         #self.widget1.setFixedWidth(70)
         self.widget1.setEditable(False)
-        defalist = ['GPT-3', 'ChatGPT']
+        defalist = ['GPT-3 (API)', 'ChatGPT (web)', 'ChatGPT (API)']
         self.widget1.addItems(defalist)
         Which = codecs.open('which.txt', 'r', encoding='utf-8').read()
         if Which == '0':
             self.widget1.setCurrentIndex(0)
         if Which == '1':
             self.widget1.setCurrentIndex(1)
+        if Which == '2':
+            self.widget1.setCurrentIndex(2)
         self.widget1.currentIndexChanged.connect(self.IndexChange)
 
         self.le1 = QLineEdit(self)
@@ -1033,6 +1097,9 @@ class window4(QWidget):  # Customization settings
         if i == 1:
             with open('which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('1')
+        if i == 2:
+            with open('which.txt', 'w', encoding='utf-8') as f0:
+                f0.write('2')
 
     def SaveAPI(self):
         with open('api.txt', 'w', encoding='utf-8') as f1:
