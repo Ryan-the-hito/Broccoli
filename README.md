@@ -1,5 +1,5 @@
 # Broccoli
-![YyARJQJ](https://i.imgur.com/YyARJQJ.png)
+![Y5Xt1FR](https://i.imgur.com/Y5Xt1FR.png)
 
 A simple floating helper of GPT-3. Private APIs needed.
 
