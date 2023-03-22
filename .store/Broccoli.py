@@ -100,7 +100,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.1.2', self)
+        lbl1 = QLabel('Version 0.1.3', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -534,7 +534,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.1.2', self)
+        lbl = QLabel('Current Version: 0.1.3', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -655,7 +655,8 @@ class MyWidget(QWidget):  # 主窗口
                     openai.api_key = AccountGPT
                     # Generate text with GPT-3
                     model_engine = "text-davinci-003"
-                    prompt = str(self.text1.toPlainText())
+                    history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
+                    prompt = history + str(self.text1.toPlainText())
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
                     completions = openai.Completion.create(
@@ -690,9 +691,9 @@ class MyWidget(QWidget):  # 主窗口
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
                     self.text1.clear()
-                except:
+                except Exception as e:
                     with open('output.txt', 'a', encoding='utf-8') as f1:
-                        f1.write('\tError, please try again!' + '\n\n---\n\n')
+                        f1.write('\tError, please try again!' + str(e) + '\n\n---\n\n')
                     AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
@@ -727,7 +728,8 @@ class MyWidget(QWidget):  # 主窗口
                 QApplication.restoreOverrideCursor()
                 try:
                     openai.api_key = AccountGPT
-                    prompt = str(self.text1.toPlainText())
+                    history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
+                    prompt = history + str(self.text1.toPlainText())
                     completion = openai.ChatCompletion.create(
                         model="gpt-3.5-turbo",
                         messages=[{"role": "user", "content": prompt}],
@@ -761,9 +763,9 @@ class MyWidget(QWidget):  # 主窗口
                     QApplication.restoreOverrideCursor()
 
                     self.text1.clear()
-                except:
+                except Exception as e:
                     with open('output.txt', 'a', encoding='utf-8') as f1:
-                        f1.write('Error, please try again!' + '\n\n---\n\n')
+                        f1.write('Error, please try again!' + str(e) + '\n\n---\n\n')
                     AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
@@ -797,7 +799,9 @@ class MyWidget(QWidget):  # 主窗口
                     with open('output.txt', 'a', encoding='utf-8') as f1:
                         f1.write(EndMess)
                     chatbot = Chatbot(api_key=AccountGPT)
-                    for data in chatbot.ask(str(self.text1.toPlainText())):
+                    history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
+                    prompt = history + str(self.text1.toPlainText())
+                    for data in chatbot.ask(prompt):
                         with open('output.txt', 'a', encoding='utf-8') as f1:
                             f1.write(data)
                             AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
@@ -836,9 +840,9 @@ class MyWidget(QWidget):  # 主窗口
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.clear()
-                except:
+                except Exception as e:
                     with open('output.txt', 'a', encoding='utf-8') as f1:
-                        f1.write('\tError, please try again!' + '\n\n---\n\n')
+                        f1.write('\tError, please try again!' + str(e)  + '\n\n---\n\n')
                     AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
