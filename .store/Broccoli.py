@@ -2,9 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import sys
-import time
-
-import revChatGPT.V1
 from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QLabel, QHBoxLayout, QVBoxLayout,
                              QSystemTrayIcon, QMenu, QDialog,
@@ -19,7 +16,6 @@ import webbrowser
 import openai
 import markdown2
 import datetime
-from revChatGPT.V1 import Chatbot
 from revChatGPT.V3 import Chatbot
 
 app = QApplication(sys.argv)
@@ -104,7 +100,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.1.0', self)
+        lbl1 = QLabel('Version 0.1.2', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -538,7 +534,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.1.0', self)
+        lbl = QLabel('Current Version: 0.1.2', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -711,13 +707,12 @@ class MyWidget(QWidget):  # 主窗口
                 self.real1.setText('You should set your API in Settings.')
         if Which == '1':
             self.LastQ = str(self.text1.toPlainText())
-            AccountGPT = codecs.open('account.txt', 'r', encoding='utf-8').read()
-            PassGPT = codecs.open('pass.txt', 'r', encoding='utf-8').read()
-            if AccountGPT != '' and PassGPT != '':
+            AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
+            if AccountGPT != '':
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
                 self.text1.setReadOnly(True)
-                md = '- Q: ' + self.text1.toPlainText() + '\n\n- A: '
+                md = '- Q: ' + self.text1.toPlainText() + '\n\n'
                 with open('output.txt', 'a', encoding='utf-8') as f1:
                     f1.write(md)
                 PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
@@ -731,56 +726,39 @@ class MyWidget(QWidget):  # 主窗口
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
                 try:
+                    openai.api_key = AccountGPT
                     prompt = str(self.text1.toPlainText())
-                    chatbot = revChatGPT.V1.Chatbot(config={
-                        "email": AccountGPT,
-                        "password": PassGPT
-                    })
-                    prev_text = ""
-                    for data in chatbot.ask(
-                            prompt,
-                    ):
-                        message = data["message"][len(prev_text):]
-                        prev_text = data["message"]
-                        with open('output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write(message)
-                        ProcessText = codecs.open('output.txt', 'r', encoding='utf-8').read()
-                        midhtml = self.md2html(ProcessText)
-                        self.real1.setHtml(midhtml)
-                        self.real1.ensureCursorVisible()  # 游标可用
-                        cursor = self.real1.textCursor()  # 设置游标
-                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                        cursor.setPosition(pos)  # 游标位置设置为尾部
-                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                        QApplication.processEvents()
-                        QApplication.restoreOverrideCursor()
+                    completion = openai.ChatCompletion.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=100,
+                        n=1,
+                        stop=None,
+                        temperature=0.5,
+                    )
+                    answer = completion.choices[0].message["content"].strip()
+                    QApplication.processEvents()
+                    QApplication.restoreOverrideCursor()
+                    message = answer.lstrip('\n')
+                    message = message.replace('\n', '\n\n\t')
+                    message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                    message = '\n\t' + message
+                    QApplication.processEvents()
+                    QApplication.restoreOverrideCursor()
 
+                    EndMess = '- A: ' + message + '\n\n---\n\n'
                     with open('output.txt', 'a', encoding='utf-8') as f1:
-                        f1.write('\n\n')
-
-                    TypeSet = codecs.open('output.txt', 'r', encoding='utf-8').read()
-                    TypeSet = TypeSet.replace('- A: \n\t', '- A: ')
-                    TypeSet = TypeSet.replace('- A: \n', '- A: ')
-                    TypeSet = TypeSet.replace('- A: ', '- A: \n\t')
-                    TypeSet = TypeSet.replace('\n', '\n\n\t')
-                    TypeSet = TypeSet.replace('\n\n\t\n\n\t', '\n\n\t')
-                    TypeSet = TypeSet.replace('\n\n\t\t', '\n\n\t')
-                    TypeSet = TypeSet.replace('\n\n\t\n\n\t', '\n\n\t')
-                    TypeSet = TypeSet.replace('- A: \n\n\t', '- A: \n\t')
-                    TypeSet = TypeSet.replace('\t- A: ', '- A: ')
-                    TypeSet = TypeSet.replace('\t- Q: ', '- Q: ')
-                    TypeSet = TypeSet.replace('\t---', '---')
-                    TypeSet = TypeSet.rstrip('\t')
-                    TypeSet = TypeSet + '---\n\n'
-                    with open('output.txt', 'w', encoding='utf-8') as f1:
-                        f1.write(TypeSet)
-                    endhtml = self.md2html(TypeSet)
-                    self.real1.setHtml(endhtml)
+                        f1.write(EndMess)
+                    ProcessText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    midhtml = self.md2html(ProcessText)
+                    self.real1.setHtml(midhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
                     cursor = self.real1.textCursor()  # 设置游标
                     pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    QApplication.processEvents()
+                    QApplication.restoreOverrideCursor()
 
                     self.text1.clear()
                 except:
@@ -796,7 +774,7 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.setPlainText(self.LastQ)
                 self.text1.setReadOnly(False)
-            if AccountGPT == '' or PassGPT == '':
+            if AccountGPT == '':
                 self.real1.setText('You should set your accounts in Settings.')
         if Which == '2':
             self.LastQ = str(self.text1.toPlainText())
@@ -818,7 +796,7 @@ class MyWidget(QWidget):  # 主窗口
                     EndMess = '- A: '
                     with open('output.txt', 'a', encoding='utf-8') as f1:
                         f1.write(EndMess)
-                    chatbot = revChatGPT.V3.Chatbot(api_key=AccountGPT)
+                    chatbot = Chatbot(api_key=AccountGPT)
                     for data in chatbot.ask(str(self.text1.toPlainText())):
                         with open('output.txt', 'a', encoding='utf-8') as f1:
                             f1.write(data)
@@ -1031,16 +1009,15 @@ class window4(QWidget):  # Customization settings
 
     def initUI(self):  # 设置窗口内布局
         self.setUpMainWindow()
-        self.resize(350, 150)
+        self.resize(350, 100)
         self.center()
         self.setWindowTitle('Customization settings')
         self.setFocus()
 
     def setUpMainWindow(self):
         self.widget1 = QComboBox(self)
-        #self.widget1.setFixedWidth(70)
         self.widget1.setEditable(False)
-        defalist = ['GPT-3 (API)', 'ChatGPT (web)', 'ChatGPT (API)']
+        defalist = ['GPT-3 (API)', 'ChatGPT (Official API)', 'ChatGPT (Third-party API)']
         self.widget1.addItems(defalist)
         Which = codecs.open('which.txt', 'r', encoding='utf-8').read()
         if Which == '0':
@@ -1056,18 +1033,6 @@ class window4(QWidget):  # Customization settings
         Apis = codecs.open('api.txt', 'r', encoding='utf-8').read()
         if Apis != '':
             self.le1.setText(Apis)
-
-        self.le2 = QLineEdit(self)
-        self.le2.setPlaceholderText('Account here...')
-        AccountGPT = codecs.open('account.txt', 'r', encoding='utf-8').read()
-        if AccountGPT != '':
-            self.le2.setText(AccountGPT)
-
-        self.le3 = QLineEdit(self)
-        self.le3.setPlaceholderText('Password here...')
-        PassGPT = codecs.open('pass.txt', 'r', encoding='utf-8').read()
-        if PassGPT != '':
-            self.le3.setText(PassGPT)
 
         btn_1 = QPushButton('Save', self)
         btn_1.clicked.connect(self.SaveAPI)
@@ -1085,8 +1050,6 @@ class window4(QWidget):  # Customization settings
         vbox1.setContentsMargins(20, 20, 20, 20)
         vbox1.addWidget(self.widget1)
         vbox1.addWidget(self.le1)
-        vbox1.addWidget(self.le2)
-        vbox1.addWidget(self.le3)
         vbox1.addWidget(qw2)
         self.setLayout(vbox1)
 
@@ -1104,10 +1067,6 @@ class window4(QWidget):  # Customization settings
     def SaveAPI(self):
         with open('api.txt', 'w', encoding='utf-8') as f1:
             f1.write(self.le1.text())
-        with open('account.txt', 'w', encoding='utf-8') as f1:
-            f1.write(self.le2.text())
-        with open('pass.txt', 'w', encoding='utf-8') as f1:
-            f1.write(self.le3.text())
         self.close()
 
     def center(self):  # 设置窗口居中
