@@ -17,6 +17,10 @@ import openai
 import markdown2
 import datetime
 from revChatGPT.V3 import Chatbot
+import re
+import subprocess
+import pyperclip
+import signal
 
 app = QApplication(sys.argv)
 app.setQuitOnLastWindowClosed(False)
@@ -100,7 +104,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.1.3', self)
+        lbl1 = QLabel('Version 0.1.4', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -534,7 +538,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.1.3', self)
+        lbl = QLabel('Current Version: 0.1.4', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -570,6 +574,10 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
         self.show()
 
 
+class TimeoutException(Exception):
+    pass
+
+
 class MyWidget(QWidget):  # 主窗口
     def __init__(self):
         super().__init__()
@@ -582,18 +590,22 @@ class MyWidget(QWidget):  # 主窗口
 
         self.real1 = QTextEdit(self)
         self.real1.setReadOnly(True)
-        self.real1.setFixedSize(460, 660)
+        self.real1.setFixedSize(460, 630)
 
         self.text1 = QPlainTextEdit(self)
         self.text1.setReadOnly(False)
         self.text1.setObjectName('edit')
-        self.text1.setFixedSize(360, 100)
+        self.text1.setFixedSize(360, 85)
         self.text1.setPlaceholderText('Your prompts here...')
 
-        btn_sub1 = QPushButton('🔺 Send', self)
-        btn_sub1.clicked.connect(self.SendX)
-        btn_sub1.setFixedSize(80, 20)
-        btn_sub1.setShortcut("Ctrl+Return")
+        self.btn_sub1 = QPushButton('🔺 Send', self)
+        self.btn_sub1.clicked.connect(self.SendX)
+        self.btn_sub1.setFixedSize(80, 20)
+        self.btn_sub1.setShortcut("Ctrl+Return")
+
+        self.btn_sub4 = QPushButton('🔹 Again', self)
+        self.btn_sub4.clicked.connect(self.AgainX)
+        self.btn_sub4.setFixedSize(80, 20)
 
         btn_sub2 = QPushButton('🔸 Clear', self)
         btn_sub2.clicked.connect(self.ClearX)
@@ -603,42 +615,95 @@ class MyWidget(QWidget):  # 主窗口
         btn_sub3.clicked.connect(self.ExportX)
         btn_sub3.setFixedSize(80, 20)
 
+        self.widget0 = QComboBox(self)
+        self.widget0.setCurrentIndex(0)
+        self.widget0.addItems(['Chat and ask', 'Command', 'Translate', 'Polish', 'Summarize', 'Grammatically analyze', 'Explain code'])
+        self.widget0.currentIndexChanged.connect(self.ModeX)
+        self.widget0.setMaximumWidth(370)
+
+        self.widget1 = QComboBox(self)
+        self.widget1.setCurrentIndex(0)
+        self.widget1.addItems(['中文', 'English', 'Japanese'])
+        self.widget1.setVisible(False)
+        self.widget1.currentIndexChanged.connect(self.TranslateX)
+
+        self.lbl1 = QLabel('▶', self)
+        self.lbl1.setVisible(False)
+
+        self.widget2 = QComboBox(self)
+        self.widget2.setCurrentIndex(0)
+        self.widget2.addItems(['English', 'Japanese'])
+        self.widget2.setVisible(False)
+
+        self.widget3 = QComboBox(self)
+        self.widget3.setCurrentIndex(0)
+        self.widget3.addItems(['Context: None', 'Banana', 'Strawberry', 'Orange', 'All'])
+        self.widget3.setVisible(False)  # cancel this setting at the end.
+
         qw1 = QWidget()
         vbox1 = QVBoxLayout()
         vbox1.setContentsMargins(0, 0, 0, 0)
         vbox1.addStretch()
-        vbox1.addWidget(btn_sub1)
+        vbox1.addWidget(self.btn_sub1)
+        vbox1.addWidget(self.btn_sub4)
         vbox1.addWidget(btn_sub2)
         vbox1.addWidget(btn_sub3)
-        vbox1.addStretch()
         qw1.setLayout(vbox1)
 
+        qw1_3 = QWidget()
+        vbox1_3 = QHBoxLayout()
+        vbox1_3.setContentsMargins(0, 0, 0, 0)
+        vbox1_3.addWidget(self.widget0)
+        vbox1_3.addWidget(self.widget1)
+        vbox1_3.addWidget(self.lbl1)
+        vbox1_3.addWidget(self.widget2)
+        vbox1_3.addWidget(self.widget3)
+        qw1_3.setLayout(vbox1_3)
+
         qw2 = QWidget()
-        vbox2 = QHBoxLayout()
+        vbox2 = QVBoxLayout()
         vbox2.setContentsMargins(0, 0, 0, 0)
-        vbox2.addWidget(self.text1)
+        vbox2.addWidget(qw1_3)
         vbox2.addStretch()
-        vbox2.addWidget(qw1)
+        vbox2.addWidget(self.text1)
         qw2.setLayout(vbox2)
+
+        qw2_1 = QWidget()
+        vbox2_1 = QHBoxLayout()
+        vbox2_1.setContentsMargins(0, 0, 0, 0)
+        vbox2_1.addWidget(qw2)
+        vbox2_1.addWidget(qw1)
+        qw2_1.setLayout(vbox2_1)
 
         vbox3 = QVBoxLayout()
         vbox3.setContentsMargins(20, 20, 20, 20)
-        vbox3.addStretch()
         vbox3.addWidget(self.real1)
-        vbox3.addWidget(qw2)
         vbox3.addStretch()
+        vbox3.addWidget(qw2_1)
         self.setLayout(vbox3)
 
+    def timeout_handler(self, signum, frame):
+        raise TimeoutException("Timeout")
+
     def SendX(self):
+        self.btn_sub1.setDisabled(True)
+        self.btn_sub4.setDisabled(True)
         Which = codecs.open('which.txt', 'r', encoding='utf-8').read()
         if Which == '0':
+            if self.text1.toPlainText() == '':
+                a = pyperclip.paste()
+                self.text1.setPlainText(a)
+            QuesText = self.text1.toPlainText()
+            QuesText = QuesText.lstrip('\n')
+            QuesText = QuesText.replace('\n', '\n\n\t')
+            QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
             self.LastQ = str(self.text1.toPlainText())
             AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
             if AccountGPT != '' and self.text1.toPlainText() != '':
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
                 self.text1.setReadOnly(True)
-                md = '- Q: ' + self.text1.toPlainText() + '\n\n'
+                md = '- Q: ' + QuesText + '\n\n'
                 with open('output.txt', 'a', encoding='utf-8') as f1:
                     f1.write(md)
                 PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
@@ -651,12 +716,28 @@ class MyWidget(QWidget):  # 主窗口
                 self.real1.setTextCursor(cursor)  # 滚动到游标位置
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
+                signal.signal(signal.SIGALRM, self.timeout_handler)
+                signal.alarm(15)  # set timer to 15 seconds
                 try:
                     openai.api_key = AccountGPT
-                    # Generate text with GPT-3
                     model_engine = "text-davinci-003"
                     history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
-                    prompt = history + str(self.text1.toPlainText())
+                    prompt = str(self.text1.toPlainText())
+                    if self.widget0.currentIndex() == 0:
+                        prompt = history + str(self.text1.toPlainText())
+                    if self.widget0.currentIndex() == 1:
+                        prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                    if self.widget0.currentIndex() == 2:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 3:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Polish this text in original language to remove grammar mistakes and make it clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 4:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Summarize this text in original language to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 5:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Analyse this text in {self.widget2.currentText()} in a teaching way to explain it to a student, including the function of every word and the grammar structure of sentence. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 6:
+                        prompt = f"""Code: {str(self.text1.toPlainText())}. Analyse this code in {self.widget2.currentText()} in a teaching way to explain it to a student, including its function and possible debugging plans. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
                     completions = openai.Completion.create(
@@ -670,12 +751,31 @@ class MyWidget(QWidget):  # 主窗口
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
                     message = completions.choices[0].text
-                    message = message.lstrip('\n')
-                    message = message.replace('\n', '\n\n\t')
-                    message = message.replace('\n\n\t\n\n\t', '\n\n\t')
-                    message = '\n\t' + message
-                    QApplication.processEvents()
-                    QApplication.restoreOverrideCursor()
+                    if self.widget0.currentIndex() == 0:
+                        message = message.lstrip('\n')
+                        message = message.replace('\n', '\n\n\t')
+                        message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                        message = '\n\t' + message
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
+                    if self.widget0.currentIndex() == 1:
+                        pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                        result = pattern.findall(message)
+                        ResultEnd = ''.join(result)
+                        subprocess.call(['osascript', '-e', ResultEnd])
+                        message = "Your command is being operated."
+                    if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
+                            self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
+                            self.widget0.currentIndex() == 6:
+                        pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                        result = pattern.findall(message)
+                        ResultEnd = ''.join(result)
+                        pyperclip.copy(ResultEnd)
+                        message = ResultEnd
+                        message = message.lstrip('\n')
+                        message = message.replace('\n', '\n\n\t')
+                        message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                        message = '\n\t' + message
 
                     EndMess = '- A: ' + message + '\n\n---\n\n'
                     with open('output.txt', 'a', encoding='utf-8') as f1:
@@ -690,10 +790,11 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
+
                     self.text1.clear()
-                except Exception as e:
+                except TimeoutException:
                     with open('output.txt', 'a', encoding='utf-8') as f1:
-                        f1.write('\tError, please try again!' + str(e) + '\n\n---\n\n')
+                        f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
                     AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
@@ -703,17 +804,37 @@ class MyWidget(QWidget):  # 主窗口
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.setPlainText(self.LastQ)
+                except Exception as e:
+                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('- A: Error, please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    self.text1.setPlainText(self.LastQ)
+                signal.alarm(0)  # reset timer
                 self.text1.setReadOnly(False)
             if AccountGPT == '':
                 self.real1.setText('You should set your API in Settings.')
         if Which == '1':
+            if self.text1.toPlainText() == '':
+                a = pyperclip.paste()
+                self.text1.setPlainText(a)
+            QuesText = self.text1.toPlainText()
+            QuesText = QuesText.lstrip('\n')
+            QuesText = QuesText.replace('\n', '\n\n\t')
+            QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
             self.LastQ = str(self.text1.toPlainText())
             AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
-            if AccountGPT != '':
+            if AccountGPT != '' and self.text1.toPlainText() != '':
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
                 self.text1.setReadOnly(True)
-                md = '- Q: ' + self.text1.toPlainText() + '\n\n'
+                md = '- Q: ' + QuesText + '\n\n'
                 with open('output.txt', 'a', encoding='utf-8') as f1:
                     f1.write(md)
                 PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
@@ -726,10 +847,27 @@ class MyWidget(QWidget):  # 主窗口
                 self.real1.setTextCursor(cursor)  # 滚动到游标位置
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
+                signal.signal(signal.SIGALRM, self.timeout_handler)
+                signal.alarm(15)  # set timer to 15 seconds
                 try:
                     openai.api_key = AccountGPT
                     history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
-                    prompt = history + str(self.text1.toPlainText())
+                    prompt = str(self.text1.toPlainText())
+                    if self.widget0.currentIndex() == 0:
+                        prompt = history + str(self.text1.toPlainText())
+                    if self.widget0.currentIndex() == 1:
+                        prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                    if self.widget0.currentIndex() == 2:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 3:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Polish this text in original language to remove grammar mistakes and make it clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 4:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Summarize this text in original language to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 5:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Analyse this text in {self.widget2.currentText()} in a teaching way to explain it to a student, including the function of every word and the grammar structure of sentence. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 6:
+                        prompt = f"""Code: {str(self.text1.toPlainText())}. Analyse this code in {self.widget2.currentText()} in a teaching way to explain it to a student, including its function and possible debugging plans. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+
                     completion = openai.ChatCompletion.create(
                         model="gpt-3.5-turbo",
                         messages=[{"role": "user", "content": prompt}],
@@ -738,15 +876,34 @@ class MyWidget(QWidget):  # 主窗口
                         stop=None,
                         temperature=0.5,
                     )
-                    answer = completion.choices[0].message["content"].strip()
+                    message = completion.choices[0].message["content"].strip()
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
-                    message = answer.lstrip('\n')
-                    message = message.replace('\n', '\n\n\t')
-                    message = message.replace('\n\n\t\n\n\t', '\n\n\t')
-                    message = '\n\t' + message
-                    QApplication.processEvents()
-                    QApplication.restoreOverrideCursor()
+                    if self.widget0.currentIndex() == 0:
+                        message = message.lstrip('\n')
+                        message = message.replace('\n', '\n\n\t')
+                        message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                        message = '\n\t' + message
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
+                    if self.widget0.currentIndex() == 1:
+                        pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                        result = pattern.findall(message)
+                        ResultEnd = ''.join(result)
+                        subprocess.call(['osascript', '-e', ResultEnd])
+                        message = "Your command is being operated."
+                    if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
+                            self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
+                            self.widget0.currentIndex() == 6:
+                        pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                        result = pattern.findall(message)
+                        ResultEnd = ''.join(result)
+                        pyperclip.copy(ResultEnd)
+                        message = ResultEnd
+                        message = message.lstrip('\n')
+                        message = message.replace('\n', '\n\n\t')
+                        message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                        message = '\n\t' + message
 
                     EndMess = '- A: ' + message + '\n\n---\n\n'
                     with open('output.txt', 'a', encoding='utf-8') as f1:
@@ -763,9 +920,9 @@ class MyWidget(QWidget):  # 主窗口
                     QApplication.restoreOverrideCursor()
 
                     self.text1.clear()
-                except Exception as e:
+                except TimeoutException:
                     with open('output.txt', 'a', encoding='utf-8') as f1:
-                        f1.write('Error, please try again!' + str(e) + '\n\n---\n\n')
+                        f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
                     AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
@@ -775,15 +932,35 @@ class MyWidget(QWidget):  # 主窗口
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.setPlainText(self.LastQ)
+                except Exception as e:
+                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('- A: Error, please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    self.text1.setPlainText(self.LastQ)
+                signal.alarm(0)  # reset timer
                 self.text1.setReadOnly(False)
             if AccountGPT == '':
                 self.real1.setText('You should set your accounts in Settings.')
         if Which == '2':
+            if self.text1.toPlainText() == '':
+                a = pyperclip.paste()
+                self.text1.setPlainText(a)
+            QuesText = self.text1.toPlainText()
+            QuesText = QuesText.lstrip('\n')
+            QuesText = QuesText.replace('\n', '\n\n\t')
+            QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
             self.LastQ = str(self.text1.toPlainText())
             AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
             if AccountGPT != '' and self.text1.toPlainText() != '':
                 self.text1.setReadOnly(True)
-                md = '- Q: ' + self.text1.toPlainText() + '\n\n'
+                md = '- Q: ' + QuesText + '\n\n'
                 with open('output.txt', 'a', encoding='utf-8') as f1:
                     f1.write(md)
                 PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
@@ -794,13 +971,30 @@ class MyWidget(QWidget):  # 主窗口
                 pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
                 cursor.setPosition(pos)  # 游标位置设置为尾部
                 self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                signal.signal(signal.SIGALRM, self.timeout_handler)
+                signal.alarm(15)  # set timer to 15 seconds
                 try:
                     EndMess = '- A: '
                     with open('output.txt', 'a', encoding='utf-8') as f1:
                         f1.write(EndMess)
                     chatbot = Chatbot(api_key=AccountGPT)
                     history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
-                    prompt = history + str(self.text1.toPlainText())
+                    prompt = str(self.text1.toPlainText())
+                    if self.widget0.currentIndex() == 0:
+                        prompt = history + str(self.text1.toPlainText())
+                    if self.widget0.currentIndex() == 1:
+                        prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                    if self.widget0.currentIndex() == 2:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 3:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Polish this text in original language to remove grammar mistakes and make it clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 4:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Summarize this text in original language to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 5:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Analyse this text in {self.widget2.currentText()} in a teaching way to explain it to a student, including the function of every word and the grammar structure of sentence. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 6:
+                        prompt = f"""Code: {str(self.text1.toPlainText())}. Analyse this code in {self.widget2.currentText()} in a teaching way to explain it to a student, including its function and possible debugging plans. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+
                     for data in chatbot.ask(prompt):
                         with open('output.txt', 'a', encoding='utf-8') as f1:
                             f1.write(data)
@@ -824,12 +1018,30 @@ class MyWidget(QWidget):  # 主窗口
                     AllText = AllText.replace('\n\n\t\n\n\t', '\n\n\t')
                     AllText = AllText.replace('\n\n\t\t', '\n\n\t')
                     AllText = AllText.replace('\n\n\t\n\n\t', '\n\n\t')
+                    AllText = AllText.replace('- A:\n\t ', '- A: ')
                     AllText = AllText.replace('- A: \n\n\t', '- A: \n\t')
                     AllText = AllText.replace('\t- A: ', '- A: ')
                     AllText = AllText.replace('\t- Q: ', '- Q: ')
                     AllText = AllText.replace('\t---', '---')
                     AllText = AllText.rstrip('\t')
-                    AllText = AllText + '---\n\n'
+                    if self.widget0.currentIndex() == 0:
+                        AllText = AllText + '---\n\n'
+                    if self.widget0.currentIndex() == 1:
+                        pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                        result = pattern.findall(AllText)
+                        ResultEnd = ''.join(result)
+                        subprocess.call(['osascript', '-e', ResultEnd])
+                        AllText = re.sub(r'<\|start\|>([\s\S]*?)<\|end\|>', '', AllText)
+                        AllText = AllText.rstrip('\n') + "Your command is being operated." + '\n\n---\n\n'
+                    if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or\
+                            self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or\
+                            self.widget0.currentIndex() == 6:
+                        pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                        result = pattern.findall(AllText)
+                        ResultEnd = ''.join(result).lstrip(' ').lstrip('\n').lstrip('\t')
+                        pyperclip.copy(ResultEnd)
+                        AllText = AllText.replace('<|start|>', '').replace('<|end|>', '')
+                        AllText = AllText + '---\n\n'
                     with open('output.txt', 'w', encoding='utf-8') as f1:
                         f1.write(AllText)
                     endhtml = self.md2html(AllText)
@@ -840,9 +1052,9 @@ class MyWidget(QWidget):  # 主窗口
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.clear()
-                except Exception as e:
+                except TimeoutException:
                     with open('output.txt', 'a', encoding='utf-8') as f1:
-                        f1.write('\tError, please try again!' + str(e)  + '\n\n---\n\n')
+                        f1.write('Timed out, please try again!' + '\n\n---\n\n')
                     AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
@@ -852,9 +1064,24 @@ class MyWidget(QWidget):  # 主窗口
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.setPlainText(self.LastQ)
+                except Exception as e:
+                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('Error, please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    self.text1.setPlainText(self.LastQ)
+                signal.alarm(0)  # reset timer
                 self.text1.setReadOnly(False)
             if AccountGPT == '':
                 self.real1.setText('You should set your API in Settings.')
+        self.btn_sub1.setDisabled(False)
+        self.btn_sub4.setDisabled(False)
 
     def ClearX(self):
         self.text1.clear()
@@ -874,6 +1101,74 @@ class MyWidget(QWidget):  # 主窗口
             fulldir = os.path.join(fj, tarname)
             with open(fulldir, 'w', encoding='utf-8') as f1:
                 f1.write(ConText)
+
+    def ModeX(self, i):
+        if i == 0:
+            self.widget1.setVisible(False)
+            self.widget2.setVisible(False)
+            #self.widget3.setVisible(True)
+            self.widget3.setVisible(False)
+            self.lbl1.setVisible(False)
+        if i == 1:
+            self.widget1.setVisible(False)
+            self.widget2.setVisible(False)
+            self.widget3.setVisible(False)
+            self.lbl1.setVisible(False)
+        if i == 2:
+            self.widget1.setVisible(True)
+            self.widget2.setVisible(True)
+            self.widget3.setVisible(False)
+            self.lbl1.setVisible(True)
+        if i == 3:
+            self.widget1.setVisible(False)
+            self.widget2.setVisible(False)
+            self.widget3.setVisible(False)
+            self.lbl1.setVisible(False)
+        if i == 4:
+            self.widget1.setVisible(False)
+            self.widget2.setVisible(False)
+            self.widget3.setVisible(False)
+            self.lbl1.setVisible(False)
+        if i == 5:
+            self.widget1.setVisible(True)
+            self.widget2.setVisible(True)
+            self.widget3.setVisible(False)
+            self.lbl1.setVisible(True)
+        if i == 6:
+            self.widget1.setVisible(True)
+            self.widget2.setVisible(True)
+            self.widget3.setVisible(False)
+            self.lbl1.setVisible(True)
+
+    def AgainX(self):
+        self.btn_sub1.setDisabled(True)
+        self.btn_sub4.setDisabled(True)
+        AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+        if AllText != '':
+            AllList = AllText.split('---')
+            while '\n\n' in AllList:
+                AllList.remove('\n\n')
+            pattern = re.compile(r'- Q: ([\s\S]*?)\n\n- A')
+            result = pattern.findall(AllList[-1])
+            ResultEnd = ''.join(result).replace('\t', '').lstrip('\n').rstrip('\n')
+            self.text1.setPlainText(ResultEnd)
+            self.SendX()
+        self.btn_sub1.setDisabled(False)
+        self.btn_sub4.setDisabled(False)
+
+    def TranslateX(self, i):
+        if i == 0:
+            self.widget2.clear()
+            self.widget2.addItems(['English', 'Japanese'])
+            self.widget2.setCurrentIndex(0)
+        if i == 1:
+            self.widget2.clear()
+            self.widget2.addItems(['中文', 'Japanese'])
+            self.widget2.setCurrentIndex(0)
+        if i == 2:
+            self.widget2.clear()
+            self.widget2.addItems(['中文', 'English'])
+            self.widget2.setCurrentIndex(0)
 
     def md2html(self, mdstr):
         extras = ['code-friendly', 'fenced-code-blocks', 'footnotes', 'tables', 'code-color', 'pyshell', 'nofollow',
