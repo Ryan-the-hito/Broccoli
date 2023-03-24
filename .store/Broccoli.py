@@ -104,7 +104,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.1.4', self)
+        lbl1 = QLabel('Version 0.1.5', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -538,7 +538,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.1.4', self)
+        lbl = QLabel('Current Version: 0.1.5', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -640,6 +640,12 @@ class MyWidget(QWidget):  # 主窗口
         self.widget3.addItems(['Context: None', 'Banana', 'Strawberry', 'Orange', 'All'])
         self.widget3.setVisible(False)  # cancel this setting at the end.
 
+        self.widget4 = QComboBox(self)
+        self.widget4.setCurrentIndex(0)
+        self.widget4.addItems(['中文', 'English', 'Japanese'])
+        self.widget4.setVisible(False)
+        self.widget4.setFixedWidth(170)
+
         qw1 = QWidget()
         vbox1 = QVBoxLayout()
         vbox1.setContentsMargins(0, 0, 0, 0)
@@ -658,6 +664,7 @@ class MyWidget(QWidget):  # 主窗口
         vbox1_3.addWidget(self.lbl1)
         vbox1_3.addWidget(self.widget2)
         vbox1_3.addWidget(self.widget3)
+        vbox1_3.addWidget(self.widget4)
         qw1_3.setLayout(vbox1_3)
 
         qw2 = QWidget()
@@ -717,7 +724,7 @@ class MyWidget(QWidget):  # 主窗口
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
                 signal.signal(signal.SIGALRM, self.timeout_handler)
-                signal.alarm(15)  # set timer to 15 seconds
+                signal.alarm(60)  # set timer to 15 seconds
                 try:
                     openai.api_key = AccountGPT
                     model_engine = "text-davinci-003"
@@ -728,15 +735,15 @@ class MyWidget(QWidget):  # 主窗口
                     if self.widget0.currentIndex() == 1:
                         prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
                     if self.widget0.currentIndex() == 2:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 3:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Polish this text in original language to remove grammar mistakes and make it clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 4:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Summarize this text in original language to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 5:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Analyse this text in {self.widget2.currentText()} in a teaching way to explain it to a student, including the function of every word and the grammar structure of sentence. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 6:
-                        prompt = f"""Code: {str(self.text1.toPlainText())}. Analyse this code in {self.widget2.currentText()} in a teaching way to explain it to a student, including its function and possible debugging plans. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
 
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
@@ -848,7 +855,7 @@ class MyWidget(QWidget):  # 主窗口
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
                 signal.signal(signal.SIGALRM, self.timeout_handler)
-                signal.alarm(15)  # set timer to 15 seconds
+                signal.alarm(60)  # set timer to 15 seconds
                 try:
                     openai.api_key = AccountGPT
                     history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
@@ -858,15 +865,15 @@ class MyWidget(QWidget):  # 主窗口
                     if self.widget0.currentIndex() == 1:
                         prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
                     if self.widget0.currentIndex() == 2:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 3:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Polish this text in original language to remove grammar mistakes and make it clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 4:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Summarize this text in original language to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 5:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Analyse this text in {self.widget2.currentText()} in a teaching way to explain it to a student, including the function of every word and the grammar structure of sentence. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 6:
-                        prompt = f"""Code: {str(self.text1.toPlainText())}. Analyse this code in {self.widget2.currentText()} in a teaching way to explain it to a student, including its function and possible debugging plans. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
 
                     completion = openai.ChatCompletion.create(
                         model="gpt-3.5-turbo",
@@ -972,7 +979,7 @@ class MyWidget(QWidget):  # 主窗口
                 cursor.setPosition(pos)  # 游标位置设置为尾部
                 self.real1.setTextCursor(cursor)  # 滚动到游标位置
                 signal.signal(signal.SIGALRM, self.timeout_handler)
-                signal.alarm(15)  # set timer to 15 seconds
+                signal.alarm(60)  # set timer to 15 seconds
                 try:
                     EndMess = '- A: '
                     with open('output.txt', 'a', encoding='utf-8') as f1:
@@ -985,15 +992,15 @@ class MyWidget(QWidget):  # 主窗口
                     if self.widget0.currentIndex() == 1:
                         prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
                     if self.widget0.currentIndex() == 2:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 3:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Polish this text in original language to remove grammar mistakes and make it clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 4:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Summarize this text in original language to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 5:
-                        prompt = f"""Text: {str(self.text1.toPlainText())}. Analyse this text in {self.widget2.currentText()} in a teaching way to explain it to a student, including the function of every word and the grammar structure of sentence. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
                     if self.widget0.currentIndex() == 6:
-                        prompt = f"""Code: {str(self.text1.toPlainText())}. Analyse this code in {self.widget2.currentText()} in a teaching way to explain it to a student, including its function and possible debugging plans. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
 
                     for data in chatbot.ask(prompt):
                         with open('output.txt', 'a', encoding='utf-8') as f1:
@@ -1109,36 +1116,43 @@ class MyWidget(QWidget):  # 主窗口
             #self.widget3.setVisible(True)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(False)
+            self.widget4.setVisible(False)
         if i == 1:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(False)
+            self.widget4.setVisible(False)
         if i == 2:
             self.widget1.setVisible(True)
             self.widget2.setVisible(True)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(True)
+            self.widget4.setVisible(False)
         if i == 3:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
             self.widget3.setVisible(False)
-            self.lbl1.setVisible(False)
+            self.lbl1.setVisible(True)
+            self.widget4.setVisible(True)
         if i == 4:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
             self.widget3.setVisible(False)
-            self.lbl1.setVisible(False)
+            self.lbl1.setVisible(True)
+            self.widget4.setVisible(True)
         if i == 5:
-            self.widget1.setVisible(True)
-            self.widget2.setVisible(True)
+            self.widget1.setVisible(False)
+            self.widget2.setVisible(False)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(True)
+            self.widget4.setVisible(True)
         if i == 6:
-            self.widget1.setVisible(True)
-            self.widget2.setVisible(True)
+            self.widget1.setVisible(False)
+            self.widget2.setVisible(False)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(True)
+            self.widget4.setVisible(True)
 
     def AgainX(self):
         self.btn_sub1.setDisabled(True)
