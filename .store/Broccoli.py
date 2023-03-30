@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QLabel, QHBoxLayout, QVBoxLayout,
                              QSystemTrayIcon, QMenu, QDialog,
                              QLineEdit, QTextEdit, QPlainTextEdit, QFileDialog, QComboBox)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRect
 from PyQt6.QtGui import QAction, QIcon
 import PyQt6.QtGui
 import codecs
@@ -107,7 +107,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.1.6', self)
+        lbl1 = QLabel('Version 0.1.7', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -541,7 +541,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.1.6', self)
+        lbl = QLabel('Current Version: 0.1.7', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -1170,7 +1170,7 @@ class MyWidget(QWidget):  # 主窗口
                             "max_tokens": 1024,
                             "temperature": 0.8,
                             "n": 1,
-                            "stop": ["\n"],
+                            "stop": None,
                         }
 
                         # Make the API call asynchronously
@@ -1189,16 +1189,21 @@ class MyWidget(QWidget):  # 主窗口
                         conversation_history = []
                         prompt = str(self.text1.toPlainText())
                         if self.widget0.currentIndex() == 0:
-                            history = codecs.open('history.md', 'r', encoding='utf-8').read().replace(
-                                '- Q: ', '''{"role": "user", "content": "''').\
-                                replace('- A: ', '''"}✡{"role": "assistant", "content": "''')\
-                                .replace('---', '''"}✡''').replace('\n', '').replace('\t', '').rstrip()
-                            historylist = history.split('✡')
-                            while '' in historylist:
-                                historylist.remove('')
-                            for hili in historylist:
-                                my_dict = json.loads(hili)
-                                conversation_history.append(my_dict)
+                            ori_history = [{"role": "user", "content": "Hey."}, {"role": "assistant", "content": "Hello! I'm happy to help you."}]
+                            conversation_history = ori_history
+                            try:
+                                history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace(
+                                    '- Q: ', '''{"role": "user", "content": "''').\
+                                    replace('- A: ', '''"}✡{"role": "assistant", "content": "''')\
+                                    .replace('---', '''"}✡''').replace('\n', '').replace('\t', '').rstrip()
+                                historylist = history.split('✡')
+                                while '' in historylist:
+                                    historylist.remove('')
+                                for hili in historylist:
+                                    my_dict = json.loads(hili)
+                                    conversation_history.append(my_dict)
+                            except Exception as e:
+                                pass
                         if self.widget0.currentIndex() == 1:
                             prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
                         if self.widget0.currentIndex() == 2:
@@ -1253,7 +1258,6 @@ class MyWidget(QWidget):  # 主窗口
                         self.real1.setTextCursor(cursor)  # 滚动到游标位置
                         QApplication.processEvents()
                         QApplication.restoreOverrideCursor()
-                        conversation_history.append({"role": "assistant", "content": response})
                         self.text1.clear()
                     asyncio.run(main())
                 except TimeoutException:
@@ -1553,10 +1557,15 @@ class MyWidget(QWidget):  # 主窗口
         return html % ret
 
     def center(self):  # 设置窗口居中
-        qr = self.frameGeometry()
-        cp = self.screen().availableGeometry().center()
-        qr.moveCenter(cp)
-        self.move(qr.topLeft())
+        # Get the primary screen's geometry
+        screen_geometry = self.screen().availableGeometry()
+
+        # Calculate the centered position
+        x_center = int((screen_geometry.width() / 2) + (self.width() / 2))
+        y_center = int((screen_geometry.height() - self.height()) // 4 * 3)
+
+        # Move the window to the center position
+        self.setGeometry(QRect(x_center, y_center, self.width(), self.height()))
 
     def keyPressEvent(self, e):  # 当页面显示的时候，按下esc键可关闭窗口
         if e.key() == Qt.Key.Key_Escape.value:
@@ -1566,6 +1575,7 @@ class MyWidget(QWidget):  # 主窗口
         with open('output.txt', 'w', encoding='utf-8') as f1:
             f1.write('')
         self.show()
+        self.center()
         self.setFocus()
         self.raise_()
         self.activateWindow()
