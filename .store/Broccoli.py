@@ -21,6 +21,9 @@ import re
 import subprocess
 import pyperclip
 import signal
+import httpx
+import asyncio
+import json
 
 app = QApplication(sys.argv)
 app.setQuitOnLastWindowClosed(False)
@@ -104,7 +107,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.1.5', self)
+        lbl1 = QLabel('Version 0.1.6', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -538,7 +541,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.1.5', self)
+        lbl = QLabel('Current Version: 0.1.6', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -584,6 +587,7 @@ class MyWidget(QWidget):  # 主窗口
         self.initUI()
 
     def initUI(self):
+        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
         self.center()
         self.setWindowTitle('GPT bot')
         self.setFixedSize(500, 810)
@@ -617,7 +621,7 @@ class MyWidget(QWidget):  # 主窗口
 
         self.widget0 = QComboBox(self)
         self.widget0.setCurrentIndex(0)
-        self.widget0.addItems(['Chat and ask', 'Command', 'Translate', 'Polish', 'Summarize', 'Grammatically analyze', 'Explain code'])
+        self.widget0.addItems(['Chat and ask', 'Command', 'Translate', 'Polish', 'Summarize', 'Grammatically analyze', 'Explain code', 'Customize'])
         self.widget0.currentIndexChanged.connect(self.ModeX)
         self.widget0.setMaximumWidth(370)
 
@@ -646,6 +650,33 @@ class MyWidget(QWidget):  # 主窗口
         self.widget4.setVisible(False)
         self.widget4.setFixedWidth(170)
 
+        self.widget5 = QComboBox(self)
+        self.widget5.setCurrentIndex(0)
+        home_dir = str(Path.home())
+        tarname1 = "BroccoliAppPath"
+        fulldir1 = os.path.join(home_dir, tarname1)
+        if not os.path.exists(fulldir1):
+            os.mkdir(fulldir1)
+        tarname2 = "CustomPrompt.txt"
+        fulldir2 = os.path.join(fulldir1, tarname2)
+        if not os.path.exists(fulldir2):
+            with open(fulldir2, 'a', encoding='utf-8') as f0:
+                f0.write('')
+        customprompt = codecs.open(fulldir2, 'r', encoding='utf-8').read()
+        promptlist = customprompt.split('---')
+        while '' in promptlist:
+            promptlist.remove('')
+        itemlist = []
+        for i in range(len(promptlist)):
+            itemlist.append(promptlist[i].split('|><|')[0].replace('<|', '').replace('\n', ''))
+        if itemlist != []:
+            self.widget5.addItems(itemlist)
+        if itemlist == []:
+            self.widget5.addItems(['No customized prompts, please add one in Settings'])
+        self.widget5.setVisible(False)
+        self.widget5.setFixedWidth(170)
+        self.widget5.currentIndexChanged.connect(self.CustomChange)
+
         qw1 = QWidget()
         vbox1 = QVBoxLayout()
         vbox1.setContentsMargins(0, 0, 0, 0)
@@ -665,6 +696,7 @@ class MyWidget(QWidget):  # 主窗口
         vbox1_3.addWidget(self.widget2)
         vbox1_3.addWidget(self.widget3)
         vbox1_3.addWidget(self.widget4)
+        vbox1_3.addWidget(self.widget5)
         qw1_3.setLayout(vbox1_3)
 
         qw2 = QWidget()
@@ -758,7 +790,7 @@ class MyWidget(QWidget):  # 主窗口
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
                     message = completions.choices[0].text
-                    if self.widget0.currentIndex() == 0:
+                    if self.widget0.currentIndex() == 0 or self.widget0.currentIndex() == 7:
                         message = message.lstrip('\n')
                         message = message.replace('\n', '\n\n\t')
                         message = message.replace('\n\n\t\n\n\t', '\n\n\t')
@@ -886,7 +918,7 @@ class MyWidget(QWidget):  # 主窗口
                     message = completion.choices[0].message["content"].strip()
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
-                    if self.widget0.currentIndex() == 0:
+                    if self.widget0.currentIndex() == 0 or self.widget0.currentIndex() == 7:
                         message = message.lstrip('\n')
                         message = message.replace('\n', '\n\n\t')
                         message = message.replace('\n\n\t\n\n\t', '\n\n\t')
@@ -1031,7 +1063,7 @@ class MyWidget(QWidget):  # 主窗口
                     AllText = AllText.replace('\t- Q: ', '- Q: ')
                     AllText = AllText.replace('\t---', '---')
                     AllText = AllText.rstrip('\t')
-                    if self.widget0.currentIndex() == 0:
+                    if self.widget0.currentIndex() == 0 or self.widget0.currentIndex() == 7:
                         AllText = AllText + '---\n\n'
                     if self.widget0.currentIndex() == 1:
                         pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
@@ -1087,6 +1119,171 @@ class MyWidget(QWidget):  # 主窗口
                 self.text1.setReadOnly(False)
             if AccountGPT == '':
                 self.real1.setText('You should set your API in Settings.')
+        if Which == '3':
+            if self.text1.toPlainText() == '':
+                a = pyperclip.paste()
+                self.text1.setPlainText(a)
+            QuesText = self.text1.toPlainText()
+            QuesText = QuesText.lstrip('\n')
+            QuesText = QuesText.replace('\n', '\n\n\t')
+            QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
+            self.LastQ = str(self.text1.toPlainText())
+            AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
+            if AccountGPT != '' and self.text1.toPlainText() != '':
+                self.text1.setReadOnly(True)
+                md = '- Q: ' + QuesText + '\n\n'
+                with open('output.txt', 'a', encoding='utf-8') as f1:
+                    f1.write(md)
+                PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                newhtml = self.md2html(PromText)
+                self.real1.setHtml(newhtml)
+                self.real1.ensureCursorVisible()  # 游标可用
+                cursor = self.real1.textCursor()  # 设置游标
+                pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                cursor.setPosition(pos)  # 游标位置设置为尾部
+                self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                signal.signal(signal.SIGALRM, self.timeout_handler)
+                signal.alarm(60)  # set timer to 15 seconds
+                # Set up your API key
+                ENDPOINT = 'https://api.openai.com/v1/chat/completions'
+                HEADERS = {"Authorization": f"Bearer {AccountGPT}"}
+                try:
+                    async def chat_gpt(message, conversation_history=None, tokens_limit=4096):
+                        if conversation_history is None:
+                            conversation_history = []
+
+                        conversation_history.append({"role": "user", "content": message})
+
+                        input_text = "".join([f"{msg['role']}:{msg['content']}\n" for msg in conversation_history])
+
+                        # Truncate or shorten the input text if it exceeds the token limit
+                        encoded_input_text = input_text.encode("utf-8")
+                        while len(encoded_input_text) > tokens_limit:
+                            conversation_history.pop(0)
+                            input_text = "".join([f"{msg['role']}:{msg['content']}\n" for msg in conversation_history])
+                            encoded_input_text = input_text.encode("utf-8")
+
+                        # Set up the API call data
+                        data = {
+                            "model": "gpt-3.5-turbo",
+                            "messages": [{"role": "user", "content": input_text}],
+                            "max_tokens": 1024,
+                            "temperature": 0.8,
+                            "n": 1,
+                            "stop": ["\n"],
+                        }
+
+                        # Make the API call asynchronously
+                        async with httpx.AsyncClient() as client:
+                            response = await client.post(ENDPOINT, json=data, headers=HEADERS, timeout=60.0)
+
+                        # Process the API response
+                        if response.status_code == 200:
+                            response_data = response.json()
+                            chat_output = response_data["choices"][0]["message"]["content"].strip()
+                            return chat_output
+                        else:
+                            raise Exception(f"API call failed with status code {response.status_code}: {response.text}")
+
+                    async def main():
+                        conversation_history = []
+                        prompt = str(self.text1.toPlainText())
+                        if self.widget0.currentIndex() == 0:
+                            history = codecs.open('history.md', 'r', encoding='utf-8').read().replace(
+                                '- Q: ', '''{"role": "user", "content": "''').\
+                                replace('- A: ', '''"}✡{"role": "assistant", "content": "''')\
+                                .replace('---', '''"}✡''').replace('\n', '').replace('\t', '').rstrip()
+                            historylist = history.split('✡')
+                            while '' in historylist:
+                                historylist.remove('')
+                            for hili in historylist:
+                                my_dict = json.loads(hili)
+                                conversation_history.append(my_dict)
+                        if self.widget0.currentIndex() == 1:
+                            prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                        if self.widget0.currentIndex() == 2:
+                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        if self.widget0.currentIndex() == 3:
+                            prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        if self.widget0.currentIndex() == 4:
+                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        if self.widget0.currentIndex() == 5:
+                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                        if self.widget0.currentIndex() == 6:
+                            prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+
+                        response = await chat_gpt(prompt, conversation_history)
+                        message = response.lstrip('assistant:').strip()
+                        if self.widget0.currentIndex() == 0 or self.widget0.currentIndex() == 7:
+                            message = message.lstrip('\n')
+                            message = message.replace('\n', '\n\n\t')
+                            message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                            message = '\n\t' + message
+                            QApplication.processEvents()
+                            QApplication.restoreOverrideCursor()
+                        if self.widget0.currentIndex() == 1:
+                            pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                            result = pattern.findall(message)
+                            ResultEnd = ''.join(result)
+                            subprocess.call(['osascript', '-e', ResultEnd])
+                            message = "Your command is being operated."
+                        if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
+                                self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
+                                self.widget0.currentIndex() == 6:
+                            pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                            result = pattern.findall(message)
+                            ResultEnd = ''.join(result)
+                            pyperclip.copy(ResultEnd)
+                            message = ResultEnd
+                            message = message.lstrip('\n')
+                            message = message.replace('\n', '\n\n\t')
+                            message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                            message = '\n\t' + message
+
+                        EndMess = '- A: ' + message + '\n\n---\n\n'
+                        with open('output.txt', 'a', encoding='utf-8') as f1:
+                            f1.write(EndMess)
+                        ProcessText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                        midhtml = self.md2html(ProcessText)
+                        self.real1.setHtml(midhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
+                        conversation_history.append({"role": "assistant", "content": response})
+                        self.text1.clear()
+                    asyncio.run(main())
+                except TimeoutException:
+                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    self.text1.setPlainText(self.LastQ)
+                except Exception as e:
+                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('- A: Error, please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    self.text1.setPlainText(self.LastQ)
+                signal.alarm(0)  # reset timer
+                self.text1.setReadOnly(False)
+            if AccountGPT == '':
+                self.real1.setText('You should set your accounts in Settings.')
         self.btn_sub1.setDisabled(False)
         self.btn_sub4.setDisabled(False)
 
@@ -1117,42 +1314,78 @@ class MyWidget(QWidget):  # 主窗口
             self.widget3.setVisible(False)
             self.lbl1.setVisible(False)
             self.widget4.setVisible(False)
+            self.widget5.setVisible(False)
         if i == 1:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(False)
             self.widget4.setVisible(False)
+            self.widget5.setVisible(False)
         if i == 2:
             self.widget1.setVisible(True)
             self.widget2.setVisible(True)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(True)
             self.widget4.setVisible(False)
+            self.widget5.setVisible(False)
         if i == 3:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(True)
             self.widget4.setVisible(True)
+            self.widget5.setVisible(False)
         if i == 4:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(True)
             self.widget4.setVisible(True)
+            self.widget5.setVisible(False)
         if i == 5:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(True)
             self.widget4.setVisible(True)
+            self.widget5.setVisible(False)
         if i == 6:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(True)
             self.widget4.setVisible(True)
+            self.widget5.setVisible(False)
+        if i == 7:
+            self.widget1.setVisible(False)
+            self.widget2.setVisible(False)
+            self.widget3.setVisible(False)
+            self.lbl1.setVisible(True)
+            self.widget4.setVisible(False)
+            self.widget5.setVisible(True)
+            self.widget5.clear()
+            home_dir = str(Path.home())
+            tarname1 = "BroccoliAppPath"
+            fulldir1 = os.path.join(home_dir, tarname1)
+            if not os.path.exists(fulldir1):
+                os.mkdir(fulldir1)
+            tarname2 = "CustomPrompt.txt"
+            fulldir2 = os.path.join(fulldir1, tarname2)
+            if not os.path.exists(fulldir2):
+                with open(fulldir2, 'a', encoding='utf-8') as f0:
+                    f0.write('')
+            customprompt = codecs.open(fulldir2, 'r', encoding='utf-8').read()
+            promptlist = customprompt.split('---')
+            while '' in promptlist:
+                promptlist.remove('')
+            itemlist = []
+            for i in range(len(promptlist)):
+                itemlist.append(promptlist[i].split('|><|')[0].replace('<|', '').replace('\n', ''))
+            if itemlist != []:
+                self.widget5.addItems(itemlist)
+            if itemlist == []:
+                self.widget5.addItems(['No customized prompts, please add one in Settings'])
 
     def AgainX(self):
         self.btn_sub1.setDisabled(True)
@@ -1183,6 +1416,32 @@ class MyWidget(QWidget):  # 主窗口
             self.widget2.clear()
             self.widget2.addItems(['中文', 'English'])
             self.widget2.setCurrentIndex(0)
+
+    def CustomChange(self, i):
+        home_dir = str(Path.home())
+        tarname1 = "BroccoliAppPath"
+        fulldir1 = os.path.join(home_dir, tarname1)
+        if not os.path.exists(fulldir1):
+            os.mkdir(fulldir1)
+        tarname2 = "CustomPrompt.txt"
+        fulldir2 = os.path.join(fulldir1, tarname2)
+        if not os.path.exists(fulldir2):
+            with open(fulldir2, 'a', encoding='utf-8') as f0:
+                f0.write('')
+        customprompt = codecs.open(fulldir2, 'r', encoding='utf-8').read()
+        promptlist = customprompt.split('---')
+        while '' in promptlist:
+            promptlist.remove('')
+        itemlist = []
+        for n in range(len(promptlist)):
+            itemlist.append(promptlist[n].split('|><|')[1].replace('|>', ''))
+        if itemlist != []:
+            try:
+                self.text1.clear()
+                self.text1.setPlainText(itemlist[i])
+            except Exception as e:
+                self.text1.clear()
+                self.text1.setPlainText(e)
 
     def md2html(self, mdstr):
         extras = ['code-friendly', 'fenced-code-blocks', 'footnotes', 'tables', 'code-color', 'pyshell', 'nofollow',
@@ -1322,7 +1581,7 @@ class window4(QWidget):  # Customization settings
 
     def initUI(self):  # 设置窗口内布局
         self.setUpMainWindow()
-        self.resize(350, 100)
+        self.setFixedSize(500, 309)
         self.center()
         self.setWindowTitle('Customization settings')
         self.setFocus()
@@ -1330,7 +1589,7 @@ class window4(QWidget):  # Customization settings
     def setUpMainWindow(self):
         self.widget1 = QComboBox(self)
         self.widget1.setEditable(False)
-        defalist = ['GPT-3 (API)', 'ChatGPT (Official API)', 'ChatGPT (Third-party API)']
+        defalist = ['GPT-3 (API)', 'ChatGPT (Official module)', 'ChatGPT (revChatGPT)', 'ChatGPT (httpx)']
         self.widget1.addItems(defalist)
         Which = codecs.open('which.txt', 'r', encoding='utf-8').read()
         if Which == '0':
@@ -1346,6 +1605,22 @@ class window4(QWidget):  # Customization settings
         Apis = codecs.open('api.txt', 'r', encoding='utf-8').read()
         if Apis != '':
             self.le1.setText(Apis)
+
+        self.te1 = QTextEdit(self)
+        home_dir = str(Path.home())
+        tarname1 = "BroccoliAppPath"
+        fulldir1 = os.path.join(home_dir, tarname1)
+        if not os.path.exists(fulldir1):
+            os.mkdir(fulldir1)
+        tarname2 = "CustomPrompt.txt"
+        fulldir2 = os.path.join(fulldir1, tarname2)
+        if not os.path.exists(fulldir2):
+            with open(fulldir2, 'a', encoding='utf-8') as f0:
+                f0.write('')
+        cont = codecs.open(fulldir2, 'r', encoding='utf-8').read()
+        self.te1.setText(cont)
+        self.te1.setPlaceholderText('This is your storage for prompts. Use {text} to represent parameters and "---" to '
+                                    'seperate each other. In <|NAME|><|PROMPT|> format.')
 
         btn_1 = QPushButton('Save', self)
         btn_1.clicked.connect(self.SaveAPI)
@@ -1363,6 +1638,7 @@ class window4(QWidget):  # Customization settings
         vbox1.setContentsMargins(20, 20, 20, 20)
         vbox1.addWidget(self.widget1)
         vbox1.addWidget(self.le1)
+        vbox1.addWidget(self.te1)
         vbox1.addWidget(qw2)
         self.setLayout(vbox1)
 
@@ -1376,10 +1652,22 @@ class window4(QWidget):  # Customization settings
         if i == 2:
             with open('which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('2')
+        if i == 3:
+            with open('which.txt', 'w', encoding='utf-8') as f0:
+                f0.write('3')
 
     def SaveAPI(self):
         with open('api.txt', 'w', encoding='utf-8') as f1:
             f1.write(self.le1.text())
+        home_dir = str(Path.home())
+        tarname1 = "BroccoliAppPath"
+        fulldir1 = os.path.join(home_dir, tarname1)
+        if not os.path.exists(fulldir1):
+            os.mkdir(fulldir1)
+        tarname2 = "CustomPrompt.txt"
+        fulldir2 = os.path.join(fulldir1, tarname2)
+        with open(fulldir2, 'w', encoding='utf-8') as f0:
+            f0.write(self.te1.toPlainText())
         self.close()
 
     def center(self):  # 设置窗口居中

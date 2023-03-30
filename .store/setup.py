@@ -10,11 +10,11 @@ from setuptools import setup
 APP = ['Broccoli.py']
 DATA_FILES = ['Broccolimen.icns', 'Broccolidsk.icns', 'Broccolimen.png', 'wechat50.png', 'wechat20.png', 
               'wechat10.png', 'wechat5.png', 'alipay50.png', 'alipay20.png', 
-              'alipay10.png', 'alipay5.png', 'api.txt', 'output.txt', 'which.txt']
+              'alipay10.png', 'alipay5.png', 'api.txt', 'output.txt', 'which.txt', 'history.md']
 OPTIONS = {'iconfile': 'Broccolidsk.icns',
-           'packages': ['PyQt6', 'openai', 'markdown2', 'codecs', 'revChatGPT', 'transformers', 'pyperclip'],
+           'packages': ['PyQt6', 'openai', 'markdown2', 'codecs', 'revChatGPT', 'transformers', 'pyperclip', 'httpx', 'asyncio', 'json', 'anyio', 'anyio._backends'],
            'plist': {
-            'CFBundleShortVersionString': '0.1.5',
+            'CFBundleShortVersionString': '0.1.6',
             'LSUIElement': True,
             },
            }
@@ -25,5 +25,5 @@ setup(
     options={'py2app': OPTIONS},
     setup_requires=['py2app'],
     author='Ryan-the-hito',
-    version='0.1.5'
+    version='0.1.6'
 )
