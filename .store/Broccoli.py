@@ -5,9 +5,9 @@ import sys
 from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QLabel, QHBoxLayout, QVBoxLayout,
                              QSystemTrayIcon, QMenu, QDialog,
-                             QLineEdit, QTextEdit, QPlainTextEdit, QFileDialog, QComboBox)
-from PyQt6.QtCore import Qt, QRect
-from PyQt6.QtGui import QAction, QIcon
+                             QLineEdit, QTextEdit, QPlainTextEdit, QFileDialog, QComboBox, QMenuBar)
+from PyQt6.QtCore import Qt, QRect, QPropertyAnimation
+from PyQt6.QtGui import QAction, QIcon, QColor
 import PyQt6.QtGui
 import codecs
 import os
@@ -63,6 +63,13 @@ menu.addAction(quit)
 # Add the menu to the tray
 tray.setContextMenu(menu)
 
+# create a system menu
+btna4 = QAction("&Pin!")
+btna4.setCheckable(True)
+sysmenu = QMenuBar()
+file_menu = sysmenu.addMenu("&Actions")
+file_menu.addAction(btna4)
+
 
 class window_about(QWidget):  # 增加说明页面(About)
     def __init__(self):
@@ -107,7 +114,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.1.7', self)
+        lbl1 = QLabel('Version 0.1.8', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -541,7 +548,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.1.7', self)
+        lbl = QLabel('Current Version: 0.1.8', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -587,10 +594,15 @@ class MyWidget(QWidget):  # 主窗口
         self.initUI()
 
     def initUI(self):
-        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
-        self.center()
-        self.setWindowTitle('GPT bot')
-        self.setFixedSize(500, 810)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedSize(500, 830)
+
+        self.btn_00 = QPushButton('', self)
+        self.btn_00.clicked.connect(self.pin_a_tab)
+        self.btn_00.setFixedHeight(10)
+        self.btn_00.setFixedWidth(500)
+        self.i = 1
 
         self.real1 = QTextEdit(self)
         self.real1.setReadOnly(True)
@@ -714,12 +726,44 @@ class MyWidget(QWidget):  # 主窗口
         vbox2_1.addWidget(qw1)
         qw2_1.setLayout(vbox2_1)
 
+        self.qw3 = QWidget()
         vbox3 = QVBoxLayout()
         vbox3.setContentsMargins(20, 20, 20, 20)
         vbox3.addWidget(self.real1)
         vbox3.addStretch()
         vbox3.addWidget(qw2_1)
+        self.qw3.setLayout(vbox3)
+        self.qw3.setObjectName("Main")
+
+        vbox3 = QVBoxLayout()
+        vbox3.setContentsMargins(0, 0, 0, 0)
+        vbox3.addWidget(self.btn_00)
+        vbox3.addWidget(self.qw3)
         self.setLayout(vbox3)
+        self.activate()
+
+    def move_window(self, width, height):
+        animation = QPropertyAnimation(self, b"geometry", self)
+        animation.setDuration(250)
+        new_pos = QRect(width, height, self.width(), self.height())
+        animation.setEndValue(new_pos)
+        animation.start()
+        self.i += 1
+
+    def move_window2(self, width, height):
+        animation = QPropertyAnimation(self, b"geometry", self)
+        animation.setDuration(400)
+        new_pos = QRect(width, height, self.width(), self.height())
+        animation.setEndValue(new_pos)
+        animation.start()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragPosition = event.globalPosition().toPoint() - self.pos()
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self.dragPosition)
 
     def timeout_handler(self, signum, frame):
         raise TimeoutException("Timeout")
@@ -1192,7 +1236,7 @@ class MyWidget(QWidget):  # 主窗口
                             ori_history = [{"role": "user", "content": "Hey."}, {"role": "assistant", "content": "Hello! I'm happy to help you."}]
                             conversation_history = ori_history
                             try:
-                                history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace(
+                                history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('"', '').replace(
                                     '- Q: ', '''{"role": "user", "content": "''').\
                                     replace('- A: ', '''"}✡{"role": "assistant", "content": "''')\
                                     .replace('---', '''"}✡''').replace('\n', '').replace('\t', '').rstrip()
@@ -1556,6 +1600,44 @@ class MyWidget(QWidget):  # 主窗口
         ret = markdown2.markdown(mdstr, extras=extras)
         return html % ret
 
+    def pin_a_tab(self):
+        SCREEN_WEIGHT = int(self.screen().availableGeometry().width())
+        SCREEN_HEIGHT = int(self.screen().availableGeometry().height())
+        x_center = 0
+        y_center = 0
+        if self.i % 2 == 1:
+            btna4.setChecked(True)
+            self.btn_00.setText('')
+            self.btn_00.setFixedHeight(10)
+            self.btn_00.setFixedWidth(500)
+            self.btn_00.setStyleSheet('''
+                        border: 1px outset grey;
+                        background-color: #0085FF;
+                        border-radius: 4px;
+                        padding: 1px;
+                        color: #FFFFFF''')
+            self.qw3.setVisible(True)
+            self.setFixedSize(500, 830)
+            x_center = int((SCREEN_WEIGHT / 2) + (self.width() / 2))
+            y_center = int((SCREEN_HEIGHT - self.height()) // 4 * 3)
+        if self.i % 2 == 0:
+            btna4.setChecked(False)
+            self.btn_00.setText('🥦')
+            self.btn_00.setFixedSize(50, 50)
+            self.btn_00.setStyleSheet('''
+                        border: 1px outset grey;
+                        background-color: #FFFFFF;
+                        border-radius: 25px;
+                        padding: 1px;
+                        color: #000000''')
+            self.qw3.setVisible(False)
+            self.setFixedSize(50, 50)
+            x_center = int(SCREEN_WEIGHT - 50)
+            y_center = int(SCREEN_HEIGHT - 50)
+
+        self.move_window(x_center, y_center)
+        self.show()
+
     def center(self):  # 设置窗口居中
         # Get the primary screen's geometry
         screen_geometry = self.screen().availableGeometry()
@@ -1579,6 +1661,7 @@ class MyWidget(QWidget):  # 主窗口
         self.setFocus()
         self.raise_()
         self.activateWindow()
+        self.pin_a_tab()
 
     def cancel(self):  # 设置取消键的功能
         self.close()
@@ -1706,6 +1789,11 @@ style_sheet_ori = '''
         background: #ECECEC;
         border-radius: 9px;
 }
+    QWidget#Main {
+        border: 1px solid #ECECEC;
+        background: #ECECEC;
+        border-radius: 9px;
+}
     QPushButton{
         border: 1px outset grey;
         background-color: #FFFFFF;
@@ -1760,10 +1848,14 @@ if __name__ == '__main__':
     w2 = window_update()  # update
     w3 = MyWidget()
     w4 = window4()
+    w3.setAutoFillBackground(True)
+    p = w3.palette()
+    p.setColor(w3.backgroundRole(), QColor('#ECECEC'))
+    w3.setPalette(p)
     action1.triggered.connect(w1.activate)
     action2.triggered.connect(w2.activate)
-    action3.triggered.connect(w3.activate)
+    action3.triggered.connect(w3.pin_a_tab)
     action4.triggered.connect(w4.activate)
-    #action5.triggered.connect(w4.onrunstart)
+    btna4.triggered.connect(w3.pin_a_tab)
     app.setStyleSheet(style_sheet_ori)
     app.exec()
