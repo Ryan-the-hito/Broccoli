@@ -42,6 +42,9 @@ menu = QMenu()
 action3 = QAction("🥦 Start Broccoli!")
 menu.addAction(action3)
 
+action5 = QAction("🖇️️ Open a chat history")
+menu.addAction(action5)
+
 action4 = QAction("⚙️ Settings")
 menu.addAction(action4)
 
@@ -114,7 +117,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.1.8', self)
+        lbl1 = QLabel('Version 0.1.9', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -548,7 +551,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.1.8', self)
+        lbl = QLabel('Current Version: 0.1.9', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -633,7 +636,7 @@ class MyWidget(QWidget):  # 主窗口
 
         self.widget0 = QComboBox(self)
         self.widget0.setCurrentIndex(0)
-        self.widget0.addItems(['Chat and ask', 'Command', 'Translate', 'Polish', 'Summarize', 'Grammatically analyze', 'Explain code', 'Customize'])
+        self.widget0.addItems(['Chat and ask', 'Command (AppleScript)', 'Translate', 'Polish', 'Summarize', 'Grammatically analyze', 'Explain code', 'Customize'])
         self.widget0.currentIndexChanged.connect(self.ModeX)
         self.widget0.setMaximumWidth(370)
 
@@ -689,6 +692,16 @@ class MyWidget(QWidget):  # 主窗口
         self.widget5.setFixedWidth(170)
         self.widget5.currentIndexChanged.connect(self.CustomChange)
 
+        self.btn_sub5 = QPushButton('Run command', self)
+        self.btn_sub5.clicked.connect(self.RunCommand)
+        self.btn_sub5.setFixedSize(150, 20)
+        self.btn_sub5.setVisible(False)
+
+        self.te0 = QTextEdit(self)
+        self.te0.setVisible(False)
+        self.te0.setFixedSize(460, 310)
+        self.te0.textChanged.connect(self.ChangeCmd)
+
         qw1 = QWidget()
         vbox1 = QVBoxLayout()
         vbox1.setContentsMargins(0, 0, 0, 0)
@@ -709,6 +722,7 @@ class MyWidget(QWidget):  # 主窗口
         vbox1_3.addWidget(self.widget3)
         vbox1_3.addWidget(self.widget4)
         vbox1_3.addWidget(self.widget5)
+        vbox1_3.addWidget(self.btn_sub5)
         qw1_3.setLayout(vbox1_3)
 
         qw2 = QWidget()
@@ -730,6 +744,7 @@ class MyWidget(QWidget):  # 主窗口
         vbox3 = QVBoxLayout()
         vbox3.setContentsMargins(20, 20, 20, 20)
         vbox3.addWidget(self.real1)
+        vbox3.addWidget(self.te0)
         vbox3.addStretch()
         vbox3.addWidget(qw2_1)
         self.qw3.setLayout(vbox3)
@@ -845,8 +860,10 @@ class MyWidget(QWidget):  # 主窗口
                         pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
                         result = pattern.findall(message)
                         ResultEnd = ''.join(result)
-                        subprocess.call(['osascript', '-e', ResultEnd])
-                        message = "Your command is being operated."
+                        with open('command.txt', 'w', encoding='utf-8') as f0:
+                            f0.write(ResultEnd)
+                        message = "Your command is:" + '\n\t' + ResultEnd
+                        self.te0.setText(ResultEnd)
                     if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
                             self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
                             self.widget0.currentIndex() == 6:
@@ -973,8 +990,10 @@ class MyWidget(QWidget):  # 主窗口
                         pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
                         result = pattern.findall(message)
                         ResultEnd = ''.join(result)
-                        subprocess.call(['osascript', '-e', ResultEnd])
-                        message = "Your command is being operated."
+                        with open('command.txt', 'w', encoding='utf-8') as f0:
+                            f0.write(ResultEnd)
+                        message = "Your command is:" + '\n\t' + ResultEnd
+                        self.te0.setText(ResultEnd)
                     if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
                             self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
                             self.widget0.currentIndex() == 6:
@@ -1113,9 +1132,11 @@ class MyWidget(QWidget):  # 主窗口
                         pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
                         result = pattern.findall(AllText)
                         ResultEnd = ''.join(result)
-                        subprocess.call(['osascript', '-e', ResultEnd])
+                        with open('command.txt', 'w', encoding='utf-8') as f0:
+                            f0.write(ResultEnd)
+                        self.te0.setText(ResultEnd)
                         AllText = re.sub(r'<\|start\|>([\s\S]*?)<\|end\|>', '', AllText)
-                        AllText = AllText.rstrip('\n') + "Your command is being operated." + '\n\n---\n\n'
+                        AllText = AllText.rstrip('\n') + "Your command is:" + '\n\t' + ResultEnd + '\n\n---\n\n'
                     if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or\
                             self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or\
                             self.widget0.currentIndex() == 6:
@@ -1274,8 +1295,10 @@ class MyWidget(QWidget):  # 主窗口
                             pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
                             result = pattern.findall(message)
                             ResultEnd = ''.join(result)
-                            subprocess.call(['osascript', '-e', ResultEnd])
-                            message = "Your command is being operated."
+                            with open('command.txt', 'w', encoding='utf-8') as f0:
+                                f0.write(ResultEnd)
+                            message = "Your command is:" + '\n\t' + ResultEnd
+                            self.te0.setText(ResultEnd)
                         if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
                                 self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
                                 self.widget0.currentIndex() == 6:
@@ -1339,6 +1362,7 @@ class MyWidget(QWidget):  # 主窗口
         self.text1.clear()
         self.text1.setReadOnly(False)
         self.real1.clear()
+        self.te0.clear()
         with open('output.txt', 'w', encoding='utf-8') as f1:
             f1.write('')
 
@@ -1363,6 +1387,9 @@ class MyWidget(QWidget):  # 主窗口
             self.lbl1.setVisible(False)
             self.widget4.setVisible(False)
             self.widget5.setVisible(False)
+            self.btn_sub5.setVisible(False)
+            self.te0.setVisible(False)
+            self.real1.setFixedSize(460, 630)
         if i == 1:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
@@ -1370,6 +1397,11 @@ class MyWidget(QWidget):  # 主窗口
             self.lbl1.setVisible(False)
             self.widget4.setVisible(False)
             self.widget5.setVisible(False)
+            self.btn_sub5.setVisible(True)
+            self.te0.setVisible(True)
+            self.real1.setFixedSize(460, 310)
+            self.te0.setFixedSize(460, 310)
+            self.te0.clear()
         if i == 2:
             self.widget1.setVisible(True)
             self.widget2.setVisible(True)
@@ -1377,6 +1409,9 @@ class MyWidget(QWidget):  # 主窗口
             self.lbl1.setVisible(True)
             self.widget4.setVisible(False)
             self.widget5.setVisible(False)
+            self.btn_sub5.setVisible(False)
+            self.te0.setVisible(False)
+            self.real1.setFixedSize(460, 630)
         if i == 3:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
@@ -1384,6 +1419,9 @@ class MyWidget(QWidget):  # 主窗口
             self.lbl1.setVisible(True)
             self.widget4.setVisible(True)
             self.widget5.setVisible(False)
+            self.btn_sub5.setVisible(False)
+            self.te0.setVisible(False)
+            self.real1.setFixedSize(460, 630)
         if i == 4:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
@@ -1391,6 +1429,9 @@ class MyWidget(QWidget):  # 主窗口
             self.lbl1.setVisible(True)
             self.widget4.setVisible(True)
             self.widget5.setVisible(False)
+            self.btn_sub5.setVisible(False)
+            self.te0.setVisible(False)
+            self.real1.setFixedSize(460, 630)
         if i == 5:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
@@ -1398,6 +1439,9 @@ class MyWidget(QWidget):  # 主窗口
             self.lbl1.setVisible(True)
             self.widget4.setVisible(True)
             self.widget5.setVisible(False)
+            self.btn_sub5.setVisible(False)
+            self.te0.setVisible(False)
+            self.real1.setFixedSize(460, 630)
         if i == 6:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
@@ -1405,12 +1449,18 @@ class MyWidget(QWidget):  # 主窗口
             self.lbl1.setVisible(True)
             self.widget4.setVisible(True)
             self.widget5.setVisible(False)
+            self.btn_sub5.setVisible(False)
+            self.te0.setVisible(False)
+            self.real1.setFixedSize(460, 630)
         if i == 7:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
             self.widget3.setVisible(False)
             self.lbl1.setVisible(True)
             self.widget4.setVisible(False)
+            self.btn_sub5.setVisible(False)
+            self.te0.setVisible(False)
+            self.real1.setFixedSize(460, 630)
             self.widget5.setVisible(True)
             self.widget5.clear()
             home_dir = str(Path.home())
@@ -1490,6 +1540,38 @@ class MyWidget(QWidget):  # 主窗口
             except Exception as e:
                 self.text1.clear()
                 self.text1.setPlainText(e)
+
+    def RunCommand(self):
+        comm = codecs.open('command.txt', 'r', encoding='utf-8').read()
+        try:
+            subprocess.call(['osascript', '-e', comm])
+        except:
+            pass
+
+    def ChangeCmd(self):
+        changed_cmd = self.te0.toPlainText()
+        with open('command.txt', 'w', encoding='utf-8') as f0:
+            f0.write(changed_cmd)
+
+    def OpenHistory(self):
+        home_dir = str(Path.home())
+        fj = QFileDialog.getOpenFileName(self, "Open File", home_dir, "Markdown Files (*.md)")
+        if fj != '':
+            str_fj = ''.join(fj)
+            str_fj = str_fj.replace('Markdown Files (*.md)', '')
+            if "GPToutput.md" in str_fj:
+                text_his = codecs.open(str_fj, 'r', encoding='utf-8').read()
+                with open('output.txt', 'w', encoding='utf-8') as f0:
+                    f0.write(text_his)
+                midhtml = self.md2html(text_his)
+                self.real1.setHtml(midhtml)
+                self.real1.ensureCursorVisible()  # 游标可用
+                cursor = self.real1.textCursor()  # 设置游标
+                pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                cursor.setPosition(pos)  # 游标位置设置为尾部
+                self.real1.setTextCursor(cursor)  # 滚动到游标位置
+        if not btna4.isChecked():
+            self.pin_a_tab()
 
     def md2html(self, mdstr):
         extras = ['code-friendly', 'fenced-code-blocks', 'footnotes', 'tables', 'code-color', 'pyshell', 'nofollow',
@@ -1856,6 +1938,7 @@ if __name__ == '__main__':
     action2.triggered.connect(w2.activate)
     action3.triggered.connect(w3.pin_a_tab)
     action4.triggered.connect(w4.activate)
+    action5.triggered.connect(w3.OpenHistory)
     btna4.triggered.connect(w3.pin_a_tab)
     app.setStyleSheet(style_sheet_ori)
     app.exec()
