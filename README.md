@@ -10,12 +10,12 @@ A simple floating helper of GPT. Private APIs needed.
 第一个 API：
 
 - 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
-- （2023-2-28 更新）余 18 美元，截止日期：2023-6-1
+- （2023-4-3 更新）余 18 美元，截止日期：2023-6-1
 
 第二个 API：
 
 - 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
-- （2023-2-28 更新）余 18 美元，截止日期：2023-6-1
+- （2023-4-3 更新）余 18 美元，截止日期：2023-6-1
 
 ![q5vkJru](https://i.imgur.com/q5vkJru.png)
 
