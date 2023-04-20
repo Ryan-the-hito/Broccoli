@@ -16,7 +16,8 @@ import webbrowser
 import openai
 import markdown2
 import datetime
-from revChatGPT.V3 import Chatbot
+import revChatGPT.V3
+import revChatGPT.V1
 import re
 import subprocess
 import pyperclip
@@ -29,7 +30,7 @@ app = QApplication(sys.argv)
 app.setQuitOnLastWindowClosed(False)
 
 # Create the icon
-icon = QIcon("Broccolimen.icns")
+icon = QIcon("/Applications/Broccoli.app/Contents/Resources/Broccolimen.icns")
 
 # Create the tray
 tray = QSystemTrayIcon()
@@ -90,7 +91,7 @@ class window_about(QWidget):  # 增加说明页面(About)
     def setUpMainWindow(self):
         widg1 = QWidget()
         l1 = QLabel(self)
-        png = PyQt6.QtGui.QPixmap('Broccolimen.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
+        png = PyQt6.QtGui.QPixmap('/Applications/Broccoli.app/Contents/Resources/Broccolimen.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
         l1.setPixmap(png)  # 在l1里面，调用setPixmap命令，建立一个图像存放框，并将之前的图像png存放在这个框框里。
         l1.setMaximumWidth(100)
         l1.setMaximumHeight(100)
@@ -117,7 +118,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.1.9', self)
+        lbl1 = QLabel('Version 0.2.1', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -280,12 +281,12 @@ class CustomDialog(QDialog):  # (About1)
     def setUpMainWindow(self):
         widge_all = QWidget()
         l1 = QLabel(self)
-        png = PyQt6.QtGui.QPixmap('wechat5.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
+        png = PyQt6.QtGui.QPixmap('/Applications/Broccoli.app/Contents/Resources/wechat5.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
         l1.setPixmap(png)  # 在l1里面，调用setPixmap命令，建立一个图像存放框，并将之前的图像png存放在这个框框里。
         l1.setMaximumSize(160, 240)
         l1.setScaledContents(True)
         l2 = QLabel(self)
-        png = PyQt6.QtGui.QPixmap('alipay5.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
+        png = PyQt6.QtGui.QPixmap('/Applications/Broccoli.app/Contents/Resources/alipay5.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
         l2.setPixmap(png)  # 在l2里面，调用setPixmap命令，建立一个图像存放框，并将之前的图像png存放在这个框框里。
         l2.setMaximumSize(160, 240)
         l2.setScaledContents(True)
@@ -350,12 +351,12 @@ class CustomDialog2(QDialog):  # (About2)
     def setUpMainWindow(self):
         widge_all = QWidget()
         l1 = QLabel(self)
-        png = PyQt6.QtGui.QPixmap('wechat10.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
+        png = PyQt6.QtGui.QPixmap('/Applications/Broccoli.app/Contents/Resources/wechat10.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
         l1.setPixmap(png)  # 在l1里面，调用setPixmap命令，建立一个图像存放框，并将之前的图像png存放在这个框框里。
         l1.setMaximumSize(160, 240)
         l1.setScaledContents(True)
         l2 = QLabel(self)
-        png = PyQt6.QtGui.QPixmap('alipay10.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
+        png = PyQt6.QtGui.QPixmap('/Applications/Broccoli.app/Contents/Resources/alipay10.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
         l2.setPixmap(png)  # 在l2里面，调用setPixmap命令，建立一个图像存放框，并将之前的图像png存放在这个框框里。
         l2.setMaximumSize(160, 240)
         l2.setScaledContents(True)
@@ -420,12 +421,12 @@ class CustomDialog3(QDialog):  # (About3)
     def setUpMainWindow(self):
         widge_all = QWidget()
         l1 = QLabel(self)
-        png = PyQt6.QtGui.QPixmap('wechat20.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
+        png = PyQt6.QtGui.QPixmap('/Applications/Broccoli.app/Contents/Resources/wechat20.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
         l1.setPixmap(png)  # 在l1里面，调用setPixmap命令，建立一个图像存放框，并将之前的图像png存放在这个框框里。
         l1.setMaximumSize(160, 240)
         l1.setScaledContents(True)
         l2 = QLabel(self)
-        png = PyQt6.QtGui.QPixmap('alipay20.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
+        png = PyQt6.QtGui.QPixmap('/Applications/Broccoli.app/Contents/Resources/alipay20.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
         l2.setPixmap(png)  # 在l2里面，调用setPixmap命令，建立一个图像存放框，并将之前的图像png存放在这个框框里。
         l2.setMaximumSize(160, 240)
         l2.setScaledContents(True)
@@ -490,12 +491,12 @@ class CustomDialog4(QDialog):  # (About4)
     def setUpMainWindow(self):
         widge_all = QWidget()
         l1 = QLabel(self)
-        png = PyQt6.QtGui.QPixmap('wechat50.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
+        png = PyQt6.QtGui.QPixmap('/Applications/Broccoli.app/Contents/Resources/wechat50.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
         l1.setPixmap(png)  # 在l1里面，调用setPixmap命令，建立一个图像存放框，并将之前的图像png存放在这个框框里。
         l1.setMaximumSize(160, 240)
         l1.setScaledContents(True)
         l2 = QLabel(self)
-        png = PyQt6.QtGui.QPixmap('alipay50.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
+        png = PyQt6.QtGui.QPixmap('/Applications/Broccoli.app/Contents/Resources/alipay50.png')  # 调用QtGui.QPixmap方法，打开一个图片，存放在变量png中
         l2.setPixmap(png)  # 在l2里面，调用setPixmap命令，建立一个图像存放框，并将之前的图像png存放在这个框框里。
         l2.setMaximumSize(160, 240)
         l2.setScaledContents(True)
@@ -551,7 +552,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.1.9', self)
+        lbl = QLabel('Current Version: 0.2.1', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -786,7 +787,7 @@ class MyWidget(QWidget):  # 主窗口
     def SendX(self):
         self.btn_sub1.setDisabled(True)
         self.btn_sub4.setDisabled(True)
-        Which = codecs.open('which.txt', 'r', encoding='utf-8').read()
+        Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'r', encoding='utf-8').read()
         if Which == '0':
             if self.text1.toPlainText() == '':
                 a = pyperclip.paste()
@@ -796,15 +797,15 @@ class MyWidget(QWidget):  # 主窗口
             QuesText = QuesText.replace('\n', '\n\n\t')
             QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
             self.LastQ = str(self.text1.toPlainText())
-            AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
+            AccountGPT = codecs.open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'r', encoding='utf-8').read()
             if AccountGPT != '' and self.text1.toPlainText() != '':
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
                 self.text1.setReadOnly(True)
                 md = '- Q: ' + QuesText + '\n\n'
-                with open('output.txt', 'a', encoding='utf-8') as f1:
+                with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                     f1.write(md)
-                PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                PromText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                 newhtml = self.md2html(PromText)
                 self.real1.setHtml(newhtml)
                 self.real1.ensureCursorVisible()  # 游标可用
@@ -819,7 +820,7 @@ class MyWidget(QWidget):  # 主窗口
                 try:
                     openai.api_key = AccountGPT
                     model_engine = "text-davinci-003"
-                    history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
+                    history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
                     prompt = str(self.text1.toPlainText())
                     if self.widget0.currentIndex() == 0:
                         prompt = history + str(self.text1.toPlainText())
@@ -860,7 +861,7 @@ class MyWidget(QWidget):  # 主窗口
                         pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
                         result = pattern.findall(message)
                         ResultEnd = ''.join(result)
-                        with open('command.txt', 'w', encoding='utf-8') as f0:
+                        with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
                             f0.write(ResultEnd)
                         message = "Your command is:" + '\n\t' + ResultEnd
                         self.te0.setText(ResultEnd)
@@ -878,9 +879,9 @@ class MyWidget(QWidget):  # 主窗口
                         message = '\n\t' + message
 
                     EndMess = '- A: ' + message + '\n\n---\n\n'
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write(EndMess)
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -893,9 +894,9 @@ class MyWidget(QWidget):  # 主窗口
 
                     self.text1.clear()
                 except TimeoutException:
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -905,9 +906,9 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.setPlainText(self.LastQ)
                 except Exception as e:
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('- A: Error, please try again!' + '\n\n---\n\n')
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -929,15 +930,15 @@ class MyWidget(QWidget):  # 主窗口
             QuesText = QuesText.replace('\n', '\n\n\t')
             QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
             self.LastQ = str(self.text1.toPlainText())
-            AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
+            AccountGPT = codecs.open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'r', encoding='utf-8').read()
             if AccountGPT != '' and self.text1.toPlainText() != '':
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
                 self.text1.setReadOnly(True)
                 md = '- Q: ' + QuesText + '\n\n'
-                with open('output.txt', 'a', encoding='utf-8') as f1:
+                with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                     f1.write(md)
-                PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                PromText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                 newhtml = self.md2html(PromText)
                 self.real1.setHtml(newhtml)
                 self.real1.ensureCursorVisible()  # 游标可用
@@ -951,7 +952,7 @@ class MyWidget(QWidget):  # 主窗口
                 signal.alarm(60)  # set timer to 15 seconds
                 try:
                     openai.api_key = AccountGPT
-                    history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
+                    history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
                     prompt = str(self.text1.toPlainText())
                     if self.widget0.currentIndex() == 0:
                         prompt = history + str(self.text1.toPlainText())
@@ -990,7 +991,7 @@ class MyWidget(QWidget):  # 主窗口
                         pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
                         result = pattern.findall(message)
                         ResultEnd = ''.join(result)
-                        with open('command.txt', 'w', encoding='utf-8') as f0:
+                        with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
                             f0.write(ResultEnd)
                         message = "Your command is:" + '\n\t' + ResultEnd
                         self.te0.setText(ResultEnd)
@@ -1008,9 +1009,9 @@ class MyWidget(QWidget):  # 主窗口
                         message = '\n\t' + message
 
                     EndMess = '- A: ' + message + '\n\n---\n\n'
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write(EndMess)
-                    ProcessText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    ProcessText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     midhtml = self.md2html(ProcessText)
                     self.real1.setHtml(midhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -1023,9 +1024,9 @@ class MyWidget(QWidget):  # 主窗口
 
                     self.text1.clear()
                 except TimeoutException:
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -1035,9 +1036,9 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.setPlainText(self.LastQ)
                 except Exception as e:
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('- A: Error, please try again!' + '\n\n---\n\n')
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -1059,13 +1060,13 @@ class MyWidget(QWidget):  # 主窗口
             QuesText = QuesText.replace('\n', '\n\n\t')
             QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
             self.LastQ = str(self.text1.toPlainText())
-            AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
-            if AccountGPT != '' and self.text1.toPlainText() != '':
+            Token = codecs.open("/Applications/Broccoli.app/Contents/Resources/AccessToken.txt", 'r', encoding='utf-8').read()
+            if Token != '':
                 self.text1.setReadOnly(True)
                 md = '- Q: ' + QuesText + '\n\n'
-                with open('output.txt', 'a', encoding='utf-8') as f1:
+                with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                     f1.write(md)
-                PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                PromText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                 newhtml = self.md2html(PromText)
                 self.real1.setHtml(newhtml)
                 self.real1.ensureCursorVisible()  # 游标可用
@@ -1077,10 +1078,10 @@ class MyWidget(QWidget):  # 主窗口
                 signal.alarm(60)  # set timer to 15 seconds
                 try:
                     EndMess = '- A: '
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write(EndMess)
-                    chatbot = Chatbot(api_key=AccountGPT)
-                    history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
+                    history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace(
+                        '- Q: ', '')
                     prompt = str(self.text1.toPlainText())
                     if self.widget0.currentIndex() == 0:
                         prompt = history + str(self.text1.toPlainText())
@@ -1097,22 +1098,28 @@ class MyWidget(QWidget):  # 主窗口
                     if self.widget0.currentIndex() == 6:
                         prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
 
+                    chatbot = revChatGPT.V1.Chatbot(config={
+                        "access_token": Token
+                        })
+                    prev_text = ""
                     for data in chatbot.ask(prompt):
-                        with open('output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write(data)
-                            AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
-                            endhtml = self.md2html(AllText)
-                            self.real1.setHtml(endhtml)
-                            self.real1.ensureCursorVisible()  # 游标可用
-                            cursor = self.real1.textCursor()  # 设置游标
-                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                            cursor.setPosition(pos)  # 游标位置设置为尾部
-                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                            QApplication.processEvents()
-                            QApplication.restoreOverrideCursor()
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                        message = data["message"][len(prev_text):]
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                            f1.write(message)
+                        prev_text = data["message"]
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                        endhtml = self.md2html(AllText)
+                        self.real1.setHtml(endhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('\n\n')
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     AllText = AllText.replace('- A: \n\t', '- A: ')
                     AllText = AllText.replace('- A: \n', '- A: ')
                     AllText = AllText.replace('- A: ', '- A: \n\t')
@@ -1132,7 +1139,7 @@ class MyWidget(QWidget):  # 主窗口
                         pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
                         result = pattern.findall(AllText)
                         ResultEnd = ''.join(result)
-                        with open('command.txt', 'w', encoding='utf-8') as f0:
+                        with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
                             f0.write(ResultEnd)
                         self.te0.setText(ResultEnd)
                         AllText = re.sub(r'<\|start\|>([\s\S]*?)<\|end\|>', '', AllText)
@@ -1146,7 +1153,7 @@ class MyWidget(QWidget):  # 主窗口
                         pyperclip.copy(ResultEnd)
                         AllText = AllText.replace('<|start|>', '').replace('<|end|>', '')
                         AllText = AllText + '---\n\n'
-                    with open('output.txt', 'w', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
                         f1.write(AllText)
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
@@ -1157,9 +1164,9 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.clear()
                 except TimeoutException:
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('Timed out, please try again!' + '\n\n---\n\n')
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -1169,9 +1176,9 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.setPlainText(self.LastQ)
                 except Exception as e:
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('Error, please try again!' + '\n\n---\n\n')
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -1182,8 +1189,8 @@ class MyWidget(QWidget):  # 主窗口
                     self.text1.setPlainText(self.LastQ)
                 signal.alarm(0)  # reset timer
                 self.text1.setReadOnly(False)
-            if AccountGPT == '':
-                self.real1.setText('You should set your API in Settings.')
+            if Token == '':
+                self.real1.setText('You should set your Token in Settings.')
         if Which == '3':
             if self.text1.toPlainText() == '':
                 a = pyperclip.paste()
@@ -1193,13 +1200,13 @@ class MyWidget(QWidget):  # 主窗口
             QuesText = QuesText.replace('\n', '\n\n\t')
             QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
             self.LastQ = str(self.text1.toPlainText())
-            AccountGPT = codecs.open('api.txt', 'r', encoding='utf-8').read()
+            AccountGPT = codecs.open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'r', encoding='utf-8').read()
             if AccountGPT != '' and self.text1.toPlainText() != '':
                 self.text1.setReadOnly(True)
                 md = '- Q: ' + QuesText + '\n\n'
-                with open('output.txt', 'a', encoding='utf-8') as f1:
+                with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                     f1.write(md)
-                PromText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                PromText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                 newhtml = self.md2html(PromText)
                 self.real1.setHtml(newhtml)
                 self.real1.ensureCursorVisible()  # 游标可用
@@ -1257,7 +1264,7 @@ class MyWidget(QWidget):  # 主窗口
                             ori_history = [{"role": "user", "content": "Hey."}, {"role": "assistant", "content": "Hello! I'm happy to help you."}]
                             conversation_history = ori_history
                             try:
-                                history = codecs.open('output.txt', 'r', encoding='utf-8').read().replace('"', '').replace(
+                                history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('"', '').replace(
                                     '- Q: ', '''{"role": "user", "content": "''').\
                                     replace('- A: ', '''"}✡{"role": "assistant", "content": "''')\
                                     .replace('---', '''"}✡''').replace('\n', '').replace('\t', '').rstrip()
@@ -1295,7 +1302,7 @@ class MyWidget(QWidget):  # 主窗口
                             pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
                             result = pattern.findall(message)
                             ResultEnd = ''.join(result)
-                            with open('command.txt', 'w', encoding='utf-8') as f0:
+                            with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
                                 f0.write(ResultEnd)
                             message = "Your command is:" + '\n\t' + ResultEnd
                             self.te0.setText(ResultEnd)
@@ -1313,9 +1320,9 @@ class MyWidget(QWidget):  # 主窗口
                             message = '\n\t' + message
 
                         EndMess = '- A: ' + message + '\n\n---\n\n'
-                        with open('output.txt', 'a', encoding='utf-8') as f1:
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write(EndMess)
-                        ProcessText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                        ProcessText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                         midhtml = self.md2html(ProcessText)
                         self.real1.setHtml(midhtml)
                         self.real1.ensureCursorVisible()  # 游标可用
@@ -1328,9 +1335,9 @@ class MyWidget(QWidget):  # 主窗口
                         self.text1.clear()
                     asyncio.run(main())
                 except TimeoutException:
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -1340,9 +1347,9 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     self.text1.setPlainText(self.LastQ)
                 except Exception as e:
-                    with open('output.txt', 'a', encoding='utf-8') as f1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                         f1.write('- A: Error, please try again!' + '\n\n---\n\n')
-                    AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                     endhtml = self.md2html(AllText)
                     self.real1.setHtml(endhtml)
                     self.real1.ensureCursorVisible()  # 游标可用
@@ -1363,14 +1370,14 @@ class MyWidget(QWidget):  # 主窗口
         self.text1.setReadOnly(False)
         self.real1.clear()
         self.te0.clear()
-        with open('output.txt', 'w', encoding='utf-8') as f1:
+        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
             f1.write('')
 
     def ExportX(self):
         home_dir = str(Path.home())
         fj = QFileDialog.getExistingDirectory(self, 'Open', home_dir)
         if fj != '':
-            ConText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+            ConText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
             ISOTIMEFORMAT = '%Y%m%d %H-%M-%S-%f'
             theTime = datetime.datetime.now().strftime(ISOTIMEFORMAT)
             tarname = theTime + " GPToutput.md"
@@ -1488,7 +1495,7 @@ class MyWidget(QWidget):  # 主窗口
     def AgainX(self):
         self.btn_sub1.setDisabled(True)
         self.btn_sub4.setDisabled(True)
-        AllText = codecs.open('output.txt', 'r', encoding='utf-8').read()
+        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
         if AllText != '':
             AllList = AllText.split('---')
             while '\n\n' in AllList:
@@ -1542,7 +1549,7 @@ class MyWidget(QWidget):  # 主窗口
                 self.text1.setPlainText(e)
 
     def RunCommand(self):
-        comm = codecs.open('command.txt', 'r', encoding='utf-8').read()
+        comm = codecs.open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'r', encoding='utf-8').read()
         try:
             subprocess.call(['osascript', '-e', comm])
         except:
@@ -1550,7 +1557,7 @@ class MyWidget(QWidget):  # 主窗口
 
     def ChangeCmd(self):
         changed_cmd = self.te0.toPlainText()
-        with open('command.txt', 'w', encoding='utf-8') as f0:
+        with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
             f0.write(changed_cmd)
 
     def OpenHistory(self):
@@ -1561,7 +1568,7 @@ class MyWidget(QWidget):  # 主窗口
             str_fj = str_fj.replace('Markdown Files (*.md)', '')
             if "GPToutput.md" in str_fj:
                 text_his = codecs.open(str_fj, 'r', encoding='utf-8').read()
-                with open('output.txt', 'w', encoding='utf-8') as f0:
+                with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f0:
                     f0.write(text_his)
                 midhtml = self.md2html(text_his)
                 self.real1.setHtml(midhtml)
@@ -1736,7 +1743,7 @@ class MyWidget(QWidget):  # 主窗口
             self.close()
 
     def activate(self):  # 设置窗口显示
-        with open('output.txt', 'w', encoding='utf-8') as f1:
+        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
             f1.write('')
         self.show()
         self.center()
@@ -1756,7 +1763,7 @@ class window4(QWidget):  # Customization settings
 
     def initUI(self):  # 设置窗口内布局
         self.setUpMainWindow()
-        self.setFixedSize(500, 309)
+        self.setFixedSize(500, 329)
         self.center()
         self.setWindowTitle('Customization settings')
         self.setFocus()
@@ -1764,22 +1771,34 @@ class window4(QWidget):  # Customization settings
     def setUpMainWindow(self):
         self.widget1 = QComboBox(self)
         self.widget1.setEditable(False)
-        defalist = ['GPT-3 (API)', 'ChatGPT (Official module)', 'ChatGPT (revChatGPT)', 'ChatGPT (httpx)']
+        defalist = ['GPT-3 (API)', 'ChatGPT (Official module)', 'ChatGPT (revChatGPT.V1)', 'ChatGPT (httpx)']
         self.widget1.addItems(defalist)
-        Which = codecs.open('which.txt', 'r', encoding='utf-8').read()
+        Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'r', encoding='utf-8').read()
         if Which == '0':
             self.widget1.setCurrentIndex(0)
         if Which == '1':
             self.widget1.setCurrentIndex(1)
         if Which == '2':
             self.widget1.setCurrentIndex(2)
+        if Which == '3':
+            self.widget1.setCurrentIndex(3)
         self.widget1.currentIndexChanged.connect(self.IndexChange)
 
         self.le1 = QLineEdit(self)
         self.le1.setPlaceholderText('API here...')
-        Apis = codecs.open('api.txt', 'r', encoding='utf-8').read()
+        Apis = codecs.open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'r', encoding='utf-8').read()
         if Apis != '':
             self.le1.setText(Apis)
+
+        self.le2 = QLineEdit(self)
+        self.le2.setPlaceholderText('Token here...')
+        Tokens = codecs.open('/Applications/Broccoli.app/Contents/Resources/AccessToken.txt', 'r', encoding='utf-8').read()
+        if Tokens != '':
+            self.le2.setText(Tokens)
+
+        btn_2 = QPushButton('Find session tokens', self)
+        btn_2.clicked.connect(self.Findsetoken)
+        btn_2.setFixedSize(150, 20)
 
         self.te1 = QTextEdit(self)
         home_dir = str(Path.home())
@@ -1809,31 +1828,41 @@ class window4(QWidget):  # Customization settings
         vbox2.addStretch()
         qw2.setLayout(vbox2)
 
+        qw3 = QWidget()
+        vbox3 = QHBoxLayout()
+        vbox3.setContentsMargins(0, 0, 0, 0)
+        vbox3.addWidget(self.le2)
+        vbox3.addWidget(btn_2)
+        qw3.setLayout(vbox3)
+
         vbox1 = QVBoxLayout()
         vbox1.setContentsMargins(20, 20, 20, 20)
         vbox1.addWidget(self.widget1)
         vbox1.addWidget(self.le1)
+        vbox1.addWidget(qw3)
         vbox1.addWidget(self.te1)
         vbox1.addWidget(qw2)
         self.setLayout(vbox1)
 
     def IndexChange(self, i):
         if i == 0:
-            with open('which.txt', 'w', encoding='utf-8') as f0:
+            with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('0')
         if i == 1:
-            with open('which.txt', 'w', encoding='utf-8') as f0:
+            with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('1')
         if i == 2:
-            with open('which.txt', 'w', encoding='utf-8') as f0:
+            with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('2')
         if i == 3:
-            with open('which.txt', 'w', encoding='utf-8') as f0:
+            with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('3')
 
     def SaveAPI(self):
-        with open('api.txt', 'w', encoding='utf-8') as f1:
+        with open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'w', encoding='utf-8') as f1:
             f1.write(self.le1.text())
+        with open('/Applications/Broccoli.app/Contents/Resources/AccessToken.txt', 'w', encoding='utf-8') as f0:
+            f0.write(self.le2.text())
         home_dir = str(Path.home())
         tarname1 = "BroccoliAppPath"
         fulldir1 = os.path.join(home_dir, tarname1)
@@ -1844,6 +1873,9 @@ class window4(QWidget):  # Customization settings
         with open(fulldir2, 'w', encoding='utf-8') as f0:
             f0.write(self.te1.toPlainText())
         self.close()
+
+    def Findsetoken(self):
+        webbrowser.open('https://chat.openai.com/api/auth/session')
 
     def center(self):  # 设置窗口居中
         qr = self.frameGeometry()
