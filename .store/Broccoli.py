@@ -16,7 +16,6 @@ import webbrowser
 import openai
 import markdown2
 import datetime
-import revChatGPT.V3
 import revChatGPT.V1
 import re
 import subprocess
@@ -25,6 +24,7 @@ import signal
 import httpx
 import asyncio
 import json
+from POE import load_chat_id_map, clear_context, send_message, get_latest_message, set_auth
 
 app = QApplication(sys.argv)
 app.setQuitOnLastWindowClosed(False)
@@ -118,7 +118,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.2.1', self)
+        lbl1 = QLabel('Version 0.2.2', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -552,7 +552,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.2.1', self)
+        lbl = QLabel('Current Version: 0.2.2', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -1362,6 +1362,154 @@ class MyWidget(QWidget):  # 主窗口
                 self.text1.setReadOnly(False)
             if AccountGPT == '':
                 self.real1.setText('You should set your accounts in Settings.')
+        if Which == '4':
+            if self.text1.toPlainText() == '':
+                a = pyperclip.paste()
+                self.text1.setPlainText(a)
+            QuesText = self.text1.toPlainText()
+            QuesText = QuesText.lstrip('\n')
+            QuesText = QuesText.replace('\n', '\n\n\t')
+            QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
+            self.LastQ = str(self.text1.toPlainText())
+            Formkey = codecs.open("/Applications/Broccoli.app/Contents/Resources/Formkey.txt", 'r', encoding='utf-8').read()
+            Cookies = codecs.open("/Applications/Broccoli.app/Contents/Resources/Cookies.txt", 'r', encoding='utf-8').read()
+            if Formkey != '' and Cookies != '':
+                QApplication.processEvents()
+                QApplication.restoreOverrideCursor()
+                self.text1.setReadOnly(True)
+                md = '- Q: ' + QuesText + '\n\n'
+                with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                    f1.write(md)
+                PromText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                       encoding='utf-8').read()
+                newhtml = self.md2html(PromText)
+                self.real1.setHtml(newhtml)
+                self.real1.ensureCursorVisible()  # 游标可用
+                cursor = self.real1.textCursor()  # 设置游标
+                pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                cursor.setPosition(pos)  # 游标位置设置为尾部
+                self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                QApplication.processEvents()
+                QApplication.restoreOverrideCursor()
+                signal.signal(signal.SIGALRM, self.timeout_handler)
+                signal.alarm(60)  # set timer to 15 seconds
+                try:
+                    prompt = str(self.text1.toPlainText())
+                    if self.widget0.currentIndex() == 1:
+                        prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                    if self.widget0.currentIndex() == 2:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 3:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 4:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 5:
+                        prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                    if self.widget0.currentIndex() == 6:
+                        prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+
+                    set_auth('Quora-Formkey', Formkey)
+                    set_auth('Cookie', Cookies)
+                    Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/wp.txt', 'r',
+                                        encoding='utf-8').read()
+                    bots = {1: 'capybara', 2: 'beaver', 3: 'a2_2', 4: 'a2', 5: 'chinchilla', 6: 'nutria'}
+                    bot = bots[int(Which)]
+                    chat_id = load_chat_id_map(bot)
+                    if prompt == "!clear":
+                        clear_context(chat_id)
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
+                            f1.write('- A: Context is now cleared!' + '\n\n---\n\n')
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                              encoding='utf-8').read()
+                        endhtml = self.md2html(AllText)
+                        self.real1.setHtml(endhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        self.text1.setPlainText(self.LastQ)
+                    if prompt != "!clear":
+                        send_message(prompt, bot, chat_id)
+                        message = get_latest_message(bot)
+
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
+                        if self.widget0.currentIndex() == 0 or self.widget0.currentIndex() == 7:
+                            message = message.lstrip('\n')
+                            message = message.replace('\n', '\n\n\t')
+                            message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                            message = '\n\t' + message
+                            QApplication.processEvents()
+                            QApplication.restoreOverrideCursor()
+                        if self.widget0.currentIndex() == 1:
+                            pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                            result = pattern.findall(message)
+                            ResultEnd = ''.join(result)
+                            with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w',
+                                      encoding='utf-8') as f0:
+                                f0.write(ResultEnd)
+                            message = "Your command is:" + '\n\t' + ResultEnd
+                            self.te0.setText(ResultEnd)
+                        if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
+                                self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
+                                self.widget0.currentIndex() == 6:
+                            pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                            result = pattern.findall(message)
+                            ResultEnd = ''.join(result)
+                            pyperclip.copy(ResultEnd)
+                            message = ResultEnd
+                            message = message.lstrip('\n')
+                            message = message.replace('\n', '\n\n\t')
+                            message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                            message = '\n\t' + message
+
+                        EndMess = '- A: ' + message + '\n\n---\n\n'
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
+                            f1.write(EndMess)
+                        ProcessText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                                  encoding='utf-8').read()
+                        midhtml = self.md2html(ProcessText)
+                        self.real1.setHtml(midhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
+
+                    self.text1.clear()
+                except TimeoutException:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    self.text1.setPlainText(self.LastQ)
+                except Exception as e:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('- A: Error, please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    self.text1.setPlainText(self.LastQ)
+                signal.alarm(0)  # reset timer
+                self.text1.setReadOnly(False)
+            if Formkey == '' or Cookies == '':
+                self.real1.setText('You should set your formkey and cookies in Settings.')
         self.btn_sub1.setDisabled(False)
         self.btn_sub4.setDisabled(False)
 
@@ -1763,7 +1911,7 @@ class window4(QWidget):  # Customization settings
 
     def initUI(self):  # 设置窗口内布局
         self.setUpMainWindow()
-        self.setFixedSize(500, 329)
+        self.setFixedSize(500, 389)
         self.center()
         self.setWindowTitle('Customization settings')
         self.setFocus()
@@ -1771,7 +1919,7 @@ class window4(QWidget):  # Customization settings
     def setUpMainWindow(self):
         self.widget1 = QComboBox(self)
         self.widget1.setEditable(False)
-        defalist = ['GPT-3 (API)', 'ChatGPT (Official module)', 'ChatGPT (revChatGPT.V1)', 'ChatGPT (httpx)']
+        defalist = ['GPT-3 (API - openai)', 'ChatGPT (API - openai)', 'ChatGPT (Session Tokens)', 'ChatGPT (API - httpx)', 'Poe (Formkey + Cookies)']
         self.widget1.addItems(defalist)
         Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'r', encoding='utf-8').read()
         if Which == '0':
@@ -1782,6 +1930,8 @@ class window4(QWidget):  # Customization settings
             self.widget1.setCurrentIndex(2)
         if Which == '3':
             self.widget1.setCurrentIndex(3)
+        if Which == '4':
+            self.widget1.setCurrentIndex(4)
         self.widget1.currentIndexChanged.connect(self.IndexChange)
 
         self.le1 = QLineEdit(self)
@@ -1791,7 +1941,7 @@ class window4(QWidget):  # Customization settings
             self.le1.setText(Apis)
 
         self.le2 = QLineEdit(self)
-        self.le2.setPlaceholderText('Token here...')
+        self.le2.setPlaceholderText('Session tokens here...')
         Tokens = codecs.open('/Applications/Broccoli.app/Contents/Resources/AccessToken.txt', 'r', encoding='utf-8').read()
         if Tokens != '':
             self.le2.setText(Tokens)
@@ -1799,6 +1949,37 @@ class window4(QWidget):  # Customization settings
         btn_2 = QPushButton('Find session tokens', self)
         btn_2.clicked.connect(self.Findsetoken)
         btn_2.setFixedSize(150, 20)
+
+        self.le3 = QLineEdit(self)
+        self.le3.setPlaceholderText('Formkey here...')
+        Formkey = codecs.open('/Applications/Broccoli.app/Contents/Resources/Formkey.txt', 'r', encoding='utf-8').read()
+        if Formkey != '':
+            self.le3.setText(Formkey)
+
+        self.le4 = QLineEdit(self)
+        self.le4.setPlaceholderText('Cookies here...("m-b=XXXX")')
+        Cookies = codecs.open('/Applications/Broccoli.app/Contents/Resources/Cookies.txt', 'r', encoding='utf-8').read()
+        if Cookies != '':
+            self.le4.setText(Cookies)
+
+        self.widget2 = QComboBox(self)
+        self.widget2.setEditable(False)
+        defalist = ['Sage', 'GPT-4', 'Claude+', 'Claude', 'ChatGPT', 'Dragonfly']
+        self.widget2.addItems(defalist)
+        Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/wp.txt', 'r', encoding='utf-8').read()
+        if Which == '1':
+            self.widget2.setCurrentIndex(0)
+        if Which == '2':
+            self.widget2.setCurrentIndex(1)
+        if Which == '3':
+            self.widget2.setCurrentIndex(2)
+        if Which == '4':
+            self.widget2.setCurrentIndex(3)
+        if Which == '5':
+            self.widget2.setCurrentIndex(4)
+        if Which == '6':
+            self.widget2.setCurrentIndex(5)
+        self.widget2.currentIndexChanged.connect(self.IndexChange2)
 
         self.te1 = QTextEdit(self)
         home_dir = str(Path.home())
@@ -1840,6 +2021,9 @@ class window4(QWidget):  # Customization settings
         vbox1.addWidget(self.widget1)
         vbox1.addWidget(self.le1)
         vbox1.addWidget(qw3)
+        vbox1.addWidget(self.le3)
+        vbox1.addWidget(self.le4)
+        vbox1.addWidget(self.widget2)
         vbox1.addWidget(self.te1)
         vbox1.addWidget(qw2)
         self.setLayout(vbox1)
@@ -1857,12 +2041,39 @@ class window4(QWidget):  # Customization settings
         if i == 3:
             with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('3')
+        if i == 4:
+            with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
+                f0.write('4')
+
+    def IndexChange2(self, h):
+        if h == 0:
+            with open('/Applications/Broccoli.app/Contents/Resources/wp.txt', 'w', encoding='utf-8') as f0:
+                f0.write('1')
+        if h == 1:
+            with open('/Applications/Broccoli.app/Contents/Resources/wp.txt', 'w', encoding='utf-8') as f0:
+                f0.write('2')
+        if h == 2:
+            with open('/Applications/Broccoli.app/Contents/Resources/wp.txt', 'w', encoding='utf-8') as f0:
+                f0.write('3')
+        if h == 3:
+            with open('/Applications/Broccoli.app/Contents/Resources/wp.txt', 'w', encoding='utf-8') as f0:
+                f0.write('4')
+        if h == 4:
+            with open('/Applications/Broccoli.app/Contents/Resources/wp.txt', 'w', encoding='utf-8') as f0:
+                f0.write('5')
+        if h == 5:
+            with open('/Applications/Broccoli.app/Contents/Resources/wp.txt', 'w', encoding='utf-8') as f0:
+                f0.write('6')
 
     def SaveAPI(self):
         with open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'w', encoding='utf-8') as f1:
             f1.write(self.le1.text())
         with open('/Applications/Broccoli.app/Contents/Resources/AccessToken.txt', 'w', encoding='utf-8') as f0:
             f0.write(self.le2.text())
+        with open('/Applications/Broccoli.app/Contents/Resources/Formkey.txt', 'w', encoding='utf-8') as f0:
+            f0.write(self.le3.text())
+        with open('/Applications/Broccoli.app/Contents/Resources/Cookies.txt', 'w', encoding='utf-8') as f0:
+            f0.write(self.le4.text())
         home_dir = str(Path.home())
         tarname1 = "BroccoliAppPath"
         fulldir1 = os.path.join(home_dir, tarname1)

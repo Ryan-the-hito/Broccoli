@@ -3,7 +3,7 @@
 
 block_cipher = None
 
-__version__ = '0.2.1'
+__version__ = '0.2.2'
 
 
 a = Analysis(
@@ -12,8 +12,8 @@ a = Analysis(
     binaries=[],
     datas=[('Broccolimen.icns', '.'), ('Broccolidsk.icns', '.'), ('Broccolimen.png', '.'), ('wechat50.png', '.'), ('wechat20.png', '.'), 
               ('wechat10.png', '.'), ('wechat5.png', '.'), ('alipay50.png', '.'), ('alipay20.png', '.'), ('alipay10.png', '.'), 
-              ('alipay5.png', '.'), ('api.txt', '.'), ('output.txt', '.'), ('which.txt', '.'), ('command.txt', '.'), ('AccessToken.txt', '.')],
-    hiddenimports=['torch', 'transformers', 'anyio', 'anyio._backends'],
+              ('alipay5.png', '.'), ('api.txt', '.'), ('output.txt', '.'), ('which.txt', '.'), ('command.txt', '.'), ('AccessToken.txt', '.'), ('wp.txt', '.'), ('Formkey.txt', '.'), ('Cookies.txt', '.'), ('POE.py', '.')],
+    hiddenimports=['torch', 'transformers', 'anyio', 'anyio._backends', 'requests'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
