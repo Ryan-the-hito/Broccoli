@@ -19,7 +19,6 @@ import datetime
 import revChatGPT.V1
 import re
 import subprocess
-import pyperclip
 import signal
 import httpx
 import asyncio
@@ -32,6 +31,7 @@ import csv
 import numpy as np
 import pandas as pd
 import time
+from EdgeGPT import Chatbot, ConversationStyle
 
 app = QApplication(sys.argv)
 app.setQuitOnLastWindowClosed(False)
@@ -129,7 +129,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.2.3', self)
+        lbl1 = QLabel('Version 0.2.7', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -563,7 +563,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.2.3', self)
+        lbl = QLabel('Current Version: 0.2.7', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -771,6 +771,24 @@ class MyWidget(QWidget):  # 主窗口
         self.btn_sub8.setFixedSize(70, 20)
         self.btn_sub8.setVisible(False)
 
+        self.btn0_1 = QPushButton('', self)
+        self.btn0_1.setFixedSize(25, 25)
+        self.btn0_1.setStyleSheet('''
+                QPushButton{
+                border: transparent;
+                background-color: transparent;
+                border-image: url(/Applications/Broccoli.app/Contents/Resources/set2.png);
+                }
+                QPushButton:pressed{
+                border: 1px outset grey;
+                background-color: #0085FF;
+                border-radius: 4px;
+                padding: 1px;
+                color: #FFFFFF
+                }
+                ''')
+        self.btn0_1.move(345, 780)
+
         qw1 = QWidget()
         vbox1 = QVBoxLayout()
         vbox1.setContentsMargins(0, 0, 0, 0)
@@ -828,6 +846,8 @@ class MyWidget(QWidget):  # 主窗口
         vbox3.addWidget(self.qw3)
         self.setLayout(vbox3)
         self.activate()
+        self.assigntoall()
+        self.btn0_1.raise_()
 
     def move_window(self, width, height):
         animation = QPropertyAnimation(self, b"geometry", self)
@@ -843,6 +863,21 @@ class MyWidget(QWidget):  # 主窗口
         new_pos = QRect(width, height, self.width(), self.height())
         animation.setEndValue(new_pos)
         animation.start()
+
+    def assigntoall(self):
+        cmd = """osascript -e '''
+on run
+    tell application "System Events" to set activeApp to "Broccoli"
+    tell application "System Events" to tell UI element activeApp of list 1 of process "Dock"
+        perform action "AXShowMenu"
+        click menu item "Options" of menu 1
+        click menu item "All Desktops" of menu 1 of menu item "Options" of menu 1
+    end tell
+end run'''"""
+        try:
+            os.system(cmd)
+        except Exception as e:
+            pass
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -862,8 +897,7 @@ class MyWidget(QWidget):  # 主窗口
         if not action6.isChecked() or (action6.isChecked() and self.widget0.currentIndex() != 0):
             if Which == '0':
                 if self.text1.toPlainText() == '':
-                    a = pyperclip.paste()
-                    a = a.encode('utf-8').decode('utf-8', 'ignore')
+                    a = subprocess.check_output('pbpaste', env={'LANG': 'en_US.UTF-8'}).decode('utf-8')
                     self.text1.setPlainText(a)
                 QuesText = self.text1.toPlainText()
                 QuesText = QuesText.lstrip('\n')
@@ -888,27 +922,45 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
+                    timeout = 60
+                    timeset = codecs.open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'r',
+                                       encoding='utf-8').read()
+                    if timeset != '':
+                        timeout = int(timeset)
                     signal.signal(signal.SIGALRM, self.timeout_handler)
-                    signal.alarm(60)  # set timer to 15 seconds
+                    signal.alarm(timeout)  # set timer to 15 seconds
                     try:
                         openai.api_key = AccountGPT
                         model_engine = "text-davinci-003"
                         history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
                         prompt = str(self.text1.toPlainText())
+                        reststr = history + '---' + prompt
+                        tokenizer = GPT2Tokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+                        A = tokenizer.encode(reststr, add_special_tokens=True)
+                        while len(A) >= 1000:
+                            AllList = reststr.split('---')
+                            while '' in AllList:
+                                AllList.remove('')
+                            while '\n\n' in AllList:
+                                AllList.remove('\n\n')
+                            del AllList[0]
+                            reststr = '---'.join(AllList)
+                            A = tokenizer.encode(reststr, add_special_tokens=True)
+                            continue
                         if self.widget0.currentIndex() == 0:
-                            prompt = history + str(self.text1.toPlainText())
+                            prompt = reststr
                         if self.widget0.currentIndex() == 1:
-                            prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                            prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 2:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 3:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 4:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 5:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 6:
-                            prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
 
                         tutr = 0.5
                         temp = codecs.open('/Applications/Broccoli.app/Contents/Resources/temp.txt', 'r',
@@ -957,7 +1009,8 @@ class MyWidget(QWidget):  # 主窗口
                             result = pattern.findall(message)
                             ResultEnd = ''.join(result)
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                            pyperclip.copy(ResultEnd)
+                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                            p.communicate(input=ResultEnd.encode('utf-8'))
                             message = ResultEnd
                             message = message.lstrip('\n')
                             message = message.replace('\n', '\n\n\t')
@@ -1009,8 +1062,7 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setText('You should set your API in Settings.')
             if Which == '1':
                 if self.text1.toPlainText() == '':
-                    a = pyperclip.paste()
-                    a = a.encode('utf-8').decode('utf-8', 'ignore')
+                    a = subprocess.check_output('pbpaste', env={'LANG': 'en_US.UTF-8'}).decode('utf-8')
                     self.text1.setPlainText(a)
                 QuesText = self.text1.toPlainText()
                 QuesText = QuesText.lstrip('\n')
@@ -1035,26 +1087,44 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
+                    timeout = 60
+                    timeset = codecs.open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'r',
+                                          encoding='utf-8').read()
+                    if timeset != '':
+                        timeout = int(timeset)
                     signal.signal(signal.SIGALRM, self.timeout_handler)
-                    signal.alarm(60)  # set timer to 15 seconds
+                    signal.alarm(timeout)  # set timer to 15 seconds
                     try:
                         openai.api_key = AccountGPT
                         history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
                         prompt = str(self.text1.toPlainText())
+                        reststr = history + '---' + prompt
+                        tokenizer = GPT2Tokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+                        A = tokenizer.encode(reststr, add_special_tokens=True)
+                        while len(A) >= 1000:
+                            AllList = reststr.split('---')
+                            while '' in AllList:
+                                AllList.remove('')
+                            while '\n\n' in AllList:
+                                AllList.remove('\n\n')
+                            del AllList[0]
+                            reststr = '---'.join(AllList)
+                            A = tokenizer.encode(reststr, add_special_tokens=True)
+                            continue
                         if self.widget0.currentIndex() == 0:
-                            prompt = history + str(self.text1.toPlainText())
+                            prompt = reststr
                         if self.widget0.currentIndex() == 1:
-                            prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                            prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 2:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 3:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 4:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 5:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 6:
-                            prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
 
                         tutr = 0.5
                         temp = codecs.open('/Applications/Broccoli.app/Contents/Resources/temp.txt', 'r',
@@ -1101,7 +1171,8 @@ class MyWidget(QWidget):  # 主窗口
                             result = pattern.findall(message)
                             ResultEnd = ''.join(result)
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                            pyperclip.copy(ResultEnd)
+                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                            p.communicate(input=ResultEnd.encode('utf-8'))
                             message = ResultEnd
                             message = message.lstrip('\n')
                             message = message.replace('\n', '\n\n\t')
@@ -1153,16 +1224,15 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setText('You should set your accounts in Settings.')
             if Which == '2':
                 if self.text1.toPlainText() == '':
-                    a = pyperclip.paste()
-                    a = a.encode('utf-8').decode('utf-8', 'ignore')
+                    a = subprocess.check_output('pbpaste', env={'LANG': 'en_US.UTF-8'}).decode('utf-8')
                     self.text1.setPlainText(a)
                 QuesText = self.text1.toPlainText()
                 QuesText = QuesText.lstrip('\n')
                 QuesText = QuesText.replace('\n', '\n\n\t')
                 QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
                 self.LastQ = str(self.text1.toPlainText())
-                Token = codecs.open("/Applications/Broccoli.app/Contents/Resources/AccessToken.txt", 'r', encoding='utf-8').read()
-                if Token != '':
+                AccountGPT = codecs.open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'r', encoding='utf-8').read()
+                if AccountGPT != '' and self.text1.toPlainText() != '':
                     self.text1.setReadOnly(True)
                     md = '- Q: ' + QuesText + '\n\n'
                     with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
@@ -1175,49 +1245,61 @@ class MyWidget(QWidget):  # 主窗口
                     pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    timeout = 60
+                    timeset = codecs.open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'r',
+                                          encoding='utf-8').read()
+                    if timeset != '':
+                        timeout = int(timeset)
                     signal.signal(signal.SIGALRM, self.timeout_handler)
-                    signal.alarm(60)  # set timer to 15 seconds
+                    signal.alarm(timeout)  # set timer to 15 seconds
                     try:
                         EndMess = '- A: '
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write(EndMess)
-                        history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace(
-                            '- Q: ', '')
+                        chatbot = V3.Chatbot(api_key=AccountGPT)
+                        history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
                         prompt = str(self.text1.toPlainText())
+                        reststr = history + '---' + prompt
+                        tokenizer = GPT2Tokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+                        A = tokenizer.encode(reststr, add_special_tokens=True)
+                        while len(A) >= 1000:
+                            AllList = reststr.split('---')
+                            while '' in AllList:
+                                AllList.remove('')
+                            while '\n\n' in AllList:
+                                AllList.remove('\n\n')
+                            del AllList[0]
+                            reststr = '---'.join(AllList)
+                            A = tokenizer.encode(reststr, add_special_tokens=True)
+                            continue
                         if self.widget0.currentIndex() == 0:
-                            prompt = history + str(self.text1.toPlainText())
+                            prompt = reststr
                         if self.widget0.currentIndex() == 1:
-                            prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                            prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 2:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 3:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 4:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 5:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 6:
-                            prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
 
-                        chatbot = revChatGPT.V1.Chatbot(config={
-                            "access_token": Token
-                            })
-                        prev_text = ""
                         for data in chatbot.ask(prompt):
-                            message = data["message"][len(prev_text):]
                             with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                                f1.write(message)
-                            prev_text = data["message"]
-                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
-                            endhtml = self.md2html(AllText)
-                            self.real1.setHtml(endhtml)
-                            self.real1.ensureCursorVisible()  # 游标可用
-                            cursor = self.real1.textCursor()  # 设置游标
-                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                            cursor.setPosition(pos)  # 游标位置设置为尾部
-                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                            QApplication.processEvents()
-                            QApplication.restoreOverrideCursor()
+                                f1.write(data)
+                                AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                                endhtml = self.md2html(AllText)
+                                self.real1.setHtml(endhtml)
+                                self.real1.ensureCursorVisible()  # 游标可用
+                                cursor = self.real1.textCursor()  # 设置游标
+                                pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                                cursor.setPosition(pos)  # 游标位置设置为尾部
+                                self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                                QApplication.processEvents()
+                                QApplication.restoreOverrideCursor()
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write('\n\n')
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
@@ -1252,7 +1334,8 @@ class MyWidget(QWidget):  # 主窗口
                             result = pattern.findall(AllText)
                             ResultEnd = ''.join(result).lstrip(' ').lstrip('\n').lstrip('\t')
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                            pyperclip.copy(ResultEnd)
+                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                            p.communicate(input=ResultEnd.encode('utf-8'))
                             AllText = AllText.replace('<|start|>', '').replace('<|end|>', '')
                             AllText = AllText + '---\n\n'
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
@@ -1291,12 +1374,11 @@ class MyWidget(QWidget):  # 主窗口
                         self.text1.setPlainText(self.LastQ)
                     signal.alarm(0)  # reset timer
                     self.text1.setReadOnly(False)
-                if Token == '':
-                    self.real1.setText('You should set your Token in Settings.')
+                if AccountGPT == '':
+                    self.real1.setText('You should set your API in Settings.')
             if Which == '3':
                 if self.text1.toPlainText() == '':
-                    a = pyperclip.paste()
-                    a = a.encode('utf-8').decode('utf-8', 'ignore')
+                    a = subprocess.check_output('pbpaste', env={'LANG': 'en_US.UTF-8'}).decode('utf-8')
                     self.text1.setPlainText(a)
                 QuesText = self.text1.toPlainText()
                 QuesText = QuesText.lstrip('\n')
@@ -1317,8 +1399,13 @@ class MyWidget(QWidget):  # 主窗口
                     pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    timeout = 60
+                    timeset = codecs.open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'r',
+                                          encoding='utf-8').read()
+                    if timeset != '':
+                        timeout = int(timeset)
                     signal.signal(signal.SIGALRM, self.timeout_handler)
-                    signal.alarm(60)  # set timer to 15 seconds
+                    signal.alarm(timeout)  # set timer to 15 seconds
                     # Set up your API key
                     ENDPOINT = 'https://api.openai.com/v1/chat/completions'
                     api2 = codecs.open('/Applications/Broccoli.app/Contents/Resources/api2.txt', 'r',
@@ -1332,7 +1419,7 @@ class MyWidget(QWidget):  # 主窗口
                         AccountGPT = api2
                     HEADERS = {"Authorization": f"Bearer {AccountGPT}"}
                     try:
-                        async def chat_gpt(message, conversation_history=None, tokens_limit=4096):
+                        async def chat_gpt(message, conversation_history=None, tokens_limit=4000):
                             if conversation_history is None:
                                 conversation_history = []
 
@@ -1401,17 +1488,17 @@ class MyWidget(QWidget):  # 主窗口
                                 except Exception as e:
                                     pass
                             if self.widget0.currentIndex() == 1:
-                                prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                                prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 2:
-                                prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                                prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 3:
-                                prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                                prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 4:
-                                prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                                prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 5:
-                                prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                                prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 6:
-                                prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                                prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
 
                             response = await chat_gpt(prompt, conversation_history)
                             message = response.lstrip('assistant:').strip()
@@ -1437,7 +1524,9 @@ class MyWidget(QWidget):  # 主窗口
                                 result = pattern.findall(message)
                                 ResultEnd = ''.join(result)
                                 ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                                pyperclip.copy(ResultEnd)
+                                #pyperclip.copy(ResultEnd)
+                                p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                                p.communicate(input=ResultEnd.encode('utf-8'))
                                 message = ResultEnd
                                 message = message.lstrip('\n')
                                 message = message.replace('\n', '\n\n\t')
@@ -1489,8 +1578,7 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setText('You should set your accounts in Settings.')
             if Which == '4':
                 if self.text1.toPlainText() == '':
-                    a = pyperclip.paste()
-                    a = a.encode('utf-8').decode('utf-8', 'ignore')
+                    a = subprocess.check_output('pbpaste', env={'LANG': 'en_US.UTF-8'}).decode('utf-8')
                     self.text1.setPlainText(a)
                 QuesText = self.text1.toPlainText()
                 QuesText = QuesText.lstrip('\n')
@@ -1517,22 +1605,27 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
+                    timeout = 60
+                    timeset = codecs.open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'r',
+                                          encoding='utf-8').read()
+                    if timeset != '':
+                        timeout = int(timeset)
                     signal.signal(signal.SIGALRM, self.timeout_handler)
-                    signal.alarm(60)  # set timer to 15 seconds
+                    signal.alarm(timeout)  # set timer to 15 seconds
                     try:
                         prompt = str(self.text1.toPlainText())
                         if self.widget0.currentIndex() == 1:
-                            prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                            prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 2:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 3:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 4:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 5:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 6:
-                            prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
 
                         set_auth('Quora-Formkey', Formkey)
                         set_auth('Cookie', Cookies)
@@ -1585,7 +1678,8 @@ class MyWidget(QWidget):  # 主窗口
                                 result = pattern.findall(message)
                                 ResultEnd = ''.join(result)
                                 ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                                pyperclip.copy(ResultEnd)
+                                p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                                p.communicate(input=ResultEnd.encode('utf-8'))
                                 message = ResultEnd
                                 message = message.lstrip('\n')
                                 message = message.replace('\n', '\n\n\t')
@@ -1639,16 +1733,15 @@ class MyWidget(QWidget):  # 主窗口
                     self.real1.setText('You should set your formkey and cookies in Settings.')
             if Which == '5':
                 if self.text1.toPlainText() == '':
-                    a = pyperclip.paste()
-                    a = a.encode('utf-8').decode('utf-8', 'ignore')
+                    a = subprocess.check_output('pbpaste', env={'LANG': 'en_US.UTF-8'}).decode('utf-8')
                     self.text1.setPlainText(a)
                 QuesText = self.text1.toPlainText()
                 QuesText = QuesText.lstrip('\n')
                 QuesText = QuesText.replace('\n', '\n\n\t')
                 QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
                 self.LastQ = str(self.text1.toPlainText())
-                AccountGPT = codecs.open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'r', encoding='utf-8').read()
-                if AccountGPT != '' and self.text1.toPlainText() != '':
+                Token = codecs.open("/Applications/Broccoli.app/Contents/Resources/AccessToken.txt", 'r', encoding='utf-8').read()
+                if Token != '':
                     self.text1.setReadOnly(True)
                     md = '- Q: ' + QuesText + '\n\n'
                     with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
@@ -1661,43 +1754,67 @@ class MyWidget(QWidget):  # 主窗口
                     pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    timeout = 60
+                    timeset = codecs.open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'r',
+                                          encoding='utf-8').read()
+                    if timeset != '':
+                        timeout = int(timeset)
                     signal.signal(signal.SIGALRM, self.timeout_handler)
-                    signal.alarm(60)  # set timer to 15 seconds
+                    signal.alarm(timeout)  # set timer to 15 seconds
                     try:
                         EndMess = '- A: '
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write(EndMess)
-                        chatbot = V3.Chatbot(api_key=AccountGPT)
-                        history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
+                        history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read().replace('- A: ', '').replace(
+                            '- Q: ', '')
                         prompt = str(self.text1.toPlainText())
+                        reststr = history + '---' + prompt
+                        tokenizer = GPT2Tokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+                        A = tokenizer.encode(reststr, add_special_tokens=True)
+                        while len(A) >= 1000:
+                            AllList = reststr.split('---')
+                            while '' in AllList:
+                                AllList.remove('')
+                            while '\n\n' in AllList:
+                                AllList.remove('\n\n')
+                            del AllList[0]
+                            reststr = '---'.join(AllList)
+                            A = tokenizer.encode(reststr, add_special_tokens=True)
+                            continue
                         if self.widget0.currentIndex() == 0:
-                            prompt = history + str(self.text1.toPlainText())
+                            prompt = reststr
                         if self.widget0.currentIndex() == 1:
-                            prompt = f"""Command: {str(self.text1.toPlainText())}. Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision."""
+                            prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 2:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 3:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 4:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 5:
-                            prompt = f"""Text: {str(self.text1.toPlainText())}. You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 6:
-                            prompt = f"""Code: {str(self.text1.toPlainText())}. You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends."""
+                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
 
+                        chatbot = revChatGPT.V1.Chatbot(config={
+                            "access_token": Token
+                            })
+                        prev_text = ""
                         for data in chatbot.ask(prompt):
+                            message = data["message"][len(prev_text):]
                             with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                                f1.write(data)
-                                AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
-                                endhtml = self.md2html(AllText)
-                                self.real1.setHtml(endhtml)
-                                self.real1.ensureCursorVisible()  # 游标可用
-                                cursor = self.real1.textCursor()  # 设置游标
-                                pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                                cursor.setPosition(pos)  # 游标位置设置为尾部
-                                self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                                QApplication.processEvents()
-                                QApplication.restoreOverrideCursor()
+                                f1.write(message)
+                            prev_text = data["message"]
+                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                            endhtml = self.md2html(AllText)
+                            self.real1.setHtml(endhtml)
+                            self.real1.ensureCursorVisible()  # 游标可用
+                            cursor = self.real1.textCursor()  # 设置游标
+                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                            cursor.setPosition(pos)  # 游标位置设置为尾部
+                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                            QApplication.processEvents()
+                            QApplication.restoreOverrideCursor()
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write('\n\n')
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
@@ -1732,7 +1849,8 @@ class MyWidget(QWidget):  # 主窗口
                             result = pattern.findall(AllText)
                             ResultEnd = ''.join(result).lstrip(' ').lstrip('\n').lstrip('\t')
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                            pyperclip.copy(ResultEnd)
+                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                            p.communicate(input=ResultEnd.encode('utf-8'))
                             AllText = AllText.replace('<|start|>', '').replace('<|end|>', '')
                             AllText = AllText + '---\n\n'
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
@@ -1771,8 +1889,161 @@ class MyWidget(QWidget):  # 主窗口
                         self.text1.setPlainText(self.LastQ)
                     signal.alarm(0)  # reset timer
                     self.text1.setReadOnly(False)
-                if AccountGPT == '':
-                    self.real1.setText('You should set your API in Settings.')
+                if Token == '':
+                    self.real1.setText('You should set your Token in Settings.')
+            if Which == '6':
+                if self.text1.toPlainText() == '':
+                    a = subprocess.check_output('pbpaste', env={'LANG': 'en_US.UTF-8'}).decode('utf-8')
+                    self.text1.setPlainText(a)
+                QuesText = self.text1.toPlainText()
+                QuesText = QuesText.lstrip('\n')
+                QuesText = QuesText.replace('\n', '\n\n\t')
+                QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
+                self.LastQ = str(self.text1.toPlainText())
+                cook = codecs.open('/Applications/Broccoli.app/Contents/Resources/cookies.json', 'r', encoding='utf-8').read()
+                if cook != ''and self.text1.toPlainText() != '':
+                    QApplication.processEvents()
+                    QApplication.restoreOverrideCursor()
+                    self.text1.setReadOnly(True)
+                    md = '- Q: ' + QuesText + '\n\n'
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write(md)
+                    PromText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                           encoding='utf-8').read()
+                    newhtml = self.md2html(PromText)
+                    self.real1.setHtml(newhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    QApplication.processEvents()
+                    QApplication.restoreOverrideCursor()
+                    timeout = 60
+                    timeset = codecs.open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'r',
+                                          encoding='utf-8').read()
+                    if timeset != '':
+                        timeout = int(timeset)
+                    signal.signal(signal.SIGALRM, self.timeout_handler)
+                    signal.alarm(timeout)  # set timer to 15 seconds
+                    try:
+                        history = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                              encoding='utf-8').read().replace('- A: ', '').replace('- Q: ', '')
+                        prompt = str(self.text1.toPlainText())
+                        reststr = history + '---' + prompt
+                        tokenizer = GPT2Tokenizer.from_pretrained('EleutherAI/gpt-neo-2.7B')
+                        A = tokenizer.encode(reststr, add_special_tokens=True)
+                        while len(A) >= 1000:
+                            AllList = reststr.split('---')
+                            while '' in AllList:
+                                AllList.remove('')
+                            while '\n\n' in AllList:
+                                AllList.remove('\n\n')
+                            del AllList[0]
+                            reststr = '---'.join(AllList)
+                            A = tokenizer.encode(reststr, add_special_tokens=True)
+                            continue
+                        if self.widget0.currentIndex() == 0:
+                            prompt = reststr
+                        if self.widget0.currentIndex() == 1:
+                            prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
+                        if self.widget0.currentIndex() == 2:
+                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                        if self.widget0.currentIndex() == 3:
+                            prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                        if self.widget0.currentIndex() == 4:
+                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                        if self.widget0.currentIndex() == 5:
+                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                        if self.widget0.currentIndex() == 6:
+                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
+
+                        async def main():
+                            bot = await Chatbot.create(cookie_path='/Applications/Broccoli.app/Contents/Resources/cookies.json')
+                            res = await bot.ask(prompt=prompt, conversation_style=ConversationStyle.creative,
+                                                    wss_link="wss://sydney.bing.com/sydney/ChatHub")
+                            await bot.close()
+                            message = res['item']['messages'][1]['text']
+
+                            if self.widget0.currentIndex() == 0 or self.widget0.currentIndex() == 7:
+                                message = message.lstrip('\n')
+                                message = message.replace('\n', '\n\n\t')
+                                message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                                message = '\n\t' + message
+                            if self.widget0.currentIndex() == 1:
+                                pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                                result = pattern.findall(message)
+                                ResultEnd = ''.join(result)
+                                with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w',
+                                          encoding='utf-8') as f0:
+                                    f0.write(ResultEnd)
+                                message = "Your command is:" + '\n\t' + ResultEnd
+                                self.te0.setText(ResultEnd)
+                            if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
+                                    self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
+                                    self.widget0.currentIndex() == 6:
+                                pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                                result = pattern.findall(message)
+                                ResultEnd = ''.join(result)
+                                ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
+                                p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                                p.communicate(input=ResultEnd.encode('utf-8'))
+                                message = ResultEnd
+                                message = message.lstrip('\n')
+                                message = message.replace('\n', '\n\n\t')
+                                message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                                message = '\n\t' + message
+
+                            EndMess = '- A: ' + message + '\n\n---\n\n'
+                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                      encoding='utf-8') as f1:
+                                f1.write(EndMess)
+                            ProcessText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                                      encoding='utf-8').read()
+                            midhtml = self.md2html(ProcessText)
+                            self.real1.setHtml(midhtml)
+                            self.real1.ensureCursorVisible()  # 游标可用
+                            cursor = self.real1.textCursor()  # 设置游标
+                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                            cursor.setPosition(pos)  # 游标位置设置为尾部
+                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                            QApplication.processEvents()
+                            QApplication.restoreOverrideCursor()
+
+                            self.text1.clear()
+                        asyncio.run(main())
+                    except TimeoutException:
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
+                            f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                              encoding='utf-8').read()
+                        endhtml = self.md2html(AllText)
+                        self.real1.setHtml(endhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        self.text1.setPlainText(self.LastQ)
+                    except Exception as e:
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
+                            f1.write('- A: Error, please try again!' + str(e) + '\n\n---\n\n')
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                              encoding='utf-8').read()
+                        endhtml = self.md2html(AllText)
+                        self.real1.setHtml(endhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        self.text1.setPlainText(self.LastQ)
+                    signal.alarm(0)  # reset timer
+                    self.text1.setReadOnly(False)
+                if cook == '':
+                    self.real1.setText('You should set your cookies.json in Settings.')
         if action6.isChecked() and self.widget0.currentIndex() == 0:
             COMPLETIONS_MODEL = "gpt-3.5-turbo"
             EMBEDDING_MODEL = "text-embedding-ada-002"
@@ -1847,6 +2118,9 @@ class MyWidget(QWidget):  # 主窗口
 
                     header = """Answer the question as truthfully as possible using the provided context, and if the answer is not contained within the text below, say "I don't know."\n\nContext:\n"""
 
+                    with open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'w', encoding='utf-8') as f0:
+                        f0.write("\t**Refrences:**" + "".join(str(chosen_sections)).replace('[', '').replace(']', '').replace("'", '').replace('\\n', '').replace('*', '\n\n\t- '))
+
                     return header + "".join(str(chosen_sections)) + "\n\n Q: " + question + "\n A:"
 
                 def answer_query_with_context(
@@ -1888,8 +2162,13 @@ class MyWidget(QWidget):  # 主窗口
                 pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
                 cursor.setPosition(pos)  # 游标位置设置为尾部
                 self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                timeout = 60
+                timeset = codecs.open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'r',
+                                      encoding='utf-8').read()
+                if timeset != '':
+                    timeout = int(timeset)
                 signal.signal(signal.SIGALRM, self.timeout_handler)
-                signal.alarm(60)
+                signal.alarm(timeout)
                 Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'r', encoding='utf-8').read()
                 if Which == '0' or Which == '1':
                     try:
@@ -1899,7 +2178,11 @@ class MyWidget(QWidget):  # 主窗口
                         message = message.replace('\n', '\n\n\t')
                         message = message.replace('\n\n\t\n\n\t', '\n\n\t')
                         message = '\n\t' + message
-                        EndMess = '- A: ' + message + '\n\n---\n\n'
+                        ref = ''
+                        showref = codecs.open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'r', encoding='utf-8').read()
+                        if showref == '1':
+                            ref = codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r', encoding='utf-8').read()
+                        EndMess = '- A: ' + message + '\n\n' + ref + '\n\n---\n\n'
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write(EndMess)
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
@@ -1939,11 +2222,10 @@ class MyWidget(QWidget):  # 主窗口
                         self.real1.setTextCursor(cursor)  # 滚动到游标位置
                         self.text1.setPlainText(self.LastQ)
                 if Which == '2':
-                    def answer_query_with_v1(
+                    def answer_query_with_v3(
                             query: str,
                             df: pd.DataFrame,
                             document_embeddings: dict[(str, str), np.array],
-                            Token:str,
                             show_prompt: bool = False
                     ):
                         prompt = construct_prompt(
@@ -1955,34 +2237,28 @@ class MyWidget(QWidget):  # 主窗口
                         if show_prompt:
                             print(prompt)
 
+                        chatbot = V3.Chatbot(api_key=AccountGPT)
+                        for data in chatbot.ask(prompt):
+                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                                f1.write(data)
+                                AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                                endhtml = self.md2html(AllText)
+                                self.real1.setHtml(endhtml)
+                                self.real1.ensureCursorVisible()  # 游标可用
+                                cursor = self.real1.textCursor()  # 设置游标
+                                pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                                cursor.setPosition(pos)  # 游标位置设置为尾部
+                                self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                                QApplication.processEvents()
+                                QApplication.restoreOverrideCursor()
+                    try:
                         EndMess = '- A: '
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
                                   encoding='utf-8') as f1:
                             f1.write(EndMess)
-
-                        chatbot = revChatGPT.V1.Chatbot(config={
-                            "access_token": Token
-                        })
-                        prev_text = ""
-                        for data in chatbot.ask(prompt):
-                            message = data["message"][len(prev_text):]
-                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
-                                      encoding='utf-8') as f1:
-                                f1.write(message)
-                            prev_text = data["message"]
-                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
-                                                  encoding='utf-8').read()
-                            endhtml = self.md2html(AllText)
-                            self.real1.setHtml(endhtml)
-                            self.real1.ensureCursorVisible()  # 游标可用
-                            cursor = self.real1.textCursor()  # 设置游标
-                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                            cursor.setPosition(pos)  # 游标位置设置为尾部
-                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                            QApplication.processEvents()
-                            QApplication.restoreOverrideCursor()
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
-                                  encoding='utf-8') as f1:
+                        query = self.text1.toPlainText()
+                        answer_query_with_v3(query, df, document_embeddings)
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write('\n\n')
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
                                               encoding='utf-8').read()
@@ -1999,9 +2275,14 @@ class MyWidget(QWidget):  # 主窗口
                         AllText = AllText.replace('\t- Q: ', '- Q: ')
                         AllText = AllText.replace('\t---', '---')
                         AllText = AllText.rstrip('\t')
-                        AllText = AllText + '---\n\n'
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w',
-                                  encoding='utf-8') as f1:
+                        ref = ''
+                        showref = codecs.open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'r',
+                                              encoding='utf-8').read()
+                        if showref == '1':
+                            ref = codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r',
+                                          encoding='utf-8').read()
+                        AllText = AllText + '\n\n' + ref + '\n\n---\n\n'
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
                             f1.write(AllText)
                         endhtml = self.md2html(AllText)
                         self.real1.setHtml(endhtml)
@@ -2011,41 +2292,34 @@ class MyWidget(QWidget):  # 主窗口
                         cursor.setPosition(pos)  # 游标位置设置为尾部
                         self.real1.setTextCursor(cursor)  # 滚动到游标位置
                         self.text1.clear()
-
-                    Token = codecs.open("/Applications/Broccoli.app/Contents/Resources/AccessToken.txt", 'r',
-                                        encoding='utf-8').read()
-                    if Token != '':
-                        try:
-                            query = self.text1.toPlainText()
-                            answer_query_with_v1(query, df, document_embeddings, Token)
-                        except TimeoutException:
-                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
-                                      encoding='utf-8') as f1:
-                                f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
-                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
-                                                  encoding='utf-8').read()
-                            endhtml = self.md2html(AllText)
-                            self.real1.setHtml(endhtml)
-                            self.real1.ensureCursorVisible()  # 游标可用
-                            cursor = self.real1.textCursor()  # 设置游标
-                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                            cursor.setPosition(pos)  # 游标位置设置为尾部
-                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                            self.text1.setPlainText(self.LastQ)
-                        except Exception as e:
-                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
-                                      encoding='utf-8') as f1:
-                                f1.write('- A: Error, please try again!' + str(e) + '\n\n---\n\n')
-                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
-                                                  encoding='utf-8').read()
-                            endhtml = self.md2html(AllText)
-                            self.real1.setHtml(endhtml)
-                            self.real1.ensureCursorVisible()  # 游标可用
-                            cursor = self.real1.textCursor()  # 设置游标
-                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                            cursor.setPosition(pos)  # 游标位置设置为尾部
-                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                            self.text1.setPlainText(self.LastQ)
+                    except TimeoutException:
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
+                            f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                              encoding='utf-8').read()
+                        endhtml = self.md2html(AllText)
+                        self.real1.setHtml(endhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        self.text1.setPlainText(self.LastQ)
+                    except Exception as e:
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
+                            f1.write('- A: Error, please try again!' + str(e) + '\n\n---\n\n')
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                              encoding='utf-8').read()
+                        endhtml = self.md2html(AllText)
+                        self.real1.setHtml(endhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        self.text1.setPlainText(self.LastQ)
                 if Which == '3':
                     ENDPOINT = 'https://api.openai.com/v1/chat/completions'
                     api2 = codecs.open('/Applications/Broccoli.app/Contents/Resources/api2.txt', 'r',
@@ -2084,7 +2358,7 @@ class MyWidget(QWidget):  # 主窗口
                         except Exception as e:
                             pass
 
-                    async def chat_gpt(message, conversation_history=None, tokens_limit=4096):
+                    async def chat_gpt(message, conversation_history=None, tokens_limit=4000):
                         if conversation_history is None:
                             conversation_history = []
 
@@ -2130,7 +2404,13 @@ class MyWidget(QWidget):  # 主窗口
                         message = message.replace('\n', '\n\n\t')
                         message = message.replace('\n\n\t\n\n\t', '\n\n\t')
                         message = '\n\t' + message
-                        EndMess = '- A: ' + message + '\n\n---\n\n'
+                        ref = ''
+                        showref = codecs.open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'r',
+                                              encoding='utf-8').read()
+                        if showref == '1':
+                            ref = codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r',
+                                          encoding='utf-8').read()
+                        EndMess = '- A: ' + message + '\n\n' + ref + '\n\n---\n\n'
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write(EndMess)
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
@@ -2211,8 +2491,13 @@ class MyWidget(QWidget):  # 主窗口
                             message = message.replace('\n', '\n\n\t')
                             message = message.replace('\n\n\t\n\n\t', '\n\n\t')
                             message = '\n\t' + message
-
-                            EndMess = '- A: ' + message + '\n\n---\n\n'
+                            ref = ''
+                            showref = codecs.open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'r',
+                                                  encoding='utf-8').read()
+                            if showref == '1':
+                                ref = codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r',
+                                              encoding='utf-8').read()
+                            EndMess = '- A: ' + message + '\n\n' + ref + '\n\n---\n\n'
                             with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
                                       encoding='utf-8') as f1:
                                 f1.write(EndMess)
@@ -2256,10 +2541,11 @@ class MyWidget(QWidget):  # 主窗口
                             self.real1.setTextCursor(cursor)  # 滚动到游标位置
                             self.text1.setPlainText(self.LastQ)
                 if Which == '5':
-                    def answer_query_with_v3(
+                    def answer_query_with_v1(
                             query: str,
                             df: pd.DataFrame,
                             document_embeddings: dict[(str, str), np.array],
+                            Token:str,
                             show_prompt: bool = False
                     ):
                         prompt = construct_prompt(
@@ -2271,28 +2557,34 @@ class MyWidget(QWidget):  # 主窗口
                         if show_prompt:
                             print(prompt)
 
-                        chatbot = V3.Chatbot(api_key=AccountGPT)
-                        for data in chatbot.ask(prompt):
-                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                                f1.write(data)
-                                AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
-                                endhtml = self.md2html(AllText)
-                                self.real1.setHtml(endhtml)
-                                self.real1.ensureCursorVisible()  # 游标可用
-                                cursor = self.real1.textCursor()  # 设置游标
-                                pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                                cursor.setPosition(pos)  # 游标位置设置为尾部
-                                self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                                QApplication.processEvents()
-                                QApplication.restoreOverrideCursor()
-                    try:
                         EndMess = '- A: '
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
                                   encoding='utf-8') as f1:
                             f1.write(EndMess)
-                        query = self.text1.toPlainText()
-                        answer_query_with_v3(query, df, document_embeddings)
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+
+                        chatbot = revChatGPT.V1.Chatbot(config={
+                            "access_token": Token
+                        })
+                        prev_text = ""
+                        for data in chatbot.ask(prompt):
+                            message = data["message"][len(prev_text):]
+                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                      encoding='utf-8') as f1:
+                                f1.write(message)
+                            prev_text = data["message"]
+                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                                  encoding='utf-8').read()
+                            endhtml = self.md2html(AllText)
+                            self.real1.setHtml(endhtml)
+                            self.real1.ensureCursorVisible()  # 游标可用
+                            cursor = self.real1.textCursor()  # 设置游标
+                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                            cursor.setPosition(pos)  # 游标位置设置为尾部
+                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                            QApplication.processEvents()
+                            QApplication.restoreOverrideCursor()
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
                             f1.write('\n\n')
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
                                               encoding='utf-8').read()
@@ -2309,8 +2601,15 @@ class MyWidget(QWidget):  # 主窗口
                         AllText = AllText.replace('\t- Q: ', '- Q: ')
                         AllText = AllText.replace('\t---', '---')
                         AllText = AllText.rstrip('\t')
-                        AllText = AllText + '---\n\n'
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
+                        ref = ''
+                        showref = codecs.open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'r',
+                                              encoding='utf-8').read()
+                        if showref == '1':
+                            ref = codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r',
+                                          encoding='utf-8').read()
+                        AllText = AllText + '\n\n' + ref + '\n\n---\n\n'
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w',
+                                  encoding='utf-8') as f1:
                             f1.write(AllText)
                         endhtml = self.md2html(AllText)
                         self.real1.setHtml(endhtml)
@@ -2320,10 +2619,81 @@ class MyWidget(QWidget):  # 主窗口
                         cursor.setPosition(pos)  # 游标位置设置为尾部
                         self.real1.setTextCursor(cursor)  # 滚动到游标位置
                         self.text1.clear()
-                    except TimeoutException:
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
-                                  encoding='utf-8') as f1:
-                            f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+
+                    Token = codecs.open("/Applications/Broccoli.app/Contents/Resources/AccessToken.txt", 'r',
+                                        encoding='utf-8').read()
+                    if Token != '':
+                        try:
+                            query = self.text1.toPlainText()
+                            answer_query_with_v1(query, df, document_embeddings, Token)
+                        except TimeoutException:
+                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                      encoding='utf-8') as f1:
+                                f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                                  encoding='utf-8').read()
+                            endhtml = self.md2html(AllText)
+                            self.real1.setHtml(endhtml)
+                            self.real1.ensureCursorVisible()  # 游标可用
+                            cursor = self.real1.textCursor()  # 设置游标
+                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                            cursor.setPosition(pos)  # 游标位置设置为尾部
+                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                            self.text1.setPlainText(self.LastQ)
+                        except Exception as e:
+                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                      encoding='utf-8') as f1:
+                                f1.write('- A: Error, please try again!' + str(e) + '\n\n---\n\n')
+                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                                  encoding='utf-8').read()
+                            endhtml = self.md2html(AllText)
+                            self.real1.setHtml(endhtml)
+                            self.real1.ensureCursorVisible()  # 游标可用
+                            cursor = self.real1.textCursor()  # 设置游标
+                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                            cursor.setPosition(pos)  # 游标位置设置为尾部
+                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                            self.text1.setPlainText(self.LastQ)
+                if Which == '6':
+                    async def answer_query_with_edge(
+                            query: str,
+                            df: pd.DataFrame,
+                            document_embeddings: dict[(str, str), np.array],
+                            show_prompt: bool = False
+                    ) -> str:
+                        prompt = construct_prompt(
+                            query,
+                            document_embeddings,
+                            df
+                        )
+
+                        if show_prompt:
+                            print(prompt)
+
+                        bot = await Chatbot.create(
+                            cookie_path='/Applications/Broccoli.app/Contents/Resources/cookies.json')
+                        res = await bot.ask(prompt=prompt, conversation_style=ConversationStyle.creative,
+                                            wss_link="wss://sydney.bing.com/sydney/ChatHub")
+                        await bot.close()
+                        message = res['item']['messages'][1]['text']
+
+                        return message
+                    try:
+                        query = self.text1.toPlainText()
+                        message = asyncio.run(answer_query_with_edge(query, df, document_embeddings))
+                        message = message.lstrip('\n')
+                        message = message.replace('\n', '\n\n\t')
+                        message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                        message = '\n\t' + message
+                        ref = ''
+                        showref = codecs.open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'r',
+                                              encoding='utf-8').read()
+                        if showref == '1':
+                            ref = codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r',
+                                              encoding='utf-8').read()
+                        EndMess = '- A: ' + message + '\n\n' + ref + '\n\n---\n\n'
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                            f1.write(EndMess)
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
                                               encoding='utf-8').read()
                         endhtml = self.md2html(AllText)
@@ -2333,13 +2703,26 @@ class MyWidget(QWidget):  # 主窗口
                         pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
                         cursor.setPosition(pos)  # 游标位置设置为尾部
                         self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
+
+                        self.text1.clear()
+                    except TimeoutException:
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                            f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                        endhtml = self.md2html(AllText)
+                        self.real1.setHtml(endhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
                         self.text1.setPlainText(self.LastQ)
                     except Exception as e:
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
-                                  encoding='utf-8') as f1:
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write('- A: Error, please try again!' + str(e) + '\n\n---\n\n')
-                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
-                                              encoding='utf-8').read()
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                         endhtml = self.md2html(AllText)
                         self.real1.setHtml(endhtml)
                         self.real1.ensureCursorVisible()  # 游标可用
@@ -2607,7 +2990,7 @@ class MyWidget(QWidget):  # 主窗口
     def OpenHistory(self):
         home_dir = str(Path.home())
         fj = QFileDialog.getOpenFileName(self, "Open File", home_dir, "Markdown Files (*.md)")
-        if fj != '':
+        if fj[0] != '':
             str_fj = ''.join(fj)
             str_fj = str_fj.replace('Markdown Files (*.md)', '')
             if "GPToutput.md" in str_fj:
@@ -2703,7 +3086,7 @@ class MyWidget(QWidget):  # 主窗口
             while '' in csv_line:
                 csv_line.remove('')
             for x in range(len(csv_line)):
-                csv_line[x] = "A" + ',' + "B" + ',' + csv_line[x]
+                csv_line[x] = "A" + ',' + str(x) + ',' + csv_line[x]
             csvtext = '\n'.join(csv_line)
             csvtext = 'title,heading,content\n' + csvtext
             csv_endtar = cont + '.csv'
@@ -2941,7 +3324,7 @@ class MyWidget(QWidget):  # 主窗口
             while '' in csv_line:
                 csv_line.remove('')
             for x in range(len(csv_line)):
-                csv_line[x] = "A" + ',' + "B" + ',' + csv_line[x]
+                csv_line[x] = "A" + ',' + str(x) + ',' + csv_line[x]
             csvtext = '\n'.join(csv_line)
             csvtext = 'title,heading,content\n' + csvtext
             csv_endtar = tarname.replace('.txt', '') + '.csv'
@@ -4529,15 +4912,16 @@ class window4(QWidget):  # Customization settings
 
     def initUI(self):  # 设置窗口内布局
         self.setUpMainWindow()
-        self.setFixedSize(500, 510)
+        self.setFixedSize(500, 550)
         self.center()
         self.setWindowTitle('Customization settings')
         self.setFocus()
+        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
 
     def setUpMainWindow(self):
         self.widget1 = QComboBox(self)
         self.widget1.setEditable(False)
-        defalist = ['GPT-3 (API - openai)', 'ChatGPT (API - openai)', 'ChatGPT (Session Tokens - revChatGPT.V1)', 'ChatGPT (API - httpx)', 'Poe (Formkey~Cookies - POE)', 'ChatGPT (API - revChatGPT.V3)']
+        defalist = ['GPT-3 (API - openai)', 'ChatGPT (API - openai)', 'ChatGPT (API - revChatGPT.V3)', 'ChatGPT (API - httpx)', 'Poe (Formkey~Cookies - POE)', 'ChatGPT (Session Tokens - revChatGPT.V1)', 'EdgeGPT - EdgeGPT']
         self.widget1.addItems(defalist)
         Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'r', encoding='utf-8').read()
         if Which == '0':
@@ -4552,6 +4936,8 @@ class window4(QWidget):  # Customization settings
             self.widget1.setCurrentIndex(4)
         if Which == '5':
             self.widget1.setCurrentIndex(5)
+        if Which == '6':
+            self.widget1.setCurrentIndex(6)
         self.widget1.currentIndexChanged.connect(self.IndexChange)
 
         self.le5 = QLineEdit(self)
@@ -4569,6 +4955,17 @@ class window4(QWidget):  # Customization settings
             self.le6.setText(max)
         if max == '':
             self.le6.setText('1024')
+
+        self.le7 = QLineEdit(self)
+        self.le7.setPlaceholderText('Time out after...seconds')
+        max = codecs.open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'r', encoding='utf-8').read()
+        if max != '':
+            self.le7.setText(max)
+        if max == '':
+            self.le7.setText('60')
+
+        self.checkBox0 = QCheckBox('Show references when chatting with a file', self)
+        self.checkBox0.clicked.connect(self.showref)
 
         self.frame1 = QFrame(self)
         self.frame1.setFrameShape(QFrame.Shape.HLine)
@@ -4635,6 +5032,15 @@ class window4(QWidget):  # Customization settings
         if Which == '6':
             self.widget2.setCurrentIndex(5)
         self.widget2.currentIndexChanged.connect(self.IndexChange2)
+
+        self.btn_3 = QPushButton('Add cookies.json', self)
+        self.btn_3.clicked.connect(self.addcook)
+        self.btn_3.setFixedSize(150, 20)
+
+        self.lbl0 = QLabel('No cookies yet!❎', self)
+        iscook = codecs.open('/Applications/Broccoli.app/Contents/Resources/cookies.json', 'r', encoding='utf-8').read()
+        if iscook != '':
+            self.lbl0.setText('Added!✅')
 
         self.frame2 = QFrame(self)
         self.frame2.setFrameShape(QFrame.Shape.HLine)
@@ -4703,11 +5109,20 @@ class window4(QWidget):  # Customization settings
         vbox6.addWidget(qw4)
         self.qw6.setLayout(vbox6)
 
+        self.qw7 = QWidget()
+        self.vbox7 = QHBoxLayout()
+        self.vbox7.setContentsMargins(0, 0, 0, 0)
+        self.vbox7.addWidget(self.btn_3)
+        self.vbox7.addWidget(self.lbl0)
+        self.qw7.setLayout(self.vbox7)
+
         vbox1 = QVBoxLayout()
         vbox1.setContentsMargins(20, 20, 20, 20)
         vbox1.addWidget(self.widget1)
         vbox1.addWidget(self.le5)
         vbox1.addWidget(self.le6)
+        vbox1.addWidget(self.le7)
+        vbox1.addWidget(self.checkBox0)
         vbox1.addWidget(self.frame1)
         vbox1.addWidget(self.le1)
         vbox1.addWidget(self.qw6)
@@ -4715,6 +5130,7 @@ class window4(QWidget):  # Customization settings
         vbox1.addWidget(self.le3)
         vbox1.addWidget(self.le4)
         vbox1.addWidget(self.widget2)
+        vbox1.addWidget(self.qw7)
         vbox1.addWidget(self.frame2)
         vbox1.addWidget(self.te0)
         vbox1.addWidget(self.te1)
@@ -4726,35 +5142,49 @@ class window4(QWidget):  # Customization settings
         self.qw3.setVisible(True)
         self.le3.setVisible(True)
         self.le4.setVisible(True)
+        self.qw7.setVisible(True)
         self.widget2.setVisible(True)
         if self.widget1.currentIndex() == 0:
             self.qw6.setVisible(False)
             self.qw3.setVisible(False)
             self.le3.setVisible(False)
             self.le4.setVisible(False)
+            self.qw7.setVisible(False)
             self.widget2.setVisible(False)
         if self.widget1.currentIndex() == 1:
             self.qw6.setVisible(False)
             self.qw3.setVisible(False)
             self.le3.setVisible(False)
             self.le4.setVisible(False)
+            self.qw7.setVisible(False)
             self.widget2.setVisible(False)
         if self.widget1.currentIndex() == 2:
-            self.le1.setVisible(False)
             self.qw6.setVisible(False)
+            self.qw3.setVisible(False)
             self.le3.setVisible(False)
             self.le4.setVisible(False)
+            self.qw7.setVisible(False)
             self.widget2.setVisible(False)
         if self.widget1.currentIndex() == 3:
             self.qw3.setVisible(False)
             self.le3.setVisible(False)
             self.le4.setVisible(False)
+            self.qw7.setVisible(False)
             self.widget2.setVisible(False)
         if self.widget1.currentIndex() == 4:
             self.le1.setVisible(False)
             self.qw6.setVisible(False)
             self.qw3.setVisible(False)
+            self.qw7.setVisible(False)
         if self.widget1.currentIndex() == 5:
+            self.le1.setVisible(False)
+            self.qw6.setVisible(False)
+            self.le3.setVisible(False)
+            self.le4.setVisible(False)
+            self.qw7.setVisible(False)
+            self.widget2.setVisible(False)
+        if self.widget1.currentIndex() == 6:
+            self.le1.setVisible(False)
             self.qw6.setVisible(False)
             self.qw3.setVisible(False)
             self.le3.setVisible(False)
@@ -4767,6 +5197,7 @@ class window4(QWidget):  # Customization settings
         self.qw3.setVisible(True)
         self.le3.setVisible(True)
         self.le4.setVisible(True)
+        self.qw7.setVisible(True)
         self.widget2.setVisible(True)
         if i == 0:
             with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
@@ -4775,6 +5206,7 @@ class window4(QWidget):  # Customization settings
             self.qw3.setVisible(False)
             self.le3.setVisible(False)
             self.le4.setVisible(False)
+            self.qw7.setVisible(False)
             self.widget2.setVisible(False)
         if i == 1:
             with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
@@ -4783,14 +5215,16 @@ class window4(QWidget):  # Customization settings
             self.qw3.setVisible(False)
             self.le3.setVisible(False)
             self.le4.setVisible(False)
+            self.qw7.setVisible(False)
             self.widget2.setVisible(False)
         if i == 2:
             with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('2')
-            self.le1.setVisible(False)
             self.qw6.setVisible(False)
+            self.qw3.setVisible(False)
             self.le3.setVisible(False)
             self.le4.setVisible(False)
+            self.qw7.setVisible(False)
             self.widget2.setVisible(False)
         if i == 3:
             with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
@@ -4798,6 +5232,7 @@ class window4(QWidget):  # Customization settings
             self.qw3.setVisible(False)
             self.le3.setVisible(False)
             self.le4.setVisible(False)
+            self.qw7.setVisible(False)
             self.widget2.setVisible(False)
         if i == 4:
             with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
@@ -4805,9 +5240,20 @@ class window4(QWidget):  # Customization settings
             self.le1.setVisible(False)
             self.qw6.setVisible(False)
             self.qw3.setVisible(False)
+            self.qw7.setVisible(False)
         if i == 5:
             with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('5')
+            self.le1.setVisible(False)
+            self.qw6.setVisible(False)
+            self.le3.setVisible(False)
+            self.le4.setVisible(False)
+            self.qw7.setVisible(False)
+            self.widget2.setVisible(False)
+        if i == 6:
+            with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
+                f0.write('6')
+            self.le1.setVisible(False)
             self.qw6.setVisible(False)
             self.qw3.setVisible(False)
             self.le3.setVisible(False)
@@ -4851,6 +5297,8 @@ class window4(QWidget):  # Customization settings
             f1.write(self.le5.text())
         with open('/Applications/Broccoli.app/Contents/Resources/max.txt', 'w', encoding='utf-8') as f1:
             f1.write(self.le6.text())
+        with open('/Applications/Broccoli.app/Contents/Resources/timeout.txt', 'w', encoding='utf-8') as f1:
+            f1.write(self.le7.text())
         home_dir = str(Path.home())
         tarname1 = "BroccoliAppPath"
         fulldir1 = os.path.join(home_dir, tarname1)
@@ -4876,6 +5324,25 @@ class window4(QWidget):  # Customization settings
         if not self.checkBox1.isChecked():
             with open('/Applications/Broccoli.app/Contents/Resources/third.txt', 'w', encoding='utf-8') as f0:
                 f0.write('0')
+
+    def showref(self):
+        if self.checkBox0.isChecked():
+            with open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'w', encoding='utf-8') as f0:
+                f0.write('1')
+        if not self.checkBox0.isChecked():
+            with open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'w', encoding='utf-8') as f0:
+                f0.write('0')
+
+    def addcook(self):
+        home_dir = str(Path.home())
+        fj = QFileDialog.getOpenFileName(self, "Open File", home_dir, "JSON Files (*.json)")
+        if fj[0] != '':
+            str_fj = ''.join(fj)
+            str_fj = str_fj.replace('JSON Files (*.json)', '')
+            text_his = codecs.open(str_fj, 'r', encoding='utf-8').read()
+            with open('/Applications/Broccoli.app/Contents/Resources/cookies.json', 'w', encoding='utf-8') as f0:
+                f0.write(text_his)
+            self.lbl0.setText('Added!✅')
 
     def center(self):  # 设置窗口居中
         qr = self.frameGeometry()
@@ -4973,5 +5440,6 @@ if __name__ == '__main__':
     action5.triggered.connect(w3.OpenHistory)
     action6.triggered.connect(w3.chatfilemode)
     btna4.triggered.connect(w3.pin_a_tab)
+    w3.btn0_1.clicked.connect(w4.activate)
     app.setStyleSheet(style_sheet_ori)
     app.exec()

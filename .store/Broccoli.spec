@@ -3,7 +3,7 @@
 
 block_cipher = None
 
-__version__ = '0.2.3'
+__version__ = '0.2.7'
 
 
 a = Analysis(
@@ -12,8 +12,8 @@ a = Analysis(
     binaries=[],
     datas=[('Broccolimen.icns', '.'), ('Broccolidsk.icns', '.'), ('Broccolimen.png', '.'), ('wechat50.png', '.'), ('wechat20.png', '.'), 
               ('wechat10.png', '.'), ('wechat5.png', '.'), ('alipay50.png', '.'), ('alipay20.png', '.'), ('alipay10.png', '.'), 
-              ('alipay5.png', '.'), ('api.txt', '.'), ('output.txt', '.'), ('which.txt', '.'), ('command.txt', '.'), ('AccessToken.txt', '.'), ('wp.txt', '.'), ('Formkey.txt', '.'), ('Cookies.txt', '.'), ('POE.py', '.'), ('V3.py', '.'), ('utilsA.py', '.'), ('config', '.'), ('typings.py', '.'), ('title.txt', '.'), ('api2.txt', '.'), ('bear.txt', '.'), ('third.txt', '.'), ('temp.txt', '.'), ('max.txt', '.')],
-    hiddenimports=['torch', 'transformers', 'anyio', 'anyio._backends', 'requests', 'pyperclip', 'tqdm'],
+              ('alipay5.png', '.'), ('api.txt', '.'), ('output.txt', '.'), ('which.txt', '.'), ('command.txt', '.'), ('AccessToken.txt', '.'), ('wp.txt', '.'), ('Formkey.txt', '.'), ('Cookies.txt', '.'), ('POE.py', '.'), ('V3.py', '.'), ('utilsA.py', '.'), ('config', '.'), ('typings.py', '.'), ('title.txt', '.'), ('api2.txt', '.'), ('bear.txt', '.'), ('third.txt', '.'), ('temp.txt', '.'), ('max.txt', '.'), ('timeout.txt', '.'), ('cookies.json', '.'), ('showref.txt', '.'), ('ref.txt', '.'), ('set2.png', '.')],
+    hiddenimports=['torch', 'transformers', 'anyio', 'anyio._backends', 'requests', 'tqdm'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
