@@ -75,6 +75,24 @@ Broccoli 有六种模型可供选择，可以在 Settings 第一个下拉框中�
 
 ### 新版本
 
+1. 主界面
+
+<p align="center">
+  <img src="https://i.imgur.com/ryxqfrE.png" width=240 />
+  <img src="https://i.imgur.com/IT1BA4J.png" width=240 />
+</p>
+
+2. 设置界面
+
+<p align="center">
+  <img src="https://i.imgur.com/8YtaXZq.png" width=240 />
+  <img src="https://i.imgur.com/ujWrHxu.png" width=240 />
+</p>
+
+3. 最小化动画
+
+
+
 ### 旧版本
 
 ![q5vkJru](https://i.imgur.com/q5vkJru.png)
@@ -103,4 +121,3 @@ Broccoli 有六种模型可供选择，可以在 Settings 第一个下拉框中�
   <img src="https://i.imgur.com/OHHJD4y.png" width=240 />
   <img src="https://i.imgur.com/6XiKMAK.png" width=240 />
 </p>
-
