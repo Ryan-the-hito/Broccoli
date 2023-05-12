@@ -91,11 +91,13 @@ Broccoli 有六种模型可供选择，可以在 Settings 第一个下拉框中�
 
 3. 最小化动画
 
-
+![scaling](https://github.com/Ryan-the-hito/Broccoli/blob/main/img/scale-ori.gif)
 
 ### 旧版本
 
-![q5vkJru](https://i.imgur.com/q5vkJru.png)
+<p align="center">
+  <img src="https://i.imgur.com/q5vkJru.png" width=240 />
+</p>
 
 ![example](https://github.com/Ryan-the-hito/Broccoli/blob/main/img/My%20Movie%203.gif)
 
