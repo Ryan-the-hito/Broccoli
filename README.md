@@ -48,12 +48,12 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 
 第一个 API：
 
-- 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
+- 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
 - （2023-4-3 更新）余 18 美元，截止日期：2023-6-1
 
 第二个 API：
 
-- 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
+- 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
 - （2023-4-3 更新）余 18 美元，截止日期：2023-6-1
 
 ### 储存提示词
