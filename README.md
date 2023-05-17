@@ -110,13 +110,130 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 
 ## 下载安装
 
+1. 从 [Releases](https://github.com/Ryan-the-hito/Broccoli/releases) 中点击最新发布的内容，下载 zip 档。另，Broccoli.Keyword.to.Script.alfredworkflow 是与 Alfred 适配的快捷键方案，用于唤醒和最小化 Broccoli，实现与点击相同的效果。如果事先安装并购买了 Alfred 的用户可以在 workflow 里面配置这一文件，设置用户想要的全局快捷键。
+2. 下载到本地之后解压。
+3. 将解压好的 app 档拖入 Finder 的 Application 文件夹。
+4. 启动 Broccoli
+5. 弹出获取 Accessibility（辅助功能）的弹窗，如下图示意。请在 System Preferences 里面允许。如果在软件列表里面没有出现 Broccoli，请手动添加并为其打勾。
+
+<p align="center">
+  <img src="https://i.imgur.com/Lyudory.png" width=440 />
+</p>
+
+7. 弹出控制 System Events 的弹窗，如下图所示，请允许。
+	
+<p align="center">
+  	<img src="https://i.imgur.com/mpOMyhD.png" width=340 />
+</p>
+
+7. 第一次打开 Broccoli 后，桌面会显示如下窗口，同时 Menubar 内会出现 Broccoli 的图标（如果是有刘海的机型，请留意是否因刘海遮挡而无法显示）。
+
+<p align="center">
+  	<img src="https://i.imgur.com/P2VlOmj.png" width=240 />
+    <img src="https://i.imgur.com/wC1ncFe.png" width=240 />
+</p>
+
+9. 关于更新：请在 GitHub 或者百度网盘上下载最新版的软件，然后以相同的方式拖入 Application 文件夹后覆盖原有文件。之后应重新打开 System Preferences，在 Accessibility（辅助功能）的部分，选中 Broccoli，点击减号，然后再点击加号，重新添加授权一次。之后回到软件内，重新配置 api key 和 session tokens 等。已经添加的语言和提示词会永久保存，不必担心，api 等信息将随软件被替换而重置。
+
 ## 使用说明
+
+1. **软件界面说明**：如下图所示，展示了两种基本的界面布局及主要功能键。打开软件后第一次显示的界面即如下。
+
+<p align="center">
+  <img src="https://i.imgur.com/7DcH9sq.png" width=340 />
+  <img src="https://i.imgur.com/LuIt0Wp.png" width=340 />
+</p>
+
+2. **配置密钥**：在设置窗口中**首先**选择自己需要的模型。
+- GPT-3（使用 openai 模块，需要 API）
+
+<p align="center">
+  	<img src="https://i.imgur.com/XghIOs6.png" width=340 />
+</p>
+
+- ChatGPT（使用 openai 模块，需要 API。）
+  同上。
+- ChatGPT（使用 revChatGPT.V3 模块，需要 API。注：目前该库已暂停维护。）
+  同上。
+- ChatGPT（使用 httpx 模块，需要 API——同上，不再在下图中标出，支持自定义第三方服务和使用第三方的代理 API，如下图所示配置。）
+
+<p align="center">
+  <img src="https://i.imgur.com/LXMOdIA.png" width=340 />
+</p>
+
+- Poe （POE 模块，需要 Quora 的 Formkey 和 Poe 的 Cookies）（这一模型包含了 GPT-4、ChatGPT、Claude、Claude+ 等多个子模型，如有订阅 Poe 可方便调用，且可跨平台同步）
+	- 关于 Formkey：先登录 Quora.com（得有个帐号），然后右键查看 Page Source（一般的浏览器都行），然后搜索“Formkey”，把查到的这一串密钥填入相应位置。
+	- 关于 Cookies：登录 Quora.com，然后右键点击 Inspect，在上方选择 Cookie Editor，然后找到名为“m-b”的 Cookies，把这一串字符复制出来，在对应的文本框中，先填入“m-b=”，然后再将这一串字符粘贴于其后。
+
+<p align="center">
+  <img src="https://i.imgur.com/qmmhtvv.png" width=340 />
+</p>
+<p align="center">
+  <img src="https://i.imgur.com/z5ioGrZ.png" width=340 />
+</p>
+<p align="center">
+  <img src="https://i.imgur.com/FwLmEnD.png" width=340 />
+</p>
+
+- ChatGPT（revChatGPT.V1 模块，需要 session tokens。注：目前该库已暂停维护。）
+  首先在浏览器里面登录 ChatGPT，然后点击界面上的按钮，用刚才登录的浏览器打开，找到 session tokens，把这一长串内容复制出来，填进左边的文本框内，保存即可。
+
+<p align="center">
+  <img src="https://i.imgur.com/T6RfQI9.png" width=340 />
+</p>
+  
+- EdgeGPT（EdgeGPT 模块，需要导入 cookies.json）
+	- 在 Edge 中登录 bing 帐号，然后下载[插件](https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm)。
+	- 打开 bing.com。
+	- 点击插件，选择“Export”，导出为“Export as JSON”。
+	- 在设置界面内点击 Add cookies.json，选择刚才保存的文件即可。
+
+<p align="center">
+  <img src="https://i.imgur.com/8AFzBgO.png" width=340 />
+</p>
+
+3. **文本对话模式**：当在 menubar 的下拉菜单中选择了“Chat with a file”模式后，软件主界面将如下图所示。可以在设置界面内选择或取消“Show references when chatting with a file”。若选上，则在阅读长文本并给出回答后，Broccoli 将继续给出 AI 作答所依据的文段。
+
+<p align="center">
+  <img src="https://i.imgur.com/zaWDBNV.png" width=340 />
+</p>
+
+4. **翻译、润色、总结等功能**：
+   在主界面模式选项中可以选择多种内置功能，也可以选择并保存自己的提示词。
+
+- Chat and ask：聊天、对话、与长文本对答。
+- Command (AppleScript)：生成 AppleScript，并一键执行。
+- Translate：用户可以选择在任意语言之间互译转换。预置三种语言，用户可以在设置页面内自行添加语言名称，并最好以源语形式，一行一个，保存刷新主界面，即可选择最新添加的语言。
+- Polish：润色文本。用户可以选择润色为何种语言。
+- Summarize：总结文段。用户可输入一段不超过字符限制（默认为 1024 tokens）的文段，请 AI 帮助总结为更短的文段，提炼大意和逻辑。更可以选择目标语言。
+- Grammatically analyze：可以选择以目标语言解释一个句子或者文段。AI 将从一个语法老师的角度给出分析。
+- Explain code：以自定义的目标语言解释输入的代码，并且反馈是否可能存在错误。
+- Customize：自定义选项，包含所有用户在设置界面内填入保存的提示词。提示词将遵循一定的格式，以`---`为分隔，每组提示词包含名称和内容两个部分，各被囊括在一对`<|`和`|>`中。以下是一个样例。
+
+```
+<|名称 1|><|内容 1……|>
+---
+<|名称 2|><|内容 2……|>
+```
+
+5. **导入历史对话**：在 menubar 的下拉栏里面也可以选择“Open a chat history”，这样可以将之前导出的历史记录重新导入，继续之前的历史对话。（注：在使用不依赖 api 的模型时，因受其平台历史记录影响，可能无法准确记忆历史记录。）
 
 ## 注意事项
 
+1. 更新之后请重新给软件赋予权限。
+2. 更新之后请重新配置软件内的 api 等密钥。
+
 ## 证书信息
 
+GPL-3.0 license
+
 ## 特别致谢
+
+1. [Qt](https://github.com/qt)
+2. [acheong08/ChatGPT](https://github.com/acheong08/ChatGPT)
+3. [acheong08/EdgeGPT](https://github.com/acheong08/EdgeGPT)
+4. [vaibhavk97/Poe](https://github.com/vaibhavk97/Poe)
+5. [openai-translator/openai-translator](https://github.com/yetone/openai-translator)
 
 ## 支持作者
 
