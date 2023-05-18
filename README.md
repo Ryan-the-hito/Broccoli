@@ -125,7 +125,7 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
   <img src="https://i.imgur.com/Lyudory.png" width=440 />
 </p>
 
-7. 弹出控制 System Events 的弹窗，如下图所示，请允许。
+6. 弹出控制 System Events 的弹窗，如下图所示，请允许。
 	
 <p align="center">
   	<img src="https://i.imgur.com/mpOMyhD.png" width=340 />
@@ -138,7 +138,7 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
     <img src="https://i.imgur.com/wC1ncFe.png" width=240 />
 </p>
 
-9. 关于更新：请在 GitHub 或者百度网盘上下载最新版的软件，然后以相同的方式拖入 Application 文件夹后覆盖原有文件。之后应重新打开 System Preferences，在 Accessibility（辅助功能）的部分，选中 Broccoli，点击减号，然后再点击加号，重新添加授权一次。之后回到软件内，重新配置 api key 和 session tokens 等。已经添加的语言和提示词会永久保存，不必担心，api 等信息将随软件被替换而重置。
+8. 关于更新：请在 GitHub 或者百度网盘上下载最新版的软件，然后以相同的方式拖入 Application 文件夹后覆盖原有文件。之后应重新打开 System Preferences，在 Accessibility（辅助功能）的部分，选中 Broccoli，点击减号，然后再点击加号，重新添加授权一次。之后回到软件内，重新配置 api key 和 session tokens 等。已经添加的语言和提示词会永久保存，不必担心，api 等信息将随软件被替换而重置。
 
 ## 使用说明
 
@@ -201,6 +201,7 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 
 <p align="center">
   <img src="https://i.imgur.com/zaWDBNV.png" width=340 />
+  <img src="https://i.imgur.com/kfl5QS2.png" width=340 />
 </p>
 
 4. **翻译、润色、总结等功能**：
