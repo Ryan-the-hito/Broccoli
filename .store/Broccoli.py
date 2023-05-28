@@ -130,7 +130,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 0.3.0', self)
+        lbl1 = QLabel('Version 0.3.1', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -564,7 +564,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 0.3.0', self)
+        lbl = QLabel('Current Version: 0.3.1', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -1906,6 +1906,7 @@ end run'''"""
                 self.LastQ = str(self.text1.toPlainText())
                 cook = codecs.open('/Applications/Broccoli.app/Contents/Resources/cookies.json', 'r', encoding='utf-8').read()
                 if cook != ''and self.text1.toPlainText() != '':
+                    cookies = json.loads(open("/Applications/Broccoli.app/Contents/Resources/cookies.json", encoding="utf-8").read())
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
                     self.text1.setReadOnly(True)
@@ -1963,7 +1964,7 @@ end run'''"""
                             prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
 
                         async def main():
-                            bot = await Chatbot.create(cookie_path='/Applications/Broccoli.app/Contents/Resources/cookies.json')
+                            bot = await Chatbot.create(cookies=cookies)
                             res = await bot.ask(prompt=prompt, conversation_style=ConversationStyle.creative,
                                                     wss_link="wss://sydney.bing.com/sydney/ChatHub")
                             await bot.close()
@@ -2674,67 +2675,72 @@ end run'''"""
                         if show_prompt:
                             print(prompt)
 
-                        bot = await Chatbot.create(
-                            cookie_path='/Applications/Broccoli.app/Contents/Resources/cookies.json')
+                        cookies = json.loads(
+                            open("/Applications/Broccoli.app/Contents/Resources/cookies.json", encoding="utf-8").read())
+                        bot = await Chatbot.create(cookies=cookies)
                         res = await bot.ask(prompt=prompt, conversation_style=ConversationStyle.creative,
                                             wss_link="wss://sydney.bing.com/sydney/ChatHub")
                         await bot.close()
                         message = res['item']['messages'][1]['text']
 
                         return message
-                    try:
-                        query = self.text1.toPlainText()
-                        message = asyncio.run(answer_query_with_edge(query, df, document_embeddings))
-                        message = message.lstrip('\n')
-                        message = message.replace('\n', '\n\n\t')
-                        message = message.replace('\n\n\t\n\n\t', '\n\n\t')
-                        message = '\n\t' + message
-                        ref = ''
-                        showref = codecs.open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'r',
-                                              encoding='utf-8').read()
-                        if showref == '1':
-                            ref = codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r',
-                                              encoding='utf-8').read()
-                        EndMess = '- A: ' + message + '\n\n' + ref + '\n\n---\n\n'
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write(EndMess)
-                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
-                                              encoding='utf-8').read()
-                        endhtml = self.md2html(AllText)
-                        self.real1.setHtml(endhtml)
-                        self.real1.ensureCursorVisible()  # 游标可用
-                        cursor = self.real1.textCursor()  # 设置游标
-                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                        cursor.setPosition(pos)  # 游标位置设置为尾部
-                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                        QApplication.processEvents()
-                        QApplication.restoreOverrideCursor()
 
-                        self.text1.clear()
-                    except TimeoutException:
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
-                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
-                        endhtml = self.md2html(AllText)
-                        self.real1.setHtml(endhtml)
-                        self.real1.ensureCursorVisible()  # 游标可用
-                        cursor = self.real1.textCursor()  # 设置游标
-                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                        cursor.setPosition(pos)  # 游标位置设置为尾部
-                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                        self.text1.setPlainText(self.LastQ)
-                    except Exception as e:
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write('- A: Error, please try again!' + str(e) + '\n\n---\n\n')
-                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
-                        endhtml = self.md2html(AllText)
-                        self.real1.setHtml(endhtml)
-                        self.real1.ensureCursorVisible()  # 游标可用
-                        cursor = self.real1.textCursor()  # 设置游标
-                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-                        cursor.setPosition(pos)  # 游标位置设置为尾部
-                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
-                        self.text1.setPlainText(self.LastQ)
+                    cook = codecs.open('/Applications/Broccoli.app/Contents/Resources/cookies.json', 'r',
+                                       encoding='utf-8').read()
+                    if cook != '':
+                        try:
+                            query = self.text1.toPlainText()
+                            message = asyncio.run(answer_query_with_edge(query, df, document_embeddings))
+                            message = message.lstrip('\n')
+                            message = message.replace('\n', '\n\n\t')
+                            message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                            message = '\n\t' + message
+                            ref = ''
+                            showref = codecs.open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'r',
+                                                  encoding='utf-8').read()
+                            if showref == '1':
+                                ref = codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r',
+                                                  encoding='utf-8').read()
+                            EndMess = '- A: ' + message + '\n\n' + ref + '\n\n---\n\n'
+                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                                f1.write(EndMess)
+                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                                  encoding='utf-8').read()
+                            endhtml = self.md2html(AllText)
+                            self.real1.setHtml(endhtml)
+                            self.real1.ensureCursorVisible()  # 游标可用
+                            cursor = self.real1.textCursor()  # 设置游标
+                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                            cursor.setPosition(pos)  # 游标位置设置为尾部
+                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                            QApplication.processEvents()
+                            QApplication.restoreOverrideCursor()
+
+                            self.text1.clear()
+                        except TimeoutException:
+                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                                f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                            endhtml = self.md2html(AllText)
+                            self.real1.setHtml(endhtml)
+                            self.real1.ensureCursorVisible()  # 游标可用
+                            cursor = self.real1.textCursor()  # 设置游标
+                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                            cursor.setPosition(pos)  # 游标位置设置为尾部
+                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                            self.text1.setPlainText(self.LastQ)
+                        except Exception as e:
+                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                                f1.write('- A: Error, please try again!' + str(e) + '\n\n---\n\n')
+                            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                            endhtml = self.md2html(AllText)
+                            self.real1.setHtml(endhtml)
+                            self.real1.ensureCursorVisible()  # 游标可用
+                            cursor = self.real1.textCursor()  # 设置游标
+                            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                            cursor.setPosition(pos)  # 游标位置设置为尾部
+                            self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                            self.text1.setPlainText(self.LastQ)
                 signal.alarm(0)  # reset timer
                 self.text1.setReadOnly(False)
         self.btn_sub1.setDisabled(False)
