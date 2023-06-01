@@ -160,7 +160,7 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
   同上。
 - ChatGPT（使用 revChatGPT.V3 模块，需要 API。注：目前该库已暂停维护。）
   同上。
-- ChatGPT（使用 httpx 模块，需要 API——同上，不再在下图中标出，支持自定义第三方服务和使用第三方的代理 API，如下图所示配置。）
+- ChatGPT（使用 httpx 模块，需要 API——同上，不再在下图中标出，支持自定义第三方服务和使用第三方的代理 API，如下图所示配置。）注意：在填写 endpoint 的时候，不要把诸如“/v1/chat/completions”的部分写上去，请只填写对应的地址即可，如“https://api.openai.com”、“https://oa.apiXXX.net”。我自己用的是 [API2D ](https://api2d.com)的第三方密钥。
 
 <p align="center">
   <img src="https://i.imgur.com/LXMOdIA.png" width=340 />
