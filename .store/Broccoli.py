@@ -131,7 +131,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 1.0.0', self)
+        lbl1 = QLabel('Version 1.0.1', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -565,7 +565,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 1.0.0', self)
+        lbl = QLabel('Current Version: 1.0.1', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
@@ -1014,7 +1014,10 @@ end run'''"""
                             result = pattern.findall(message)
                             ResultEnd = ''.join(result)
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                            uid = os.getuid()
+                            env = os.environ.copy()
+                            env['__CF_USER_TEXT_ENCODING'] = f'{uid}:0x8000100:0x8000100'
+                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE, env=env)
                             p.communicate(input=ResultEnd.encode('utf-8'))
                             message = ResultEnd
                             message = message.lstrip('\n')
@@ -1176,7 +1179,10 @@ end run'''"""
                             result = pattern.findall(message)
                             ResultEnd = ''.join(result)
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                            uid = os.getuid()
+                            env = os.environ.copy()
+                            env['__CF_USER_TEXT_ENCODING'] = f'{uid}:0x8000100:0x8000100'
+                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE, env=env)
                             p.communicate(input=ResultEnd.encode('utf-8'))
                             message = ResultEnd
                             message = message.lstrip('\n')
@@ -1339,7 +1345,10 @@ end run'''"""
                             result = pattern.findall(AllText)
                             ResultEnd = ''.join(result).lstrip(' ').lstrip('\n').lstrip('\t')
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                            uid = os.getuid()
+                            env = os.environ.copy()
+                            env['__CF_USER_TEXT_ENCODING'] = f'{uid}:0x8000100:0x8000100'
+                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE, env=env)
                             p.communicate(input=ResultEnd.encode('utf-8'))
                             AllText = AllText.replace('<|start|>', '').replace('<|end|>', '')
                             AllText = AllText + '---\n\n'
@@ -1529,8 +1538,10 @@ end run'''"""
                                 result = pattern.findall(message)
                                 ResultEnd = ''.join(result)
                                 ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                                #pyperclip.copy(ResultEnd)
-                                p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                                uid = os.getuid()
+                                env = os.environ.copy()
+                                env['__CF_USER_TEXT_ENCODING'] = f'{uid}:0x8000100:0x8000100'
+                                p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE, env=env)
                                 p.communicate(input=ResultEnd.encode('utf-8'))
                                 message = ResultEnd
                                 message = message.lstrip('\n')
@@ -1683,7 +1694,10 @@ end run'''"""
                                 result = pattern.findall(message)
                                 ResultEnd = ''.join(result)
                                 ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                                p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                                uid = os.getuid()
+                                env = os.environ.copy()
+                                env['__CF_USER_TEXT_ENCODING'] = f'{uid}:0x8000100:0x8000100'
+                                p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE, env=env)
                                 p.communicate(input=ResultEnd.encode('utf-8'))
                                 message = ResultEnd
                                 message = message.lstrip('\n')
@@ -1854,7 +1868,10 @@ end run'''"""
                             result = pattern.findall(AllText)
                             ResultEnd = ''.join(result).lstrip(' ').lstrip('\n').lstrip('\t')
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                            uid = os.getuid()
+                            env = os.environ.copy()
+                            env['__CF_USER_TEXT_ENCODING'] = f'{uid}:0x8000100:0x8000100'
+                            p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE, env=env)
                             p.communicate(input=ResultEnd.encode('utf-8'))
                             AllText = AllText.replace('<|start|>', '').replace('<|end|>', '')
                             AllText = AllText + '---\n\n'
@@ -1992,7 +2009,10 @@ end run'''"""
                                 result = pattern.findall(message)
                                 ResultEnd = ''.join(result)
                                 ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
-                                p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE)
+                                uid = os.getuid()
+                                env = os.environ.copy()
+                                env['__CF_USER_TEXT_ENCODING'] = f'{uid}:0x8000100:0x8000100'
+                                p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE, env=env)
                                 p.communicate(input=ResultEnd.encode('utf-8'))
                                 message = ResultEnd
                                 message = message.lstrip('\n')
