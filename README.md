@@ -1,4 +1,4 @@
-# 🥦Broccoli: A Floating Helper on Mac desktop
+# 🥦Broccoli: A Floating Helper on Mac Desktop
 ![Y5Xt1FR](https://i.imgur.com/Y5Xt1FR.png)
 
 Broccoli is a simple floating helper of GPT. Private APIs needed.
