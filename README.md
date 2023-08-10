@@ -1,4 +1,4 @@
-# 🥦Broccoli: A Floating Helper on Mac Desktop
+ # 🥦Broccoli: A Floating Helper on Mac Desktop
 ![Y5Xt1FR](https://i.imgur.com/Y5Xt1FR.png)
 
 Broccoli is a simple floating helper of GPT. Private APIs needed.
@@ -48,18 +48,6 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 5. ChatGPT (httpx 模块，需要 API，支持自定义第三方服务和使用第三方的代理 API)
 6. Poe （POE 模块，需要 Quora 的 Formkey 和 Poe 的 Cookies）（这一模型包含了 GPT-4、ChatGPT、Claude、Claude+ 等多个子模型，如有订阅 Poe 可方便调用，且可跨平台同步）
 7. EdgeGPT（EdgeGPT 模块，需要导入 cookies.json）
-
-放两个 API，欢迎大家试用，剩余多少钱随缘，我会更新 API 的可用情况。
-
-第一个 API：
-
-- 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
-- （2023-4-3 更新）余 18 美元，截止日期：2023-6-1
-
-第二个 API：
-
-- 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
-- （2023-4-3 更新）余 18 美元，截止日期：2023-6-1
 
 ### 储存提示词
 
@@ -186,8 +174,10 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 <p align="center">
   <img src="https://i.imgur.com/T6RfQI9.png" width=340 />
 </p>
-![j9UNF3C](https://i.imgur.com/j9UNF3C.png)
 
+<p align="center">
+  <img src="https://i.imgur.com/j9UNF3C.png" width=340 />
+</p>
 
 - EdgeGPT（EdgeGPT 模块，需要导入 cookies.json）
   - 在 Edge 中登录 bing 帐号，然后下载[插件](https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm)。
