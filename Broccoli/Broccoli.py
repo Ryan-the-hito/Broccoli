@@ -91,7 +91,7 @@ class window_about(QWidget):  # 增加说明页面(About)
 
     def initUI(self):  # 说明页面内信息
         self.setUpMainWindow()
-        self.resize(400, 380)
+        self.resize(400, 410)
         self.center()
         self.setWindowTitle('About')
         self.setFocus()
@@ -127,7 +127,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 1.1.0', self)
+        lbl1 = QLabel('Version 1.1.1', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -193,6 +193,14 @@ class window_about(QWidget):  # 增加说明页面(About)
         bt7.setMinimumWidth(215)
         bt7.clicked.connect(self.coffee)
 
+        widg8_5 = QWidget()
+        blay8_5 = QHBoxLayout()
+        blay8_5.setContentsMargins(0, 0, 0, 0)
+        blay8_5.addStretch()
+        blay8_5.addWidget(bt7)
+        blay8_5.addStretch()
+        widg8_5.setLayout(blay8_5)
+
         widg9 = QWidget()
         bt3 = QPushButton('🍪\n¥5', self)
         bt3.setMaximumHeight(50)
@@ -242,6 +250,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         main_h_box.addWidget(widg6)
         main_h_box.addWidget(widg7)
         main_h_box.addWidget(widg8)
+        main_h_box.addWidget(widg8_5)
         main_h_box.addWidget(widg9)
         main_h_box.addWidget(widg10)
         main_h_box.addStretch()
@@ -581,7 +590,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 1.1.0', self)
+        lbl = QLabel('Current Version: 1.1.1', self)
         lbl.move(110, 75)
 
         lbl0 = QLabel('Check Now:', self)
