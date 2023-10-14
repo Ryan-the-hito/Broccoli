@@ -198,6 +198,8 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 
 </details>
 
+
+
 - ChatGPT（使用 openai 模块，需要 API。）
 <p align="center">
   <img src="https://i.imgur.com/XghIOs6.png" width=340 />
@@ -207,6 +209,12 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 
 <p align="center">
   <img src="https://i.imgur.com/LXMOdIA.png" width=340 />
+</p>
+
+**🚨If you want to customize your HOST/ENDPOINT, then you should choose the httpx module (the second one). And both two modules are by default using the official API, so it will check if the input box in Settings is blank or not. If you don’t have an official API from OpenAI, just input anything you want into that box and check “Third-party” below. Like this:**
+
+<p align="center">
+  <img src="https://i.imgur.com/Xoc7Th3.png" width=340 />
 </p>
 
 3. **文本对话模式**：当在 menubar 的下拉菜单中选择了“Chat with a file”模式后，软件主界面将如下图所示。可以在设置界面内选择或取消“Show references when chatting with a file”。若选上，则在阅读长文本并给出回答后，Broccoli 将继续给出 AI 作答所依据的文段。界面上，三个按钮分别对应三种不同读取文本的方式，分别是从新文档导入、从文本框输入和打开已经处理过的旧文档。而从新文档导入可以读取 txt 和 word 文档，只需在文件选取器中选择对应的格式即可。
