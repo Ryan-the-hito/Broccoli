@@ -1,5 +1,6 @@
 # 🥦Broccoli: A Floating Helper on Mac Desktop
-![Y5Xt1FR](https://i.imgur.com/Y5Xt1FR.png)
+
+![Theme](https://i.imgur.com/fJ2NrUt.png)
 
 Broccoli is a simple floating helper of GPT. Private APIs needed.
 
@@ -39,15 +40,15 @@ Broccoli 是 2023 年 2 月我花三天时间做的一个小软件，本来是�
 
 ### 多模型选择
 
-Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中选择合适的模型：
+Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中选择合适的模型（部分模型已经过时，不再支持）：
 
-1. GPT-3（openai 模块，需要 API）
+~~1. GPT-3（openai 模块，需要 API）~~
 2. ChatGPT（openai 模块，需要 API）
-3. ChatGPT（revChatGPT.V3 模块，需要 API。注：目前该库已暂停维护。）
-4. ChatGPT（revChatGPT.V1 模块，需要 session tokens。注：目前该库已暂停维护。）
+~~3. ChatGPT（revChatGPT.V3 模块，需要 API。注：目前该库已暂停维护。）
+4. ChatGPT（revChatGPT.V1 模块，需要 session tokens。注：目前该库已暂停维护。）~~
 5. ChatGPT (httpx 模块，需要 API，支持自定义第三方服务和使用第三方的代理 API)
-6. Poe （POE 模块，需要 Quora 的 Formkey 和 Poe 的 Cookies）（这一模型包含了 GPT-4、ChatGPT、Claude、Claude+ 等多个子模型，如有订阅 Poe 可方便调用，且可跨平台同步）
-7. EdgeGPT（EdgeGPT 模块，需要导入 cookies.json）
+~~6. Poe （POE 模块，需要 Quora 的 Formkey 和 Poe 的 Cookies）（这一模型包含了 GPT-4、ChatGPT、Claude、Claude+ 等多个子模型，如有订阅 Poe 可方便调用，且可跨平台同步）
+7. EdgeGPT（EdgeGPT 模块，需要导入 cookies.json）~~
 
 ### 储存提示词
 
@@ -60,6 +61,14 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 ### 在桌面与长文本对话
 
 当用户在 menubar 的下拉栏中开启这一功能后，除了和上一功能一样出现一个分屏之外，主界面 Chat and ask 模式选项还将提供三种 Embeddings 方案，分别是从新 txt 文档中读取、从输入内容读取和从旧有内容读取。如果用户已经将文本整理在 txt 文档中，那么可以选择第一个方案，此后，用户便不再需要重新对这一文档进行重复操作，而是可从旧有文档的文件夹路径中找到该文档，并导入即可。另外，如果没有现成的 txt 文档，用户也可以把所得的文字内容复制粘贴到分屏内，然后点击相应的按钮，即可开始 Embeddings 过程，此后亦可通过打开旧有文档的方式访问这些被加工的文件。当过程结束后，主界面上屏将出现“Done”字样，随后用户即可在提示词框内输入提示语，进行对话。
+
+### 可以随意增减现有的模型
+
+如储存提示词一样，Broccoli 现在可以将所有使用过且未来可能使用的模型名称交由用户自定义。
+
+### 任何软件、任何位置插入一轮答案
+
+在最新的版本中，Broccoli 支持在任何位置、任何软件之中打开一个浮动窗口，在发送提示词之后，使用光标选中需要插入文本的位置便可轻松获得其一轮对话结果。
 
 ### 桌面浮窗设计
 
@@ -97,7 +106,7 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 
 ## 环境要求
 
-- MacOS（测试环境为 MacOS 12.6.5）
+- MacOS（测试环境为 MacOS 13.6）
 - M1、M2 芯片
 - 网络环境自理 
 
@@ -138,21 +147,13 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 </p>
 
 2. **配置密钥**：在设置窗口中**首先**选择自己需要的模型。
+<details>
+<summary>Deprecated modules 已不再支持的模型</summary>
+
 - GPT-3（使用 openai 模块，需要 API）
-
-<p align="center">
-  	<img src="https://i.imgur.com/XghIOs6.png" width=340 />
-</p>
-
-- ChatGPT（使用 openai 模块，需要 API。）
-  同上。
+  
 - ChatGPT（使用 revChatGPT.V3 模块，需要 API。注：目前该库已暂停维护。）
   同上。
-- ChatGPT（使用 httpx 模块，需要 API——同上，不再在下图中标出，支持自定义第三方服务和使用第三方的代理 API，如下图所示配置。）注意：在填写 endpoint 的时候，不要把诸如“/v1/chat/completions”的部分写上去，请只填写对应的地址即可，如“https://api.openai.com”、“https://oa.apiXXX.net”。我自己用的是 [API2D ](https://api2d.com)的第三方密钥。
-
-<p align="center">
-  <img src="https://i.imgur.com/LXMOdIA.png" width=340 />
-</p>
 
 - Poe （POE 模块，需要 Quora 的 Formkey 和 Poe 的 Cookies）（这一模型包含了 GPT-4、ChatGPT、Claude、Claude+ 等多个子模型，如有订阅 Poe 可方便调用，且可跨平台同步）
 	- 关于 Formkey：先登录 Quora.com（得有个帐号），然后右键查看 Page Source（一般的浏览器都行），然后搜索“Formkey”，把查到的这一串密钥填入相应位置。
@@ -187,6 +188,19 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 
 <p align="center">
   <img src="https://i.imgur.com/8AFzBgO.png" width=340 />
+</p>
+
+</details>
+
+- ChatGPT（使用 openai 模块，需要 API。）
+<p align="center">
+  <img src="https://i.imgur.com/XghIOs6.png" width=340 />
+</p>
+
+- ChatGPT（使用 httpx 模块，需要 API——同上，不再在下图中标出，支持自定义第三方服务和使用第三方的代理 API，如下图所示配置。）注意：在填写 endpoint 的时候，不要把诸如“/v1/chat/completions”的部分写上去，请只填写对应的地址即可，如“https://api.openai.com”、“https://oa.apiXXX.net”。我自己用的是 [API2D ](https://api2d.com)的第三方密钥。
+
+<p align="center">
+  <img src="https://i.imgur.com/LXMOdIA.png" width=340 />
 </p>
 
 3. **文本对话模式**：当在 menubar 的下拉菜单中选择了“Chat with a file”模式后，软件主界面将如下图所示。可以在设置界面内选择或取消“Show references when chatting with a file”。若选上，则在阅读长文本并给出回答后，Broccoli 将继续给出 AI 作答所依据的文段。界面上，三个按钮分别对应三种不同读取文本的方式，分别是从新文档导入、从文本框输入和打开已经处理过的旧文档。而从新文档导入可以读取 txt 和 word 文档，只需在文件选取器中选择对应的格式即可。
