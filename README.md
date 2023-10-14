@@ -47,11 +47,13 @@ Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中�
 
 <details>
 <summary>已失效模块</summary>
+  
 1. GPT-3（openai 模块，需要 API）
 3. ChatGPT（revChatGPT.V3 模块，需要 API。注：目前该库已暂停维护。）
 4. ChatGPT（revChatGPT.V1 模块，需要 session tokens。注：目前该库已暂停维护。）
 6. Poe （POE 模块，需要 Quora 的 Formkey 和 Poe 的 Cookies）（这一模型包含了 GPT-4、ChatGPT、Claude、Claude+ 等多个子模型，如有订阅 Poe 可方便调用，且可跨平台同步）
 7. EdgeGPT（EdgeGPT 模块，需要导入 cookies.json）
+   
 </details>
 
 ### 储存提示词
