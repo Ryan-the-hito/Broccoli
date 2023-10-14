@@ -42,13 +42,17 @@ Broccoli 是 2023 年 2 月我花三天时间做的一个小软件，本来是�
 
 Broccoli 有七种模型可供选择，可以在 Settings 第一个下拉框中选择合适的模型（部分模型已经过时，不再支持）：
 
-~~1. GPT-3（openai 模块，需要 API）~~
-2. ChatGPT（openai 模块，需要 API）
-~~3. ChatGPT（revChatGPT.V3 模块，需要 API。注：目前该库已暂停维护。）
-4. ChatGPT（revChatGPT.V1 模块，需要 session tokens。注：目前该库已暂停维护。）~~
-5. ChatGPT (httpx 模块，需要 API，支持自定义第三方服务和使用第三方的代理 API)
-~~6. Poe （POE 模块，需要 Quora 的 Formkey 和 Poe 的 Cookies）（这一模型包含了 GPT-4、ChatGPT、Claude、Claude+ 等多个子模型，如有订阅 Poe 可方便调用，且可跨平台同步）
-7. EdgeGPT（EdgeGPT 模块，需要导入 cookies.json）~~
+1. ChatGPT（openai 模块，需要 API）
+2. ChatGPT (httpx 模块，需要 API，支持自定义第三方服务和使用第三方的代理 API)
+
+<details>
+<summary>已失效模块</summary>
+1. GPT-3（openai 模块，需要 API）
+3. ChatGPT（revChatGPT.V3 模块，需要 API。注：目前该库已暂停维护。）
+4. ChatGPT（revChatGPT.V1 模块，需要 session tokens。注：目前该库已暂停维护。）
+6. Poe （POE 模块，需要 Quora 的 Formkey 和 Poe 的 Cookies）（这一模型包含了 GPT-4、ChatGPT、Claude、Claude+ 等多个子模型，如有订阅 Poe 可方便调用，且可跨平台同步）
+7. EdgeGPT（EdgeGPT 模块，需要导入 cookies.json）
+</details>
 
 ### 储存提示词
 
