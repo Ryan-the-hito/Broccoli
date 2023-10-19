@@ -31,6 +31,10 @@ import time
 import docx2txt
 import requests
 import pyautogui
+from bs4 import BeautifulSoup
+import html2text
+import urllib3
+import logging
 
 app = QApplication(sys.argv)
 app.setQuitOnLastWindowClosed(False)
@@ -133,7 +137,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 1.1.2', self)
+        lbl1 = QLabel('Version 1.1.4', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -596,25 +600,31 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        lbl = QLabel('Current Version: 1.1.2', self)
-        lbl.move(110, 75)
+        self.lbl = QLabel('Current Version: v1.1.4', self)
+        self.lbl.move(30, 45)
 
-        lbl0 = QLabel('Check Now:', self)
-        lbl0.move(30, 15)
+        lbl0 = QLabel('Download Update:', self)
+        lbl0.move(30, 75)
+
+        lbl1 = QLabel('Latest Version:', self)
+        lbl1.move(30, 15)
+
+        self.lbl2 = QLabel('No Intrenet No Intrenet No Intrenet', self)
+        self.lbl2.move(125, 15)
 
         bt1 = QPushButton('Github', self)
         bt1.setFixedWidth(120)
         bt1.clicked.connect(self.upd)
-        bt1.move(110, 15)
+        bt1.move(150, 75)
 
         bt2 = QPushButton('Baidu Net Disk', self)
         bt2.setFixedWidth(120)
         bt2.clicked.connect(self.upd2)
-        bt2.move(110, 45)
+        bt2.move(150, 105)
 
-        self.resize(300, 110)
+        self.resize(300, 150)
         self.center()
-        self.setWindowTitle('Check for Updates')
+        self.setWindowTitle('Broccoli Updates')
         self.setFocus()
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
 
@@ -632,6 +642,51 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def activate(self):  # 设置窗口显示
         self.show()
+        self.checkupdate()
+
+    def checkupdate(self):
+        targetURL = 'https://github.com/Ryan-the-hito/Broccoli/releases'
+        try:
+            # Fetch the HTML content from the URL
+            urllib3.disable_warnings()
+            logging.captureWarnings(True)
+            s = requests.session()
+            s.keep_alive = False  # 关闭多余连接
+            response = s.get(targetURL, verify=False)
+            response.encoding = 'utf-8'
+            html_content = response.text
+            # Parse the HTML using BeautifulSoup
+            soup = BeautifulSoup(html_content, "html.parser")
+            # Remove all images from the parsed HTML
+            for img in soup.find_all("img"):
+                img.decompose()
+            # Convert the parsed HTML to plain text using html2text
+            text_maker = html2text.HTML2Text()
+            text_maker.ignore_links = True
+            text_maker.ignore_images = True
+            plain_text = text_maker.handle(str(soup))
+            # Convert the plain text to UTF-8
+            plain_text_utf8 = plain_text.encode(response.encoding).decode("utf-8")
+
+            for i in range(10):
+                plain_text_utf8 = plain_text_utf8.replace('\n\n\n\n', '\n\n')
+                plain_text_utf8 = plain_text_utf8.replace('\n\n\n', '\n\n')
+                plain_text_utf8 = plain_text_utf8.replace('   ', ' ')
+                plain_text_utf8 = plain_text_utf8.replace('  ', ' ')
+
+            pattern2 = re.compile(r'(v\d+\.\d+\.\d+)\sLatest')
+            result = pattern2.findall(plain_text_utf8)
+            result = ''.join(result)
+            nowversion = self.lbl.text().replace('Current Version: ', '')
+            if result == nowversion:
+                alertupdate = result + '. You are up to date!'
+                self.lbl2.setText(alertupdate)
+            else:
+                alertupdate = result + ' is ready!'
+                self.lbl2.setText(alertupdate)
+        except:
+            alertupdate = 'No Intrenet'
+            self.lbl2.setText(alertupdate)
 
 
 class TimeoutException(Exception):
@@ -831,6 +886,24 @@ class MyWidget(QWidget):  # 主窗口
                 ''')
         self.btn0_1.move(345, 780)
 
+        self.btn0_2 = QPushButton('', self)
+        self.btn0_2.setFixedSize(25, 25)
+        self.btn0_2.setStyleSheet('''
+                        QPushButton{
+                        border: transparent;
+                        background-color: transparent;
+                        border-image: url(/Applications/Broccoli.app/Contents/Resources/transfer2.png);
+                        }
+                        QPushButton:pressed{
+                        border: 1px outset grey;
+                        background-color: #0085FF;
+                        border-radius: 4px;
+                        padding: 1px;
+                        color: #FFFFFF
+                        }
+                        ''')
+        self.btn0_2.move(315, 780)
+
         qw1 = QWidget()
         vbox1 = QVBoxLayout()
         vbox1.setContentsMargins(0, 0, 0, 0)
@@ -890,6 +963,8 @@ class MyWidget(QWidget):  # 主窗口
         self.activate()
         self.assigntoall()
         self.btn0_1.raise_()
+        self.btn0_2.raise_()
+        self.trans = 0
 
     def move_window(self, width, height):
         animation = QPropertyAnimation(self, b"geometry", self)
@@ -1003,17 +1078,17 @@ end run'''"""
                         if self.widget0.currentIndex() == 0:
                             prompt = reststr
                         if self.widget0.currentIndex() == 1:
-                            prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
+                            prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "「「START」」" and write "「「END」」” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 2:
-                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 3:
-                            prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                            prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 4:
-                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 5:
-                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 6:
-                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
+                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Code: {str(self.text1.toPlainText())}. """
 
                         tutr = 0.5
                         temp = codecs.open('/Applications/Broccoli.app/Contents/Resources/temp.txt', 'r',
@@ -1044,7 +1119,7 @@ end run'''"""
                             QApplication.processEvents()
                             QApplication.restoreOverrideCursor()
                         if self.widget0.currentIndex() == 1:
-                            pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                            pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                             result = pattern.findall(message)
                             ResultEnd = ''.join(result)
                             with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
@@ -1054,7 +1129,7 @@ end run'''"""
                         if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
                                 self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
                                 self.widget0.currentIndex() == 6:
-                            pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                            pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                             result = pattern.findall(message)
                             ResultEnd = ''.join(result)
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
@@ -1230,17 +1305,17 @@ end run'''"""
                                     except Exception as e:
                                         pass
                             if self.widget0.currentIndex() == 1:
-                                prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "<|start|>" and write "<|end|>” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
+                                prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "「「START」」" and write "「「END」」” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 2:
-                                prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                                prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 3:
-                                prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                                prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 4:
-                                prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                                prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 5:
-                                prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.text1.toPlainText())}. """
+                                prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.text1.toPlainText())}. """
                             if self.widget0.currentIndex() == 6:
-                                prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.text1.toPlainText())}. """
+                                prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.widget4.currentText()}. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Code: {str(self.text1.toPlainText())}. """
 
                             response = await chat_gpt(prompt, conversation_history)
                             message = response.lstrip('assistant:').strip()
@@ -1252,7 +1327,7 @@ end run'''"""
                                 QApplication.processEvents()
                                 QApplication.restoreOverrideCursor()
                             if self.widget0.currentIndex() == 1:
-                                pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                                pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                                 result = pattern.findall(message)
                                 ResultEnd = ''.join(result)
                                 with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
@@ -1262,7 +1337,7 @@ end run'''"""
                             if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
                                     self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
                                     self.widget0.currentIndex() == 6:
-                                pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                                pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                                 result = pattern.findall(message)
                                 ResultEnd = ''.join(result)
                                 ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
@@ -4202,6 +4277,24 @@ end run'''"""
             zhong = zhong.replace('  ', ' ')
             return zhong
 
+    def transferview(self):
+        self.trans += 1
+        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+        if self.trans % 2 == 0: # html
+            self.real1.setReadOnly(True)
+            self.real1.textChanged.disconnect(self.save_text)
+            endhtml = self.md2html(AllText)
+            self.real1.setHtml(endhtml)
+        else: # text
+            self.real1.setReadOnly(False)
+            self.real1.setText(AllText)
+            self.real1.textChanged.connect(self.save_text)
+
+    def save_text(self):
+        text = self.real1.toPlainText()
+        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as file:
+            file.write(text)
+
     def center(self):  # 设置窗口居中
         # Get the primary screen's geometry
         screen_geometry = self.screen().availableGeometry()
@@ -4220,12 +4313,17 @@ end run'''"""
     def activate(self):  # 设置窗口显示
         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
             f1.write('')
+        self.setStyleSheet(style_sheet_ori)
+        w2.setStyleSheet(style_sheet_ori)
         self.show()
         self.center()
         self.setFocus()
         self.raise_()
         self.activateWindow()
         self.pin_a_tab()
+        w2.checkupdate()
+        if w2.lbl2.text() != 'No Intrenet' and 'ready' in w2.lbl2.text():
+            w2.show()
 
     def cancel(self):  # 设置取消键的功能
         self.close()
@@ -4301,7 +4399,7 @@ class window4(QWidget):  # Customization settings
         self.frame1.setFrameShadow(QFrame.Shadow.Sunken)
 
         self.le1 = QLineEdit(self)
-        self.le1.setPlaceholderText('API here...')
+        self.le1.setPlaceholderText("API here...Type anything if you don't have official API...Don't let it empty.")
         Apis = codecs.open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'r', encoding='utf-8').read()
         if Apis != '':
             self.le1.setText(Apis)
@@ -4466,6 +4564,7 @@ class window4(QWidget):  # Customization settings
             f0.write(self.widget2.itemText(h))
 
     def SaveAPI(self):
+        nowmodel = int(codecs.open('/Applications/Broccoli.app/Contents/Resources/wp.txt', 'r', encoding='utf-8').read())
         with open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'w', encoding='utf-8') as f1:
             f1.write(self.le1.text())
         with open('/Applications/Broccoli.app/Contents/Resources/api2.txt', 'w', encoding='utf-8') as f1:
@@ -4507,6 +4606,7 @@ class window4(QWidget):  # Customization settings
             while '' in modellist:
                 modellist.remove('')
             self.widget2.addItems(modellist)
+        self.widget2.setCurrentIndex(nowmodel)
         self.close()
 
     def thirdp(self):
@@ -4805,15 +4905,15 @@ class window5(QWidget):  # 小窗口
                     if self.ask_widget0.currentIndex() == 0:
                         prompt = reststr
                     if self.ask_widget0.currentIndex() == 1:
-                        prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.ask_widget1.currentText()} to {self.ask_widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
+                        prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.ask_widget1.currentText()} to {self.ask_widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
                     if self.ask_widget0.currentIndex() == 2:
-                        prompt = f"""Revise the text in {self.ask_widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
+                        prompt = f"""Revise the text in {self.ask_widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
                     if self.ask_widget0.currentIndex() == 3:
-                        prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.ask_widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
+                        prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.ask_widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
                     if self.ask_widget0.currentIndex() == 4:
-                        prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.ask_widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.ask_widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
+                        prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.ask_widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.ask_widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
                     if self.ask_widget0.currentIndex() == 5:
-                        prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.ask_widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.ask_text1.toPlainText())}. """
+                        prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.ask_widget4.currentText()}. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Code: {str(self.ask_text1.toPlainText())}. """
 
                     tutr = 0.5
                     temp = codecs.open(BasePath + 'temp.txt', 'r',
@@ -4852,7 +4952,7 @@ class window5(QWidget):  # 小窗口
                     if self.ask_widget0.currentIndex() == 1 or self.ask_widget0.currentIndex() == 2 or \
                             self.ask_widget0.currentIndex() == 3 or self.ask_widget0.currentIndex() == 4 or \
                             self.ask_widget0.currentIndex() == 5:
-                        pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                        pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                         result = pattern.findall(message)
                         ResultEnd = ''.join(result)
                         ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
@@ -5041,15 +5141,15 @@ class window5(QWidget):  # 小窗口
                                 except Exception as e:
                                     pass
                         if self.ask_widget0.currentIndex() == 1:
-                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.ask_widget1.currentText()} to {self.ask_widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
+                            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.ask_widget1.currentText()} to {self.ask_widget2.currentText()}. Don’t reply any other explanations. Before the translated text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
                         if self.ask_widget0.currentIndex() == 2:
-                            prompt = f"""Revise the text in {self.ask_widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
+                            prompt = f"""Revise the text in {self.ask_widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don’t reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
                         if self.ask_widget0.currentIndex() == 3:
-                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.ask_widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
+                            prompt = f"""You are a text summarizer, you can only summarize the text, don't interpret it. Summarize this text in {self.ask_widget4.currentText()} to make it shorter, logical and clear. Don’t reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
                         if self.ask_widget0.currentIndex() == 4:
-                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.ask_widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.ask_widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
+                            prompt = f"""You are an expert in semantics and grammar, teaching me how to learn. Please explain in {self.ask_widget4.currentText()} the meaning of every word in the text above and the meaning and the grammar structure of the text. If a word is part of an idiom, please explain the idiom and provide a few examples in {self.ask_widget4.currentText()} with similar meanings, along with their explanations. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Text: {str(self.ask_text1.toPlainText())}. """
                         if self.ask_widget0.currentIndex() == 5:
-                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.ask_widget4.currentText()}. Before the text starts, write "<|start|>" and write "<|end|>” after it ends. Code: {str(self.ask_text1.toPlainText())}. """
+                            prompt = f"""You are a code explanation engine, you can only explain the code, do not interpret or translate it. Also, please report any bugs you find in the code to the author of the code. Must repeat in {self.ask_widget4.currentText()}. Before the text starts, write "「「START」」" and write "「「END」」” after it ends. Code: {str(self.ask_text1.toPlainText())}. """
 
                         response = await chat_gpt(prompt, conversation_history)
                         message = response.lstrip('assistant:').strip()
@@ -5069,7 +5169,7 @@ class window5(QWidget):  # 小窗口
                         if self.ask_widget0.currentIndex() == 1 or self.ask_widget0.currentIndex() == 2 or \
                                 self.ask_widget0.currentIndex() == 3 or self.ask_widget0.currentIndex() == 4 or \
                                 self.ask_widget0.currentIndex() == 5:
-                            pattern = re.compile(r'<|start|>([\s\S]*?)<|end|>')
+                            pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                             result = pattern.findall(message)
                             ResultEnd = ''.join(result)
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
@@ -5419,5 +5519,6 @@ if __name__ == '__main__':
     btna4.triggered.connect(w3.pin_a_tab)
     btna5.triggered.connect(w5.activate)
     w3.btn0_1.clicked.connect(w4.activate)
+    w3.btn0_2.clicked.connect(w3.transferview)
     app.setStyleSheet(style_sheet_ori)
     app.exec()
