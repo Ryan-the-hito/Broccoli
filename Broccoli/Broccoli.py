@@ -137,7 +137,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 1.1.4', self)
+        lbl1 = QLabel('Version 1.1.5', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -600,7 +600,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        self.lbl = QLabel('Current Version: v1.1.4', self)
+        self.lbl = QLabel('Current Version: v1.1.5', self)
         self.lbl.move(30, 45)
 
         lbl0 = QLabel('Download Update:', self)
@@ -609,8 +609,8 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
         lbl1 = QLabel('Latest Version:', self)
         lbl1.move(30, 15)
 
-        self.lbl2 = QLabel('No Intrenet No Intrenet No Intrenet', self)
-        self.lbl2.move(125, 15)
+        self.lbl2 = QLabel('', self)
+        self.lbl2.move(122, 15)
 
         bt1 = QPushButton('Github', self)
         bt1.setFixedWidth(120)
@@ -681,12 +681,15 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
             if result == nowversion:
                 alertupdate = result + '. You are up to date!'
                 self.lbl2.setText(alertupdate)
+                self.lbl2.adjustSize()
             else:
                 alertupdate = result + ' is ready!'
                 self.lbl2.setText(alertupdate)
+                self.lbl2.adjustSize()
         except:
             alertupdate = 'No Intrenet'
             self.lbl2.setText(alertupdate)
+            self.lbl2.adjustSize()
 
 
 class TimeoutException(Exception):
@@ -4345,7 +4348,7 @@ class window4(QWidget):  # Customization settings
     def setUpMainWindow(self):
         self.widget1 = QComboBox(self)
         self.widget1.setEditable(False)
-        defalist = ['GPT 3.5 (API - openai)', 'GPT 3.5 (API - httpx)']
+        defalist = ['API - openai', 'API - httpx']
         self.widget1.addItems(defalist)
         Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'r', encoding='utf-8').read()
         if Which == '0':
