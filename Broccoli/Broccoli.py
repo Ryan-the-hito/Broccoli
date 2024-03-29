@@ -63,6 +63,9 @@ action6 = QAction("📂️ Chat with a file")
 action6.setCheckable(True)
 menu.addAction(action6)
 
+action7 = QAction("🚀 Assign to all spaces")
+menu.addAction(action7)
+
 action4 = QAction("⚙️ Settings")
 menu.addAction(action4)
 
@@ -137,7 +140,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 1.1.5', self)
+        lbl1 = QLabel('Version 1.1.6', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -600,7 +603,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        self.lbl = QLabel('Current Version: v1.1.5', self)
+        self.lbl = QLabel('Current Version: v1.1.6', self)
         self.lbl.move(30, 45)
 
         lbl0 = QLabel('Download Update:', self)
@@ -964,7 +967,6 @@ class MyWidget(QWidget):  # 主窗口
         vbox3.addWidget(self.qw3)
         self.setLayout(vbox3)
         self.activate()
-        self.assigntoall()
         self.btn0_1.raise_()
         self.btn0_2.raise_()
         self.trans = 0
@@ -1028,6 +1030,16 @@ end run'''"""
                 QuesText = QuesText.replace('\n\n\t\n\n\t', '\n\n\t')
                 self.LastQ = str(self.text1.toPlainText())
                 AccountGPT = codecs.open('/Applications/Broccoli.app/Contents/Resources/api.txt', 'r', encoding='utf-8').read()
+                ENDPOINT = 'https://api.openai.com/v1'
+                api2 = codecs.open('/Applications/Broccoli.app/Contents/Resources/api2.txt', 'r',
+                                   encoding='utf-8').read()
+                bear = codecs.open('/Applications/Broccoli.app/Contents/Resources/bear.txt', 'r',
+                                   encoding='utf-8').read()
+                thirdp = codecs.open('/Applications/Broccoli.app/Contents/Resources/third.txt', 'r',
+                                     encoding='utf-8').read()
+                if bear != '' and api2 != '' and thirdp == '1':
+                    ENDPOINT = bear + '/v1'
+                    AccountGPT = api2
                 if AccountGPT != '' and self.text1.toPlainText() != '':
                     QApplication.processEvents()
                     QApplication.restoreOverrideCursor()
@@ -1053,7 +1065,12 @@ end run'''"""
                     signal.signal(signal.SIGALRM, self.timeout_handler)
                     signal.alarm(timeout)  # set timer to 15 seconds
                     try:
+                        openai.api_base = ENDPOINT
                         openai.api_key = AccountGPT
+                        EndMess = '- A: '
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
+                            f1.write(EndMess)
                         history = ''
                         showhistory = codecs.open('/Applications/Broccoli.app/Contents/Resources/history.txt', 'r',
                                               encoding='utf-8').read()
@@ -1109,16 +1126,51 @@ end run'''"""
                             max_tokens=maxt,
                             n=1,
                             stop=None,
+                            stream=True,
                             temperature=tutr,
                         )
-                        message = completion.choices[0].message["content"].strip()
+                        #message = completion.choices[0].message["content"].strip()
                         QApplication.processEvents()
                         QApplication.restoreOverrideCursor()
+                        for chunk in completion:
+                            content = chunk.choices[0].delta.get('content')
+                            if content is not None:
+                                with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                          encoding='utf-8') as f1:
+                                    f1.write(content)
+                                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt',
+                                                          'r', encoding='utf-8').read()
+                                    endhtml = self.md2html(AllText)
+                                    self.real1.setHtml(endhtml)
+                                    self.real1.ensureCursorVisible()  # 游标可用
+                                    cursor = self.real1.textCursor()  # 设置游标
+                                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                                    QApplication.processEvents()
+                                    QApplication.restoreOverrideCursor()
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                            f1.write('\n\n')
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+                        AllText = AllText.replace('- A: \n\t', '- A: ')
+                        AllText = AllText.replace('- A: \n', '- A: ')
+                        AllText = AllText.replace('- A: ', '- A: \n\t')
+                        AllText = AllText.replace('\n', '\n\n\t')
+                        AllText = AllText.replace('\n\n\t\n\n\t', '\n\n\t')
+                        AllText = AllText.replace('\n\n\t\t', '\n\n\t')
+                        AllText = AllText.replace('\n\n\t\n\n\t', '\n\n\t')
+                        AllText = AllText.replace('- A:\n\t ', '- A: ')
+                        AllText = AllText.replace('- A: \n\n\t', '- A: \n\t')
+                        AllText = AllText.replace('\t- A: ', '- A: ')
+                        AllText = AllText.replace('\t- Q: ', '- Q: ')
+                        AllText = AllText.replace('\t---', '---')
+                        message = AllText.rstrip('\t')
                         if self.widget0.currentIndex() == 0 or self.widget0.currentIndex() == 7:
-                            message = message.lstrip('\n')
-                            message = message.replace('\n', '\n\n\t')
-                            message = message.replace('\n\n\t\n\n\t', '\n\n\t')
-                            message = '\n\t' + message
+                            # message = message.lstrip('\n')
+                            # message = message.replace('\n', '\n\n\t')
+                            # message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                            # message = '\n\t' + message
+                            message = message + '\n\n---\n\n'
                             QApplication.processEvents()
                             QApplication.restoreOverrideCursor()
                         if self.widget0.currentIndex() == 1:
@@ -1127,7 +1179,7 @@ end run'''"""
                             ResultEnd = ''.join(result)
                             with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
                                 f0.write(ResultEnd)
-                            message = "Your command is:" + '\n\t' + ResultEnd
+                            message = "Your command is:" + '\n\t' + ResultEnd + '\n\n---\n\n'
                             self.te0.setText(ResultEnd)
                         if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
                                 self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
@@ -1141,17 +1193,17 @@ end run'''"""
                             env['__CF_USER_TEXT_ENCODING'] = f'{uid}:0x8000100:0x8000100'
                             p = subprocess.Popen(['pbcopy', 'w'], stdin=subprocess.PIPE, env=env)
                             p.communicate(input=ResultEnd.encode('utf-8'))
-                            message = ResultEnd
-                            message = message.lstrip('\n')
-                            message = message.replace('\n', '\n\n\t')
-                            message = message.replace('\n\n\t\n\n\t', '\n\n\t')
-                            message = '\n\t' + message
+                            # message = ResultEnd
+                            # message = message.lstrip('\n')
+                            # message = message.replace('\n', '\n\n\t')
+                            # message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                            # message = '\n\t' + message
+                            message = message + '\n\n---\n\n'
 
-                        EndMess = '- A: ' + message + '\n\n---\n\n'
-                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write(EndMess)
-                        ProcessText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
-                        midhtml = self.md2html(ProcessText)
+                        #EndMess = '- A: ' + message + '\n\n---\n\n'
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
+                            f1.write(message)
+                        midhtml = self.md2html(message)
                         self.real1.setHtml(midhtml)
                         self.real1.ensureCursorVisible()  # 游标可用
                         cursor = self.real1.textCursor()  # 设置游标
@@ -1420,14 +1472,23 @@ end run'''"""
                 df.sample(1)
 
                 def get_embedding(text: str, model: str = EMBEDDING_MODEL) -> list[float]:
-                    if AccountGPT != '' and thirdp == '0':
+                    if AccountGPT != '' and thirdp == '0' and Which == '0':
                         result = openai.Embedding.create(
                             model=model,
                             input=text
                         )
                         time.sleep(0.5)
                         return result["data"][0]["embedding"]
-                    if AccountGPT == '' or (bear != '' and api2 != '' and thirdp == '1'):
+                    if AccountGPT == '' or (Which == '0' and bear != '' and api2 != '' and thirdp == '1'):
+                        openai.api_base = bear + '/v1'
+                        openai.api_key = api2
+                        result = openai.Embedding.create(
+                            model=model,
+                            input=text
+                        )
+                        time.sleep(0.5)
+                        return result["data"][0]["embedding"]
+                    if AccountGPT == '' or (Which == '1' and bear != '' and api2 != '' and thirdp == '1'):
                         ENDPOINT = bear + '/v1/embeddings'
                         HEADERS = {"Authorization": f"Bearer {api2}"}
                         data = {
@@ -1514,14 +1575,66 @@ end run'''"""
                     if show_prompt:
                         print(prompt)
 
+                    EndMess = '- A: '
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                              encoding='utf-8') as f1:
+                        f1.write(EndMess)
+
                     response = openai.ChatCompletion.create(
                         model=COMPLETIONS_MODEL,
                         messages=[{"role": "user", "content": prompt}],
                         temperature=TEMP,
                         max_tokens=MAXT,
+                        stream=True,
                     )
 
-                    return response.choices[0].message["content"].strip('\n')
+                    for chunk in response:
+                        content = chunk.choices[0].delta.get('content')
+                        if content is not None:
+                            with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                      encoding='utf-8') as f1:
+                                f1.write(content)
+                                AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt',
+                                                      'r', encoding='utf-8').read()
+                                endhtml = self.md2html(AllText)
+                                self.real1.setHtml(endhtml)
+                                self.real1.ensureCursorVisible()  # 游标可用
+                                cursor = self.real1.textCursor()  # 设置游标
+                                pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                                cursor.setPosition(pos)  # 游标位置设置为尾部
+                                self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                                QApplication.processEvents()
+                                QApplication.restoreOverrideCursor()
+
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write('\n\n')
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                          encoding='utf-8').read()
+                    AllText = AllText.replace('- A: \n\t', '- A: ')
+                    AllText = AllText.replace('- A: \n', '- A: ')
+                    AllText = AllText.replace('- A: ', '- A: \n\t')
+                    AllText = AllText.replace('\n', '\n\n\t')
+                    AllText = AllText.replace('\n\n\t\n\n\t', '\n\n\t')
+                    AllText = AllText.replace('\n\n\t\t', '\n\n\t')
+                    AllText = AllText.replace('\n\n\t\n\n\t', '\n\n\t')
+                    AllText = AllText.replace('- A:\n\t ', '- A: ')
+                    AllText = AllText.replace('- A: \n\n\t', '- A: \n\t')
+                    AllText = AllText.replace('\t- A: ', '- A: ')
+                    AllText = AllText.replace('\t- Q: ', '- Q: ')
+                    AllText = AllText.replace('\t---', '---')
+                    message = AllText.rstrip('\t')
+
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
+                        f1.write(message)
+                    midhtml = self.md2html(message)
+                    self.real1.setHtml(midhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                    QApplication.processEvents()
+                    QApplication.restoreOverrideCursor()
 
                 self.LastQ = str(self.text1.toPlainText())
                 QApplication.processEvents()
@@ -1549,16 +1662,19 @@ end run'''"""
                 if Which == '0' and AccountGPT != '':
                     try:
                         query = self.text1.toPlainText()
-                        message = answer_query_with_context(query, df, document_embeddings)
-                        message = message.lstrip('\n')
-                        message = message.replace('\n', '\n\n\t')
-                        message = message.replace('\n\n\t\n\n\t', '\n\n\t')
-                        message = '\n\t' + message
-                        ref = ''
+                        if bear != '' and api2 != '' and thirdp == '1':
+                            openai.api_base = bear + '/v1'
+                            openai.api_key = api2
+                        answer_query_with_context(query, df, document_embeddings)
+                        # message = message.lstrip('\n')
+                        # message = message.replace('\n', '\n\n\t')
+                        # message = message.replace('\n\n\t\n\n\t', '\n\n\t')
+                        # message = '\n\t' + message
+                        ref = '\n\n'
                         showref = codecs.open('/Applications/Broccoli.app/Contents/Resources/showref.txt', 'r', encoding='utf-8').read()
                         if showref == '1':
-                            ref = codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r', encoding='utf-8').read()
-                        EndMess = '- A: ' + message + '\n\n' + ref + '\n\n---\n\n'
+                            ref = ref + codecs.open('/Applications/Broccoli.app/Contents/Resources/ref.txt', 'r', encoding='utf-8').read()
+                        EndMess = ref + '\n\n---\n\n'
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
                             f1.write(EndMess)
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
@@ -2144,7 +2260,8 @@ end run'''"""
                                encoding='utf-8').read()
             thirdp = codecs.open('/Applications/Broccoli.app/Contents/Resources/third.txt', 'r',
                                  encoding='utf-8').read()
-            if AccountGPT != '' and thirdp == '0':
+            Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'r', encoding='utf-8').read()
+            if Which == '0' and AccountGPT != '' and thirdp == '0':
                 SUCC = 0
                 tarnamecsv = csv_tarname
                 embedcsv = os.path.join(self.Embed, csv_endtar)
@@ -2281,7 +2398,156 @@ end run'''"""
                     pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
-            if bear != '' and api2 != '' and thirdp == '1':
+            if Which == '0' and bear != '' and api2 != '' and thirdp == '1':
+                SUCC = 0
+                ENDPOINT = bear + '/v1'
+                tarnamecsv = csv_tarname
+                embedcsv = os.path.join(self.Embed, csv_endtar)
+                try:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                              encoding='utf-8') as f1:
+                        f1.write(f'- Q: Please embed {tarname}.\n\n- A: ')
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                          encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+
+                    # midindex to embed
+                    EMBEDDING_MODEL = "text-embedding-ada-002"
+                    openai.api_key = api2
+                    openai.api_base = ENDPOINT
+                    df = pd.read_csv(tarnamecsv)
+                    df = df.set_index(["title", "heading"])
+                    df.sample(1)
+                    with open('/Applications/Broccoli.app/Contents/Resources/prog.txt', 'w', encoding='utf-8') as f0:
+                        f0.write('')
+
+                    def get_embedding(text: str, model: str = EMBEDDING_MODEL, nowline=0, allline=allline) -> list[
+                        float]:
+                        result = openai.Embedding.create(
+                            model=model,
+                            input=text
+                        )
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
+                        with open('/Applications/Broccoli.app/Contents/Resources/prog.txt', 'a',
+                                  encoding='utf-8') as f0:
+                            f0.write('1\n')
+                        prog = codecs.open('/Applications/Broccoli.app/Contents/Resources/prog.txt', 'r',
+                                           encoding='utf-8').read()
+                        proglist = prog.split('\n')
+                        while '' in proglist:
+                            proglist.remove('')
+                        nowline += len(proglist)
+                        prognum = str(int(nowline / allline * 100)) + '%'
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
+                            f1.write(f'{prognum}...')
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                              encoding='utf-8').read()
+                        endhtml = self.md2html(AllText)
+                        self.real1.setHtml(endhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        time.sleep(0.5)
+                        return result["data"][0]["embedding"]
+
+                    df["embedding"] = df.content.apply(lambda x: get_embedding(x, EMBEDDING_MODEL))
+                    df.to_csv('/Applications/Broccoli.app/Contents/Resources/with_embeddings.csv')
+                    with open('/Applications/Broccoli.app/Contents/Resources/with_embeddings.csv', 'r',
+                              encoding='utf-8') as input_file:
+                        reader = csv.reader(input_file)
+                        # 获取 CSV 文件的标题行
+                        header = next(reader)
+                        # 获取要删除的列的索引
+                        column_to_delete_index = header.index('tokens')
+                        # 创建一个新的 CSV 文件，并写入标题行
+                        with open('/Applications/Broccoli.app/Contents/Resources/with_embeddings2.csv', 'w', newline='',
+                                  encoding='utf-8') as output_file:
+                            writer = csv.writer(output_file)
+                            writer.writerow([h for h in header if h != 'tokens'])
+                            # 遍历 CSV 文件的每一行，并删除要删除的列
+                            for row in reader:
+                                del row[column_to_delete_index]
+                                writer.writerow(row)
+                    cf = codecs.open('/Applications/Broccoli.app/Contents/Resources/with_embeddings2.csv', 'r',
+                                     encoding='utf-8').read()
+                    cf = cf.replace('[', '')
+                    cf = cf.replace(']', '')
+                    cf = cf.replace('"', '')
+                    cfline = cf.split('\n')
+                    lenline = []
+                    for i in range(len(cfline)):
+                        lenline.append(len(cfline[i].split(',')) - 3)
+                    lenline.sort()
+                    num = lenline[-1]
+                    listnum = []
+                    for r in range(num):
+                        listnum.append(r)
+                    for m in range(len(listnum)):
+                        listnum[m] = str(listnum[m])
+                    liststr = ','.join(listnum)
+                    del cfline[0]
+                    cfstr = '\n'.join(cfline)
+                    cfstr = 'title,heading,content,' + liststr + '\n' + cfstr
+                    with open('/Applications/Broccoli.app/Contents/Resources/with_embeddings3.csv', 'w',
+                              encoding='utf-8') as f0:
+                        f0.write(cfstr)
+                    # 读取 CSV 文件
+                    with open('/Applications/Broccoli.app/Contents/Resources/with_embeddings3.csv', 'r',
+                              encoding='utf-8') as input_file:
+                        reader = csv.reader(input_file)
+                        # 获取 CSV 文件的标题行
+                        header = next(reader)
+                        # 获取要删除的列的索引
+                        column_to_delete_index = header.index('content')
+                        # 创建一个新的 CSV 文件，并写入标题行
+                        with open(embedcsv, 'w', newline='', encoding='utf-8') as output_file:
+                            writer = csv.writer(output_file)
+                            writer.writerow([h for h in header if h != 'content'])
+                            # 遍历 CSV 文件的每一行，并删除要删除的列
+                            for row in reader:
+                                del row[column_to_delete_index]
+                                writer.writerow(row)
+                    SUCC = 1
+                except Exception as e:
+                    SUCC = 0
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write(
+                            f'- Q: Please embed {contfull}.\n\n- A: Error! {str(e)} Please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                          encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                # display
+                if SUCC == 1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/title.txt', 'w', encoding='utf-8') as f0:
+                        f0.write(cont)
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
+                        f1.write(f'\n\n\t**Done!**' + '\n\n---\n\n')
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                          encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+            if Which == '1' and bear != '' and api2 != '' and thirdp == '1':
                 ENDPOINT = bear + '/v1/embeddings'
                 AccountGPT = api2
                 HEADERS = {"Authorization": f"Bearer {AccountGPT}"}
@@ -2583,7 +2849,8 @@ end run'''"""
                                encoding='utf-8').read()
             thirdp = codecs.open('/Applications/Broccoli.app/Contents/Resources/third.txt', 'r',
                                  encoding='utf-8').read()
-            if AccountGPT != '' and thirdp == '0':
+            Which = codecs.open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'r', encoding='utf-8').read()
+            if Which == '0' and AccountGPT != '' and thirdp == '0':
                 SUCC = 0
                 tarnamecsv = csv_tarname
                 embedcsv = os.path.join(self.Embed, csv_endtar)
@@ -2729,7 +2996,158 @@ end run'''"""
                     pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
                     cursor.setPosition(pos)  # 游标位置设置为尾部
                     self.real1.setTextCursor(cursor)  # 滚动到游标位置
-            if bear != '' and api2 != '' and thirdp == '1':
+            if Which == '0' and bear != '' and api2 != '' and thirdp == '1':
+                SUCC = 0
+                ENDPOINT = bear + '/v1'
+                tarnamecsv = csv_tarname
+                embedcsv = os.path.join(self.Embed, csv_endtar)
+                try:
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                              encoding='utf-8') as f1:
+                        f1.write(f'- Q: Please embed {tarname}.\n\n- A: ')
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                          encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+
+                    # midindex to embed
+                    EMBEDDING_MODEL = "text-embedding-ada-002"
+                    openai.api_key = api2
+                    openai.api_base = ENDPOINT
+                    df = pd.read_csv(tarnamecsv)
+                    df = df.set_index(["title", "heading"])
+                    df.sample(1)
+                    with open('/Applications/Broccoli.app/Contents/Resources/prog.txt', 'w', encoding='utf-8') as f0:
+                        f0.write('')
+
+                    def get_embedding(text: str, model: str = EMBEDDING_MODEL, nowline=0, allline=allline) -> list[
+                        float]:
+                        result = openai.Embedding.create(
+                            model=model,
+                            input=text
+                        )
+                        QApplication.processEvents()
+                        QApplication.restoreOverrideCursor()
+                        with open('/Applications/Broccoli.app/Contents/Resources/prog.txt', 'a',
+                                  encoding='utf-8') as f0:
+                            f0.write('1\n')
+                        prog = codecs.open('/Applications/Broccoli.app/Contents/Resources/prog.txt', 'r',
+                                           encoding='utf-8').read()
+                        proglist = prog.split('\n')
+                        while '' in proglist:
+                            proglist.remove('')
+                        nowline += len(proglist)
+                        prognum = str(int(nowline / allline * 100)) + '%'
+                        with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                                  encoding='utf-8') as f1:
+                            f1.write(f'{prognum}...')
+                        AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                              encoding='utf-8').read()
+                        endhtml = self.md2html(AllText)
+                        self.real1.setHtml(endhtml)
+                        self.real1.ensureCursorVisible()  # 游标可用
+                        cursor = self.real1.textCursor()  # 设置游标
+                        pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                        cursor.setPosition(pos)  # 游标位置设置为尾部
+                        self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                        time.sleep(0.5)
+                        return result["data"][0]["embedding"]
+
+                    df["embedding"] = df.content.apply(lambda x: get_embedding(x, EMBEDDING_MODEL))
+                    df.to_csv('/Applications/Broccoli.app/Contents/Resources/with_embeddings.csv')
+                    with open('/Applications/Broccoli.app/Contents/Resources/with_embeddings.csv', 'r',
+                              encoding='utf-8') as input_file:
+                        reader = csv.reader(input_file)
+                        # 获取 CSV 文件的标题行
+                        header = next(reader)
+                        # 获取要删除的列的索引
+                        column_to_delete_index = header.index('tokens')
+                        # 创建一个新的 CSV 文件，并写入标题行
+                        with open('/Applications/Broccoli.app/Contents/Resources/with_embeddings2.csv', 'w',
+                                  newline='', encoding='utf-8') as output_file:
+                            writer = csv.writer(output_file)
+                            writer.writerow([h for h in header if h != 'tokens'])
+                            # 遍历 CSV 文件的每一行，并删除要删除的列
+                            for row in reader:
+                                del row[column_to_delete_index]
+                                writer.writerow(row)
+                    cf = codecs.open('/Applications/Broccoli.app/Contents/Resources/with_embeddings2.csv', 'r',
+                                     encoding='utf-8').read()
+                    cf = cf.replace('[', '')
+                    cf = cf.replace(']', '')
+                    cf = cf.replace('"', '')
+                    cfline = cf.split('\n')
+                    lenline = []
+                    for i in range(len(cfline)):
+                        lenline.append(len(cfline[i].split(',')) - 3)
+                    lenline.sort()
+                    num = lenline[-1]
+                    listnum = []
+                    for r in range(num):
+                        listnum.append(r)
+                    for m in range(len(listnum)):
+                        listnum[m] = str(listnum[m])
+                    liststr = ','.join(listnum)
+                    del cfline[0]
+                    cfstr = '\n'.join(cfline)
+                    cfstr = 'title,heading,content,' + liststr + '\n' + cfstr
+                    with open('/Applications/Broccoli.app/Contents/Resources/with_embeddings3.csv', 'w',
+                              encoding='utf-8') as f0:
+                        f0.write(cfstr)
+                    # 读取 CSV 文件
+                    with open('/Applications/Broccoli.app/Contents/Resources/with_embeddings3.csv', 'r',
+                              encoding='utf-8') as input_file:
+                        reader = csv.reader(input_file)
+                        # 获取 CSV 文件的标题行
+                        header = next(reader)
+                        # 获取要删除的列的索引
+                        column_to_delete_index = header.index('content')
+                        # 创建一个新的 CSV 文件，并写入标题行
+                        with open(embedcsv, 'w', newline='', encoding='utf-8') as output_file:
+                            writer = csv.writer(output_file)
+                            writer.writerow([h for h in header if h != 'content'])
+                            # 遍历 CSV 文件的每一行，并删除要删除的列
+                            for row in reader:
+                                del row[column_to_delete_index]
+                                writer.writerow(row)
+                    SUCC = 1
+                except Exception as e:
+                    SUCC = 0
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                              encoding='utf-8') as f1:
+                        f1.write(
+                            f'- Q: Please embed {tarname}.\n\n- A: Error! {str(e)} Please try again!' + '\n\n---\n\n')
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                          encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+                # display
+                if SUCC == 1:
+                    with open('/Applications/Broccoli.app/Contents/Resources/title.txt', 'w', encoding='utf-8') as f0:
+                        f0.write(tarname.replace('.txt', ''))
+                    with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a',
+                              encoding='utf-8') as f1:
+                        f1.write(f'\n\n\t**Done!**' + '\n\n---\n\n')
+                    AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                          encoding='utf-8').read()
+                    endhtml = self.md2html(AllText)
+                    self.real1.setHtml(endhtml)
+                    self.real1.ensureCursorVisible()  # 游标可用
+                    cursor = self.real1.textCursor()  # 设置游标
+                    pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
+                    cursor.setPosition(pos)  # 游标位置设置为尾部
+                    self.real1.setTextCursor(cursor)  # 滚动到游标位置
+            if Which == '1' and bear != '' and api2 != '' and thirdp == '1':
                 ENDPOINT = bear + '/v1/embeddings'
                 AccountGPT = api2
                 HEADERS = {"Authorization": f"Bearer {AccountGPT}"}
@@ -4546,8 +4964,8 @@ class window4(QWidget):  # Customization settings
 
         self.le1.setVisible(True)
         self.qw6.setVisible(True)
-        if self.widget1.currentIndex() == 0:
-            self.qw6.setVisible(False)
+        # if self.widget1.currentIndex() == 0:
+        #     self.qw6.setVisible(False)
 
     def IndexChange(self, i):
         self.le1.setVisible(True)
@@ -4555,7 +4973,7 @@ class window4(QWidget):  # Customization settings
         if i == 0:
             with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('0')
-            self.qw6.setVisible(False)
+            #self.qw6.setVisible(False)
         if i == 1:
             with open('/Applications/Broccoli.app/Contents/Resources/which.txt', 'w', encoding='utf-8') as f0:
                 f0.write('1')
@@ -5519,6 +5937,7 @@ if __name__ == '__main__':
     action4.triggered.connect(w4.activate)
     action5.triggered.connect(w3.OpenHistory)
     action6.triggered.connect(w3.chatfilemode)
+    action7.triggered.connect(w3.assigntoall)
     btna4.triggered.connect(w3.pin_a_tab)
     btna5.triggered.connect(w5.activate)
     w3.btn0_1.clicked.connect(w4.activate)
