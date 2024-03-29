@@ -140,7 +140,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 1.1.6', self)
+        lbl1 = QLabel('Version 1.1.7', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -603,7 +603,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        self.lbl = QLabel('Current Version: v1.1.6', self)
+        self.lbl = QLabel('Current Version: v1.1.7', self)
         self.lbl.move(30, 45)
 
         lbl0 = QLabel('Download Update:', self)
@@ -1179,14 +1179,15 @@ end run'''"""
                             ResultEnd = ''.join(result)
                             with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
                                 f0.write(ResultEnd)
-                            message = "Your command is:" + '\n\t' + ResultEnd + '\n\n---\n\n'
+                            message = re.sub(r"「「START」」[\s\S]*?「「END」」", '', message)
+                            message = message.strip('\n') + "Your command is:" + '\n\t' + ResultEnd + '\n\n---\n\n'
                             self.te0.setText(ResultEnd)
                         if self.widget0.currentIndex() == 2 or self.widget0.currentIndex() == 3 or \
                                 self.widget0.currentIndex() == 4 or self.widget0.currentIndex() == 5 or \
                                 self.widget0.currentIndex() == 6:
                             pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                             result = pattern.findall(message)
-                            ResultEnd = ''.join(result)
+                            ResultEnd = ''.join(result).strip('\n').strip('\t')
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
                             uid = os.getuid()
                             env = os.environ.copy()
@@ -1198,7 +1199,8 @@ end run'''"""
                             # message = message.replace('\n', '\n\n\t')
                             # message = message.replace('\n\n\t\n\n\t', '\n\n\t')
                             # message = '\n\t' + message
-                            message = message + '\n\n---\n\n'
+                            message = re.sub(r"「「START」」[\s\S]*?「「END」」", '', message)
+                            message = message.strip('\n') + ResultEnd + '\n\n---\n\n'
 
                         #EndMess = '- A: ' + message + '\n\n---\n\n'
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'w', encoding='utf-8') as f1:
@@ -5271,6 +5273,16 @@ class window5(QWidget):  # 小窗口
             self.ask_LastQ = str(self.ask_text1.toPlainText())
             AccountGPT = codecs.open(BasePath + 'api.txt', 'r',
                                      encoding='utf-8').read()
+            ENDPOINT = 'https://api.openai.com/v1'
+            api2 = codecs.open('/Applications/Broccoli.app/Contents/Resources/api2.txt', 'r',
+                               encoding='utf-8').read()
+            bear = codecs.open('/Applications/Broccoli.app/Contents/Resources/bear.txt', 'r',
+                               encoding='utf-8').read()
+            thirdp = codecs.open('/Applications/Broccoli.app/Contents/Resources/third.txt', 'r',
+                                 encoding='utf-8').read()
+            if bear != '' and api2 != '' and thirdp == '1':
+                ENDPOINT = bear + '/v1'
+                AccountGPT = api2
             if AccountGPT != '' and self.ask_text1.toPlainText() != '':
                 QApplication.processEvents()
                 QApplication.restoreOverrideCursor()
@@ -5297,6 +5309,7 @@ class window5(QWidget):  # 小窗口
                 signal.signal(signal.SIGALRM, w3.timeout_handler)
                 signal.alarm(timeout)  # set timer to 15 seconds
                 try:
+                    openai.api_base = ENDPOINT
                     openai.api_key = AccountGPT
                     history = ''
                     showhistory = codecs.open(BasePath + 'history.txt', 'r',
