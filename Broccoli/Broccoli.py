@@ -140,7 +140,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 1.1.7', self)
+        lbl1 = QLabel('Version 1.1.8', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -603,7 +603,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        self.lbl = QLabel('Current Version: v1.1.7', self)
+        self.lbl = QLabel('Current Version: v1.1.8', self)
         self.lbl.move(30, 45)
 
         lbl0 = QLabel('Download Update:', self)
@@ -1015,6 +1015,14 @@ end run'''"""
         raise TimeoutException("Timeout")
 
     def SendX(self):
+        if self.trans % 2 == 1: # now the mode is text
+            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                  encoding='utf-8').read()
+            self.trans += 1
+            self.real1.setReadOnly(True)
+            self.real1.textChanged.disconnect(self.save_text)
+            endhtml = self.md2html(AllText)
+            self.real1.setHtml(endhtml)
         self.btn_sub1.setDisabled(True)
         self.btn_sub4.setDisabled(True)
         modelnow = codecs.open('/Applications/Broccoli.app/Contents/Resources/modelnow.txt', 'r', encoding='utf-8').read()
@@ -1176,7 +1184,7 @@ end run'''"""
                         if self.widget0.currentIndex() == 1:
                             pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                             result = pattern.findall(message)
-                            ResultEnd = ''.join(result)
+                            ResultEnd = ''.join(result).strip('\n').strip('\t').strip('\n').strip('\t')
                             with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
                                 f0.write(ResultEnd)
                             message = re.sub(r"「「START」」[\s\S]*?「「END」」", '', message)
@@ -1187,7 +1195,7 @@ end run'''"""
                                 self.widget0.currentIndex() == 6:
                             pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                             result = pattern.findall(message)
-                            ResultEnd = ''.join(result).strip('\n').strip('\t')
+                            ResultEnd = ''.join(result).strip('\n').strip('\t').strip('\n').strip('\t')
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
                             uid = os.getuid()
                             env = os.environ.copy()
@@ -1218,7 +1226,7 @@ end run'''"""
                         self.text1.clear()
                     except TimeoutException:
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+                            f1.write('Timed out, please try again!' + '\n\n---\n\n')
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                         endhtml = self.md2html(AllText)
                         self.real1.setHtml(endhtml)
@@ -1230,7 +1238,7 @@ end run'''"""
                         self.text1.setPlainText(self.LastQ)
                     except Exception as e:
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write('- A: Error, please try again!' + str(e) + '\n\n---\n\n')
+                            f1.write('Error, please try again!' + str(e) + '\n\n---\n\n')
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                         endhtml = self.md2html(AllText)
                         self.real1.setHtml(endhtml)
@@ -1386,7 +1394,7 @@ end run'''"""
                             if self.widget0.currentIndex() == 1:
                                 pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                                 result = pattern.findall(message)
-                                ResultEnd = ''.join(result)
+                                ResultEnd = ''.join(result).strip('\n').strip('\t').strip('\n').strip('\t')
                                 with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
                                     f0.write(ResultEnd)
                                 message = "Your command is:" + '\n\t' + ResultEnd
@@ -1396,7 +1404,7 @@ end run'''"""
                                     self.widget0.currentIndex() == 6:
                                 pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                                 result = pattern.findall(message)
-                                ResultEnd = ''.join(result)
+                                ResultEnd = ''.join(result).strip('\n').strip('\t').strip('\n').strip('\t')
                                 ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
                                 uid = os.getuid()
                                 env = os.environ.copy()
@@ -1693,7 +1701,7 @@ end run'''"""
                         self.text1.clear()
                     except TimeoutException:
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write('- A: Timed out, please try again!' + '\n\n---\n\n')
+                            f1.write('Timed out, please try again!' + '\n\n---\n\n')
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                         endhtml = self.md2html(AllText)
                         self.real1.setHtml(endhtml)
@@ -1705,7 +1713,7 @@ end run'''"""
                         self.text1.setPlainText(self.LastQ)
                     except Exception as e:
                         with open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'a', encoding='utf-8') as f1:
-                            f1.write('- A: Error, please try again!' + str(e) + '\n\n---\n\n')
+                            f1.write('Error, please try again!' + str(e) + '\n\n---\n\n')
                         AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
                         endhtml = self.md2html(AllText)
                         self.real1.setHtml(endhtml)
@@ -5260,6 +5268,14 @@ class window5(QWidget):  # 小窗口
         self.ask_btn_2.raise_()
 
     def bot2send(self):
+        if w3.trans % 2 == 1: # now the mode is text
+            AllText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r',
+                                  encoding='utf-8').read()
+            w3.trans += 1
+            w3.real1.setReadOnly(True)
+            w3.real1.textChanged.disconnect(w3.save_text)
+            endhtml = w3.md2html(AllText)
+            w3.real1.setHtml(endhtml)
         self.ask_btn_0.setDisabled(True)
         modelnow = codecs.open(BasePath + 'modelnow.txt', 'r', encoding='utf-8').read()
         Which = codecs.open(BasePath + 'which.txt', 'r', encoding='utf-8').read()
@@ -5388,7 +5404,7 @@ class window5(QWidget):  # 小窗口
                             self.ask_widget0.currentIndex() == 5:
                         pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                         result = pattern.findall(message)
-                        ResultEnd = ''.join(result)
+                        ResultEnd = ''.join(result).strip('\n').strip('\t').strip('\n').strip('\t')
                         ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
                         uid = os.getuid()
                         env = os.environ.copy()
@@ -5605,7 +5621,7 @@ class window5(QWidget):  # 小窗口
                                 self.ask_widget0.currentIndex() == 5:
                             pattern = re.compile(r'「「START」」([\s\S]*?)「「END」」')
                             result = pattern.findall(message)
-                            ResultEnd = ''.join(result)
+                            ResultEnd = ''.join(result).strip('\n').strip('\t').strip('\n').strip('\t')
                             ResultEnd = ResultEnd.encode('utf-8').decode('utf-8', 'ignore')
                             uid = os.getuid()
                             env = os.environ.copy()

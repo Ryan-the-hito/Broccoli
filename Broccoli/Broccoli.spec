@@ -3,7 +3,7 @@
 
 block_cipher = None
 
-__version__ = '1.1.7'
+__version__ = '1.1.8'
 
 
 a = Analysis(
