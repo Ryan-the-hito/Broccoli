@@ -3,14 +3,14 @@
 
 block_cipher = None
 
-__version__ = '1.1.8'
+__version__ = '1.1.9'
 
 
 a = Analysis(
     ['Broccoli.py'],
     pathex=['/Users/ryanshenefield/Downloads/Broccoli.py'],
     binaries=[],
-    datas=[('Broccolimen.icns', '.'), ('Broccolidsk.icns', '.'), ('Broccolimen.png', '.'), ('wechat50.png', '.'), ('wechat20.png', '.'), ('wechat10.png', '.'), ('wechat5.png', '.'), ('alipay50.png', '.'), ('alipay20.png', '.'), ('alipay10.png', '.'), ('alipay5.png', '.'), ('api.txt', '.'), ('output.txt', '.'), ('which.txt', '.'), ('command.txt', '.'), ('history.txt', '.'), ('wp.txt', '.'), ('title.txt', '.'), ('api2.txt', '.'), ('bear.txt', '.'), ('third.txt', '.'), ('temp.txt', '.'), ('max.txt', '.'), ('timeout.txt', '.'), ('showref.txt', '.'), ('ref.txt', '.'), ('set2.png', '.'), ('prog.txt', '.'), ('total.txt', '.'), ('modelnow.txt', '.'), ('close.png', '.'), ('transfer2.png', '.'), ('/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/jieba', 'jieba')],
+    datas=[('Broccolimen.icns', '.'), ('Broccolidsk.icns', '.'), ('Broccolimen.png', '.'), ('wechat50.png', '.'), ('wechat20.png', '.'), ('wechat10.png', '.'), ('wechat5.png', '.'), ('alipay50.png', '.'), ('alipay20.png', '.'), ('alipay10.png', '.'), ('alipay5.png', '.'), ('api.txt', '.'), ('output.txt', '.'), ('which.txt', '.'), ('command.txt', '.'), ('history.txt', '.'), ('wp.txt', '.'), ('title.txt', '.'), ('api2.txt', '.'), ('bear.txt', '.'), ('third.txt', '.'), ('temp.txt', '.'), ('max.txt', '.'), ('timeout.txt', '.'), ('showref.txt', '.'), ('ref.txt', '.'), ('set2.png', '.'), ('prog.txt', '.'), ('total.txt', '.'), ('modelnow.txt', '.'), ('close.png', '.'), ('transfer2.png', '.'), ('UI_short.txt', '.'), ('MINI_short.txt', '.'), ('which_short.txt', '.'), ('/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/jieba', 'jieba')],
     hiddenimports=['torch', 'transformers', 'anyio', 'anyio._backends', 'requests', 'tqdm'],
     hookspath=[],
     hooksconfig={},

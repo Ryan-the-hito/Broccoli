@@ -140,7 +140,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 1.1.8', self)
+        lbl1 = QLabel('Version 1.1.9', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -603,7 +603,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        self.lbl = QLabel('Current Version: v1.1.8', self)
+        self.lbl = QLabel('Current Version: v1.1.9', self)
         self.lbl.move(30, 45)
 
         lbl0 = QLabel('Download Update:', self)
@@ -971,6 +971,8 @@ class MyWidget(QWidget):  # 主窗口
         self.btn0_2.raise_()
         self.trans = 0
 
+        self.broccolishort()
+
     def move_window(self, width, height):
         animation = QPropertyAnimation(self, b"geometry", self)
         animation.setDuration(250)
@@ -998,6 +1000,16 @@ on run
 end run'''"""
         try:
             os.system(cmd)
+        except Exception as e:
+            pass
+
+    def broccolishort(self):
+        cmd = """
+            tell application "/Applications/Broccoli.app/Contents/Auto/BroccoliShort.app"
+                activate
+            end tell"""
+        try:
+            subprocess.call(['osascript', '-e', cmd])
         except Exception as e:
             pass
 
@@ -1104,7 +1116,7 @@ end run'''"""
                             A = tokenizer.encode(reststr, add_special_tokens=True)
                             continue
                         if self.widget0.currentIndex() == 0:
-                            prompt = reststr
+                            prompt = "You should only answer the last question but also refer to the prior questions as the background:" + reststr
                         if self.widget0.currentIndex() == 1:
                             prompt = f"""Reply only the Applescript to fullfill this command. Don’t reply any other explanations. Before the code starts, write "「「START」」" and write "「「END」」” after it ends. Don't reply with method that needs further information and revision. Command: {str(self.text1.toPlainText())}. """
                         if self.widget0.currentIndex() == 2:
@@ -1351,7 +1363,7 @@ end run'''"""
                             conversation_history = []
                             prompt = str(self.text1.toPlainText())
                             if self.widget0.currentIndex() == 0:
-                                ori_history = [{"role": "user", "content": "Hey."}, {"role": "assistant", "content": "Hello! I'm happy to help you."}]
+                                ori_history = [{"role": "user", "content": "Hey. You should only answer the last question but also refer to the prior questions as the background:"}, {"role": "assistant", "content": "Hello! I'm happy to help you."}]
                                 conversation_history = ori_history
                                 showhistory = codecs.open('/Applications/Broccoli.app/Contents/Resources/history.txt', 'r',
                                                       encoding='utf-8').read()
@@ -4767,7 +4779,7 @@ class window4(QWidget):  # Customization settings
 
     def initUI(self):  # 设置窗口内布局
         self.setUpMainWindow()
-        self.setFixedSize(500, 650)
+        self.setFixedSize(550, 700)
         self.center()
         self.setWindowTitle('Customization settings')
         self.setFocus()
@@ -4859,6 +4871,46 @@ class window4(QWidget):  # Customization settings
         self.frame2 = QFrame(self)
         self.frame2.setFrameShape(QFrame.Shape.HLine)
         self.frame2.setFrameShadow(QFrame.Shadow.Sunken)
+
+        ###
+
+        self.btn_ui = QPushButton('Record Main window shortcut', self)
+        self.btn_ui.clicked.connect(self.recordui)
+        self.btn_ui.setFixedSize(200, 20)
+
+        self.le_ui = QLineEdit(self)
+        with open('/Applications/Broccoli.app/Contents/Resources/UI_short.txt', 'a', encoding='utf-8') as f0:
+            f0.write('')
+        uishort = codecs.open('/Applications/Broccoli.app/Contents/Resources/UI_short.txt', 'r', encoding='utf-8').read()
+        if uishort != '':
+            self.le_ui.setText(uishort)
+
+        self.uinum = 0
+
+        ###
+
+        self.btn_mini = QPushButton('Record Mini Broccoli shortcut', self)
+        self.btn_mini.clicked.connect(self.recordmini)
+        self.btn_mini.setFixedSize(200, 20)
+
+        self.le_mini = QLineEdit(self)
+        with open('/Applications/Broccoli.app/Contents/Resources/MINI_short.txt', 'a', encoding='utf-8') as f0:
+            f0.write('')
+        minishort = codecs.open('/Applications/Broccoli.app/Contents/Resources/MINI_short.txt', 'r',
+                              encoding='utf-8').read()
+        if minishort != '':
+            self.le_mini.setText(minishort)
+
+        self.mininum = 0
+
+        with open('/Applications/Broccoli.app/Contents/Resources/which_short.txt', 'w', encoding='utf-8') as f0:
+            f0.write('')
+
+        ###
+
+        self.frame3 = QFrame(self)
+        self.frame3.setFrameShape(QFrame.Shape.HLine)
+        self.frame3.setFrameShadow(QFrame.Shadow.Sunken)
 
         self.te1 = QTextEdit(self)
         home_dir = str(Path.home())
@@ -4953,6 +5005,20 @@ class window4(QWidget):  # Customization settings
         vbox6.addWidget(qw4)
         self.qw6.setLayout(vbox6)
 
+        self.qw7 = QWidget()
+        vbox7 = QHBoxLayout()
+        vbox7.setContentsMargins(0, 0, 0, 0)
+        vbox7.addWidget(self.btn_ui)
+        vbox7.addWidget(self.le_ui)
+        self.qw7.setLayout(vbox7)
+
+        self.qw8 = QWidget()
+        vbox8 = QHBoxLayout()
+        vbox8.setContentsMargins(0, 0, 0, 0)
+        vbox8.addWidget(self.btn_mini)
+        vbox8.addWidget(self.le_mini)
+        self.qw8.setLayout(vbox8)
+
         vbox1 = QVBoxLayout()
         vbox1.setContentsMargins(20, 20, 20, 20)
         vbox1.addWidget(self.widget1)
@@ -4966,6 +5032,9 @@ class window4(QWidget):  # Customization settings
         vbox1.addWidget(self.le1)
         vbox1.addWidget(self.qw6)
         vbox1.addWidget(self.frame2)
+        vbox1.addWidget(self.qw7)
+        vbox1.addWidget(self.qw8)
+        vbox1.addWidget(self.frame3)
         vbox1.addWidget(self.te2)
         vbox1.addWidget(self.te0)
         vbox1.addWidget(self.te1)
@@ -5064,6 +5133,68 @@ class window4(QWidget):  # Customization settings
             with open('/Applications/Broccoli.app/Contents/Resources/history.txt', 'w', encoding='utf-8') as f0:
                 f0.write('0')
 
+    def recordui(self):
+        self.uinum += 1
+        if self.uinum % 2 == 1:  # 开始
+            self.btn_ui.setStyleSheet('''
+                QPushButton{
+                border: 1px outset grey;
+                background-color: #0085FF;
+                border-radius: 4px;
+                padding: 1px;
+                color: #FFFFFF
+                }
+                ''')
+            self.btn_ui.setText('Done')
+            with open('/Applications/Broccoli.app/Contents/Resources/UI_short.txt', 'w', encoding='utf-8') as f0:
+                f0.write('')
+            with open('/Applications/Broccoli.app/Contents/Resources/which_short.txt', 'w', encoding='utf-8') as f0:
+                f0.write('/Applications/Broccoli.app/Contents/Resources/UI_short.txt')
+        if self.uinum % 2 == 0:  # 结束
+            self.btn_ui.setStyleSheet('''
+                QPushButton{
+                border: 1px outset grey;
+                background-color: #FFFFFF;
+                border-radius: 4px;
+                padding: 1px;
+                color: #000000
+                }
+                ''')
+            self.btn_ui.setText('Record Main window shortcut')
+            with open('/Applications/Broccoli.app/Contents/Resources/which_short.txt', 'w', encoding='utf-8') as f0:
+                f0.write('')
+
+    def recordmini(self):
+        self.mininum += 1
+        if self.mininum % 2 == 1:  # 开始
+            self.btn_mini.setStyleSheet('''
+                QPushButton{
+                border: 1px outset grey;
+                background-color: #0085FF;
+                border-radius: 4px;
+                padding: 1px;
+                color: #FFFFFF
+                }
+                ''')
+            self.btn_mini.setText('Done')
+            with open('/Applications/Broccoli.app/Contents/Resources/MINI_short.txt', 'w', encoding='utf-8') as f0:
+                f0.write('')
+            with open('/Applications/Broccoli.app/Contents/Resources/which_short.txt', 'w', encoding='utf-8') as f0:
+                f0.write('/Applications/Broccoli.app/Contents/Resources/MINI_short.txt')
+        if self.mininum % 2 == 0:  # 结束
+            self.btn_mini.setStyleSheet('''
+                QPushButton{
+                border: 1px outset grey;
+                background-color: #FFFFFF;
+                border-radius: 4px;
+                padding: 1px;
+                color: #000000
+                }
+                ''')
+            self.btn_mini.setText('Record Mini Broccoli shortcut')
+            with open('/Applications/Broccoli.app/Contents/Resources/which_short.txt', 'w', encoding='utf-8') as f0:
+                f0.write('')
+
     def center(self):  # 设置窗口居中
         qr = self.frameGeometry()
         cp = self.screen().availableGeometry().center()
@@ -5071,8 +5202,86 @@ class window4(QWidget):  # Customization settings
         self.move(qr.topLeft())
 
     def keyPressEvent(self, e):  # 当页面显示的时候，按下esc键可关闭窗口
-        if e.key() == Qt.Key.Key_Escape.value:
-            self.close()
+        key_code = e.key()
+        key_mapping = {
+            Qt.Key.Key_Escape: "<esc>",
+            Qt.Key.Key_Meta: "<ctrl>",
+            Qt.Key.Key_Alt: "<alt>",
+            Qt.Key.Key_Control: "<cmd>",
+            Qt.Key.Key_Shift: "<shift>",
+            Qt.Key.Key_Up: "<up>",
+            Qt.Key.Key_Down: "<down>",
+            Qt.Key.Key_Left: "<left>",
+            Qt.Key.Key_Right: "<right>",
+            Qt.Key.Key_Space: "<space>",
+            Qt.Key.Key_Minus: "-",
+            Qt.Key.Key_Equal: "=",
+            Qt.Key.Key_A: "a",  # 多个字母键
+            Qt.Key.Key_B: "b",
+            Qt.Key.Key_C: "c",
+            Qt.Key.Key_D: "d",
+            Qt.Key.Key_E: "e",
+            Qt.Key.Key_F: "f",  # F
+            Qt.Key.Key_G: "g",  # G
+            Qt.Key.Key_H: "h",  # H
+            Qt.Key.Key_I: "i",  # I
+            Qt.Key.Key_J: "j",  # J
+            Qt.Key.Key_K: "k",  # K
+            Qt.Key.Key_L: "l",  # L
+            Qt.Key.Key_M: "m",  # M
+            Qt.Key.Key_N: "n",  # N
+            Qt.Key.Key_O: "o",  # O
+            Qt.Key.Key_P: "p",  # P
+            Qt.Key.Key_Q: "q",  # Q
+            Qt.Key.Key_R: "r",  # R
+            Qt.Key.Key_S: "s",  # S
+            Qt.Key.Key_T: "t",  # T
+            Qt.Key.Key_U: "u",  # U
+            Qt.Key.Key_V: "v",  # V
+            Qt.Key.Key_W: "w",  # W
+            Qt.Key.Key_X: "x",  # X
+            Qt.Key.Key_Y: "y",  # Y
+            Qt.Key.Key_Z: "z",  # Z
+            Qt.Key.Key_BracketLeft: "[",
+            Qt.Key.Key_BracketRight: "]",
+            Qt.Key.Key_Backslash: "\\",
+            Qt.Key.Key_Semicolon: ";",
+            Qt.Key.Key_Apostrophe: "'",
+            Qt.Key.Key_Comma: ",",
+            Qt.Key.Key_Period: ".",
+            Qt.Key.Key_Slash: "/",
+            Qt.Key.Key_0: "0",
+            Qt.Key.Key_1: "1",
+            Qt.Key.Key_2: "2",
+            Qt.Key.Key_3: "3",
+            Qt.Key.Key_4: "4",
+            Qt.Key.Key_5: "5",
+            Qt.Key.Key_6: "6",
+            Qt.Key.Key_7: "7",
+            Qt.Key.Key_8: "8",
+            Qt.Key.Key_9: "9",
+            # 可以继续添加更多按键...
+        }
+        # 获取按键对应的名称
+        key_name = key_mapping.get(key_code, f"Unknown key code: {key_code}")
+        whichshort = codecs.open('/Applications/Broccoli.app/Contents/Resources/which_short.txt', 'r', encoding='utf-8').read()
+        if 'Unknown key code' not in key_name and whichshort != '':
+            with open(whichshort, 'a', encoding='utf-8') as f0:
+                f0.write(f'+{key_name}')
+            short = codecs.open(whichshort, 'r', encoding='utf-8').read()
+            short = short.lstrip('+')
+            with open(whichshort, 'w', encoding='utf-8') as f0:
+                f0.write(short)
+            # renew two LineEdit
+            uishort = codecs.open('/Applications/Broccoli.app/Contents/Resources/UI_short.txt', 'r',
+                                  encoding='utf-8').read()
+            if uishort != '':
+                self.le_ui.setText(uishort)
+            minishort = codecs.open('/Applications/Broccoli.app/Contents/Resources/MINI_short.txt', 'r',
+                                    encoding='utf-8').read()
+            if uishort != '':
+                self.le_mini.setText(minishort)
+        # print(f"Key pressed: {key_name}")  # 打印按键名称
 
     def activate(self):  # 设置窗口显示
         self.show()
