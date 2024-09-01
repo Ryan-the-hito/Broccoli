@@ -81,7 +81,7 @@ menu.addSeparator()
 
 # Add a Quit option to the menu.
 quit = QAction("Quit")
-quit.triggered.connect(app.quit)
+#quit.triggered.connect(app.quit)
 menu.addAction(quit)
 
 # Add the menu to the tray
@@ -140,7 +140,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         widg2.setLayout(blay2)
 
         widg3 = QWidget()
-        lbl1 = QLabel('Version 1.1.9', self)
+        lbl1 = QLabel('Version 1.2.0', self)
         blay3 = QHBoxLayout()
         blay3.setContentsMargins(0, 0, 0, 0)
         blay3.addStretch()
@@ -603,7 +603,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
 
     def initUI(self):  # 说明页面内信息
 
-        self.lbl = QLabel('Current Version: v1.1.9', self)
+        self.lbl = QLabel('Current Version: v1.2.0', self)
         self.lbl.move(30, 45)
 
         lbl0 = QLabel('Download Update:', self)
@@ -4771,6 +4771,12 @@ end run'''"""
     def cancel(self):  # 设置取消键的功能
         self.close()
 
+    def totalquit(self):
+        shortcmd = """set myCommand to "killall BroccoliShort"
+                			do shell script myCommand"""
+        subprocess.call(['osascript', '-e', shortcmd])
+        app.quit()
+
 
 class window4(QWidget):  # Customization settings
     def __init__(self):
@@ -5106,6 +5112,24 @@ class window4(QWidget):  # Customization settings
             while '' in modellist:
                 modellist.remove('')
             self.widget2.addItems(modellist)
+        uishort = self.le_ui.text()
+        minishort = self.le_mini.text()
+        with open('/Applications/Broccoli.app/Contents/Resources/UI_short.txt', 'w', encoding='utf-8') as f0:
+            f0.write(uishort)
+        with open('/Applications/Broccoli.app/Contents/Resources/MINI_short.txt', 'w', encoding='utf-8') as f0:
+            f0.write(minishort)
+        shortcmd = """set myCommand to "killall BroccoliShort"
+                        			do shell script myCommand"""
+        subprocess.call(['osascript', '-e', shortcmd])
+        time.sleep(1)
+        cmd = """
+            tell application "/Applications/Broccoli.app/Contents/Auto/BroccoliShort.app"
+                activate
+            end tell"""
+        try:
+            subprocess.call(['osascript', '-e', cmd])
+        except Exception as e:
+            pass
         self.widget2.setCurrentIndex(nowmodel)
         self.close()
 
@@ -6180,5 +6204,6 @@ if __name__ == '__main__':
     btna5.triggered.connect(w5.activate)
     w3.btn0_1.clicked.connect(w4.activate)
     w3.btn0_2.clicked.connect(w3.transferview)
+    quit.triggered.connect(w3.totalquit)
     app.setStyleSheet(style_sheet_ori)
     app.exec()
