@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QTreeView, QSplitter, QGraphicsView,
                              QGraphicsScene, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsLineItem)
 from PyQt6.QtCore import Qt, QRect, QRectF, QPropertyAnimation, QTimer, QThread, pyqtSignal, QObject, QEasingCurve, QPoint, QPointF, QUrl, QProcess, QEvent, QSize, QSignalBlocker
-from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem
+from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem, QRegion
 import PyQt6.QtGui
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript
@@ -52,6 +52,7 @@ import signal
 import base64
 import mimetypes
 import json
+import plistlib
 import copy
 import shutil
 import fnmatch
@@ -70,6 +71,10 @@ import urllib3
 import logging
 import threading
 import queue
+import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from ctypes import c_void_p
+from io import BytesIO
 from urllib.parse import urljoin
 try:
     from watchdog.observers import Observer
@@ -80,8 +85,10 @@ except Exception:
     FileSystemEventHandler = object
     WATCHDOG_AVAILABLE = False
 try:
+    import AppKit
     from AppKit import NSApp, NSColor
 except ImportError:
+    AppKit = None
     NSApp = None
     NSColor = None
 try:
@@ -131,14 +138,32 @@ def _global_excepthook(exc_type, exc_value, exc_tb):
     traceback.print_exception(exc_type, exc_value, exc_tb)
 sys.excepthook = _global_excepthook
 
-BasePath = '/Applications/Broccoli.app/Contents/Resources/'
+
+def _resolve_bundled_resources_dir() -> str:
+    current_path = Path(__file__).resolve()
+    for parent in [current_path.parent, *current_path.parents]:
+        if parent.name == 'Resources' and parent.parent.name == 'Contents':
+            return str(parent)
+    installed_resources = Path('/Applications/Broccoli.app/Contents/Resources')
+    if installed_resources.exists():
+        return str(installed_resources)
+    return str(current_path.parent)
+
+
 NAME = 'Broccoli'
-VERSION = '2.0.1'
-SHOWHIDE_PATH = '/Applications/Broccoli.app/Contents/Resources/showhide.txt'
-UI_SHORTCUT_PATH = '/Applications/Broccoli.app/Contents/Resources/UI_short.txt'
+VERSION = '2.0.2'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
+BUNDLED_RESOURCES_DIR = _resolve_bundled_resources_dir()
+BROCCOLI_APPLICATION_SUPPORT_DIR = os.path.join(str(Path.home()), 'Library', 'Application Support', 'Broccoli')
+BROCCOLI_USER_RESOURCES_DIR = os.path.join(BROCCOLI_APPLICATION_SUPPORT_DIR, 'Resources')
+BROCCOLI_RESOURCES_INITIALIZED = False
+BasePath = BROCCOLI_USER_RESOURCES_DIR + os.sep
+SHOWHIDE_PATH = os.path.join(BROCCOLI_USER_RESOURCES_DIR, 'showhide.txt')
+UI_SHORTCUT_PATH = os.path.join(BROCCOLI_USER_RESOURCES_DIR, 'UI_short.txt')
 BROCCOLI_APP_DATA_DIR = os.path.join(str(Path.home()), 'BroccoliAppPath')
+BROCCOLI_LAUNCH_AGENT_LABEL = 'com.ryanthehito.broccoli'
+BROCCOLI_LAUNCH_AGENT_FILENAME = f'{BROCCOLI_LAUNCH_AGENT_LABEL}.plist'
 LAST_SCREENSHOT_REGION_PATH = os.path.join(BROCCOLI_APP_DATA_DIR, 'last_screenshot_region.json')
 USERSCRIPTS_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'Userscripts')
 SETTINGS_PROFILES_PATH = os.path.join(BROCCOLI_APP_DATA_DIR, 'settings_profiles.json')
@@ -161,6 +186,8 @@ CONVERSATIONS_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'Conversations')
 WEBFETCH_INBOX_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'WebFetchInbox')
 SCREENSHOT_CAPTURE_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'CaptureAttachments')
 TAB_GENERATED_OUTPUTS_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'TabGeneratedOutputs')
+BACKGROUND_VISION_RECORDS_PATH = os.path.join(BROCCOLI_APP_DATA_DIR, 'background_vision_records.json')
+BACKGROUND_VISION_CAPTURE_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'BackgroundVisionCaptures')
 TERMINAL_COMMAND_HISTORY_PATH = os.path.join(BROCCOLI_APP_DATA_DIR, 'terminal_command_history.json')
 TERMINAL_FAVORITES_PATH = os.path.join(BROCCOLI_APP_DATA_DIR, 'terminal_favorites.json')
 DEFAULT_ZSH_HISTORY_PATH = os.path.join(str(Path.home()), '.zsh_history')
@@ -172,6 +199,19 @@ DEFAULT_EXTERNAL_CONTEXT_EXCLUDE_PATTERNS = '.git/*, node_modules/*, .venv/*, __
 DEFAULT_EXTERNAL_CONTEXT_MAX_FILES = 80
 DEFAULT_EXTERNAL_CONTEXT_FILE_CHARS = 160000
 DEFAULT_WATERMELON_CONTEXT_PATH = os.path.join(str(Path.home()), 'WatermelonAppPath')
+DEFAULT_BACKGROUND_VISION_PROMPT = (
+    'You are Broccoli background vision. Analyze the current full-screen screenshot and return a concise '
+    'description of what the user appears to be doing, visible app/page context, important on-screen text, '
+    'and any likely next-step context that could help a later assistant response. Do not invent hidden details. '
+    'Keep the answer compact and practical.'
+)
+DEFAULT_BACKGROUND_VISION_INTERVAL_SECONDS = 30
+DEFAULT_BACKGROUND_VISION_COMPLETION_DELAY_SECONDS = 5
+DEFAULT_BACKGROUND_VISION_TOAST_SECONDS = 12
+DEFAULT_BACKGROUND_VISION_MAX_WORKERS = 1
+DEFAULT_BACKGROUND_VISION_MAX_HISTORY_MESSAGES = 8
+DEFAULT_BACKGROUND_VISION_MAX_RECORDS = 120
+DEFAULT_BACKGROUND_VISION_CONTEXT_MAX_CHARS = 6000
 MCP_HTTP_PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26')
 MCP_HTTP_DISCOVERY_TIMEOUT = 15
 MCP_HTTP_CONTEXT_MAX_TOOL_CALLS = 3
@@ -344,6 +384,8 @@ else:
 
 
 def read_text_file(path: str, default: str = '') -> str:
+    if is_broccoli_user_resource_path(path):
+        ensure_broccoli_resource_dir()
     try:
         return codecs.open(path, 'r', encoding='utf-8').read().strip()
     except FileNotFoundError:
@@ -351,23 +393,147 @@ def read_text_file(path: str, default: str = '') -> str:
 
 
 def write_text_file(path: str, content: str) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, 'w', encoding='utf-8') as handle:
         handle.write(content)
 
 
 def read_file_contents(path: str, default: str = '') -> str:
+    if is_broccoli_user_resource_path(path):
+        ensure_broccoli_resource_dir()
     try:
         return codecs.open(path, 'r', encoding='utf-8').read()
     except FileNotFoundError:
         return default
 
 
+def is_broccoli_user_resource_path(path: str) -> bool:
+    try:
+        return Path(path).resolve().is_relative_to(Path(BROCCOLI_USER_RESOURCES_DIR).resolve())
+    except Exception:
+        return False
+
+
+def ensure_broccoli_resource_dir() -> None:
+    global BROCCOLI_RESOURCES_INITIALIZED
+    if BROCCOLI_RESOURCES_INITIALIZED:
+        return
+    target_dir = Path(BROCCOLI_USER_RESOURCES_DIR)
+    source_dir = Path(BUNDLED_RESOURCES_DIR)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if source_dir.exists() and source_dir.resolve() != target_dir.resolve():
+            for source in source_dir.iterdir():
+                if not source.is_file():
+                    continue
+                target = target_dir / source.name
+                if not target.exists():
+                    shutil.copy2(source, target)
+    except Exception:
+        logging.exception("Failed to initialize Broccoli user resources.")
+
+    default_files = {
+        'showhide.txt': '1',
+        'UI_short.txt': DEFAULT_UI_SHORTCUT,
+        'api.txt': '',
+        'api2.txt': '',
+        'bear.txt': DEFAULT_ENDPOINT,
+        'third.txt': '0',
+        'which.txt': '0',
+        'timeout.txt': '60',
+        'showref.txt': '0',
+        'history.txt': '0',
+        'modelnow.txt': DEFAULT_MODEL,
+        'wp.txt': '0',
+        'output.txt': '',
+        'command.txt': '',
+    }
+    for filename, content in default_files.items():
+        path = target_dir / filename
+        if not path.exists():
+            try:
+                path.write_text(content, encoding='utf-8')
+            except Exception:
+                logging.exception("Failed to create default Broccoli resource file: %s", path)
+    BROCCOLI_RESOURCES_INITIALIZED = True
+
+
+def resource_path(filename: str) -> str:
+    ensure_broccoli_resource_dir()
+    user_path = Path(BROCCOLI_USER_RESOURCES_DIR) / filename
+    if user_path.exists():
+        return str(user_path)
+    bundled_path = Path(BUNDLED_RESOURCES_DIR) / filename
+    if bundled_path.exists():
+        return str(bundled_path)
+    return str(user_path)
+
+
 def ensure_broccoli_data_dir() -> None:
+    ensure_broccoli_resource_dir()
     os.makedirs(BROCCOLI_APP_DATA_DIR, exist_ok=True)
     os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
     os.makedirs(WEBFETCH_INBOX_DIR, exist_ok=True)
     os.makedirs(TAB_GENERATED_OUTPUTS_DIR, exist_ok=True)
     os.makedirs(USERSCRIPTS_DIR, exist_ok=True)
+    os.makedirs(BACKGROUND_VISION_CAPTURE_DIR, exist_ok=True)
+
+
+def broccoli_launch_agent_path() -> Path:
+    return Path.home() / 'Library' / 'LaunchAgents' / BROCCOLI_LAUNCH_AGENT_FILENAME
+
+
+def is_start_on_login_enabled() -> bool:
+    return broccoli_launch_agent_path().exists()
+
+
+def broccoli_launch_target_arguments() -> list[str]:
+    candidates = []
+    try:
+        current_path = Path(__file__).resolve()
+        for parent in [current_path, *current_path.parents]:
+            if parent.suffix == '.app' and parent.exists():
+                candidates.append(parent)
+                break
+    except Exception:
+        pass
+    candidates.append(Path('/Applications/Broccoli.app'))
+    for candidate in candidates:
+        if candidate.exists():
+            return ['/usr/bin/open', str(candidate)]
+    return [sys.executable, str(Path(__file__).resolve())]
+
+
+def build_broccoli_launch_agent_payload() -> dict:
+    stdout_path = os.path.join(BROCCOLI_APP_DATA_DIR, 'start_on_login.out.log')
+    stderr_path = os.path.join(BROCCOLI_APP_DATA_DIR, 'start_on_login.err.log')
+    return {
+        'Label': BROCCOLI_LAUNCH_AGENT_LABEL,
+        'ProgramArguments': broccoli_launch_target_arguments(),
+        'RunAtLoad': True,
+        'KeepAlive': False,
+        'LimitLoadToSessionType': 'Aqua',
+        'StandardOutPath': stdout_path,
+        'StandardErrorPath': stderr_path,
+    }
+
+
+def set_start_on_login_enabled(enabled: bool) -> None:
+    launch_agent_path = broccoli_launch_agent_path()
+    if enabled:
+        ensure_broccoli_data_dir()
+        launch_agent_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = build_broccoli_launch_agent_payload()
+        with open(launch_agent_path, 'wb') as handle:
+            plistlib.dump(payload, handle)
+        os.chmod(launch_agent_path, 0o644)
+        return
+    try:
+        launch_agent_path.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _load_json_list(path: str) -> list:
@@ -386,6 +552,217 @@ def _save_json_list(path: str, items: list) -> None:
     ensure_broccoli_data_dir()
     with open(path, 'w', encoding='utf-8') as handle:
         json.dump(list(items or []), handle, ensure_ascii=False, indent=2)
+
+
+def _coerce_int(value, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        parsed = int(default)
+    if min_value is not None:
+        parsed = max(min_value, parsed)
+    if max_value is not None:
+        parsed = min(max_value, parsed)
+    return parsed
+
+
+def normalize_background_vision_schedule_mode(value) -> str:
+    mode = str(value or '').strip()
+    return mode if mode in {'fixed_interval', 'after_completion'} else 'fixed_interval'
+
+
+def normalize_background_vision_wait_mode(value) -> str:
+    mode = str(value or '').strip()
+    return mode if mode in {'first_done', 'all_done'} else 'all_done'
+
+
+def normalize_background_vision_image_format(value) -> str:
+    fmt = str(value or '').strip()
+    return fmt if fmt in {'png', 'webp_lossless'} else 'png'
+
+
+def normalize_background_vision_profile_names(raw) -> list[str]:
+    if isinstance(raw, str):
+        values = [part.strip() for part in raw.splitlines()]
+    elif isinstance(raw, (list, tuple, set)):
+        values = [str(part).strip() for part in raw]
+    else:
+        values = []
+    result = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
+def default_background_vision_settings() -> dict:
+    return {
+        'background_vision_enabled': False,
+        'background_vision_show_overlay': True,
+        'background_vision_profile_names': [],
+        'background_vision_schedule_mode': 'fixed_interval',
+        'background_vision_interval_sec': DEFAULT_BACKGROUND_VISION_INTERVAL_SECONDS,
+        'background_vision_completion_delay_sec': DEFAULT_BACKGROUND_VISION_COMPLETION_DELAY_SECONDS,
+        'background_vision_toast_sec': DEFAULT_BACKGROUND_VISION_TOAST_SECONDS,
+        'background_vision_multi_target_wait_mode': 'all_done',
+        'background_vision_max_workers': DEFAULT_BACKGROUND_VISION_MAX_WORKERS,
+        'background_vision_image_format': 'png',
+        'background_vision_keep_history_context': False,
+        'background_vision_max_history_messages': DEFAULT_BACKGROUND_VISION_MAX_HISTORY_MESSAGES,
+        'background_vision_prompt': DEFAULT_BACKGROUND_VISION_PROMPT,
+        'background_vision_save_captures': False,
+        'background_vision_capture_dir': BACKGROUND_VISION_CAPTURE_DIR,
+        'background_vision_max_records': DEFAULT_BACKGROUND_VISION_MAX_RECORDS,
+    }
+
+
+def normalize_background_vision_settings(raw: dict | None) -> dict:
+    defaults = default_background_vision_settings()
+    source = raw if isinstance(raw, dict) else {}
+    settings = dict(defaults)
+    settings.update({
+        'background_vision_enabled': bool(source.get('background_vision_enabled', defaults['background_vision_enabled'])),
+        'background_vision_show_overlay': bool(source.get('background_vision_show_overlay', defaults['background_vision_show_overlay'])),
+        'background_vision_profile_names': normalize_background_vision_profile_names(
+            source.get('background_vision_profile_names', defaults['background_vision_profile_names'])
+        ),
+        'background_vision_schedule_mode': normalize_background_vision_schedule_mode(
+            source.get('background_vision_schedule_mode', defaults['background_vision_schedule_mode'])
+        ),
+        'background_vision_interval_sec': _coerce_int(
+            source.get('background_vision_interval_sec', defaults['background_vision_interval_sec']),
+            DEFAULT_BACKGROUND_VISION_INTERVAL_SECONDS,
+            1,
+            3600,
+        ),
+        'background_vision_completion_delay_sec': _coerce_int(
+            source.get('background_vision_completion_delay_sec', defaults['background_vision_completion_delay_sec']),
+            DEFAULT_BACKGROUND_VISION_COMPLETION_DELAY_SECONDS,
+            0,
+            3600,
+        ),
+        'background_vision_toast_sec': _coerce_int(
+            source.get('background_vision_toast_sec', defaults['background_vision_toast_sec']),
+            DEFAULT_BACKGROUND_VISION_TOAST_SECONDS,
+            1,
+            300,
+        ),
+        'background_vision_multi_target_wait_mode': normalize_background_vision_wait_mode(
+            source.get('background_vision_multi_target_wait_mode', defaults['background_vision_multi_target_wait_mode'])
+        ),
+        'background_vision_max_workers': _coerce_int(
+            source.get('background_vision_max_workers', defaults['background_vision_max_workers']),
+            DEFAULT_BACKGROUND_VISION_MAX_WORKERS,
+            1,
+            16,
+        ),
+        'background_vision_image_format': normalize_background_vision_image_format(
+            source.get('background_vision_image_format', defaults['background_vision_image_format'])
+        ),
+        'background_vision_keep_history_context': bool(
+            source.get('background_vision_keep_history_context', defaults['background_vision_keep_history_context'])
+        ),
+        'background_vision_max_history_messages': _coerce_int(
+            source.get('background_vision_max_history_messages', defaults['background_vision_max_history_messages']),
+            DEFAULT_BACKGROUND_VISION_MAX_HISTORY_MESSAGES,
+            0,
+            200,
+        ),
+        'background_vision_prompt': str(source.get('background_vision_prompt', defaults['background_vision_prompt']) or '').strip()
+                                    or DEFAULT_BACKGROUND_VISION_PROMPT,
+        'background_vision_save_captures': bool(source.get('background_vision_save_captures', defaults['background_vision_save_captures'])),
+        'background_vision_capture_dir': str(source.get('background_vision_capture_dir', defaults['background_vision_capture_dir']) or '').strip()
+                                        or BACKGROUND_VISION_CAPTURE_DIR,
+        'background_vision_max_records': _coerce_int(
+            source.get('background_vision_max_records', defaults['background_vision_max_records']),
+            DEFAULT_BACKGROUND_VISION_MAX_RECORDS,
+            10,
+            1000,
+        ),
+    })
+    return settings
+
+
+def _compact_background_vision_text(text: str, limit: int = DEFAULT_BACKGROUND_VISION_CONTEXT_MAX_CHARS) -> str:
+    compact = re.sub(r'\s+', ' ', str(text or '')).strip()
+    if len(compact) > limit:
+        compact = compact[: max(0, limit - 3)].rstrip() + '...'
+    return compact
+
+
+def load_background_vision_records() -> dict:
+    ensure_broccoli_data_dir()
+    try:
+        with open(BACKGROUND_VISION_RECORDS_PATH, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+        if isinstance(payload, dict):
+            records = payload.get('records', [])
+            if not isinstance(records, list):
+                records = []
+            return {
+                'version': int(payload.get('version', 1) or 1),
+                'latest_complete_id': str(payload.get('latest_complete_id', '') or ''),
+                'records': records,
+            }
+    except Exception:
+        pass
+    return {'version': 1, 'latest_complete_id': '', 'records': []}
+
+
+def save_background_vision_records(payload: dict) -> None:
+    ensure_broccoli_data_dir()
+    safe_payload = payload if isinstance(payload, dict) else {'version': 1, 'latest_complete_id': '', 'records': []}
+    tmp_path = BACKGROUND_VISION_RECORDS_PATH + '.tmp'
+    with open(tmp_path, 'w', encoding='utf-8') as handle:
+        json.dump(safe_payload, handle, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, BACKGROUND_VISION_RECORDS_PATH)
+
+
+def append_background_vision_record(record: dict, max_records: int = DEFAULT_BACKGROUND_VISION_MAX_RECORDS) -> dict:
+    payload = load_background_vision_records()
+    records = payload.get('records', [])
+    if not isinstance(records, list):
+        records = []
+    records.append(record)
+    max_records = _coerce_int(max_records, DEFAULT_BACKGROUND_VISION_MAX_RECORDS, 10, 1000)
+    records = records[-max_records:]
+    payload = {
+        'version': 1,
+        'latest_complete_id': str(record.get('id', '') or payload.get('latest_complete_id', ''))
+                              if bool(record.get('complete')) else str(payload.get('latest_complete_id', '') or ''),
+        'records': records,
+    }
+    save_background_vision_records(payload)
+    return payload
+
+
+def load_latest_background_vision_context() -> str:
+    payload = load_background_vision_records()
+    records = payload.get('records', [])
+    if not isinstance(records, list):
+        return ''
+    latest_id = str(payload.get('latest_complete_id', '') or '').strip()
+    chosen = None
+    if latest_id:
+        for record in reversed(records):
+            if isinstance(record, dict) and str(record.get('id', '') or '') == latest_id and bool(record.get('complete')):
+                chosen = record
+                break
+    if chosen is None:
+        for record in reversed(records):
+            if isinstance(record, dict) and bool(record.get('complete')):
+                chosen = record
+                break
+    if not chosen:
+        return ''
+    context_text = _compact_background_vision_text(chosen.get('context_text', ''))
+    if not context_text:
+        return ''
+    captured = str(chosen.get('completed_at') or chosen.get('created_at') or '').strip()
+    header = 'Background vision context'
+    if captured:
+        header += f' ({captured})'
+    return f'{header}:\n{context_text}'
 
 
 def _terminal_command_preview(command: str, limit: int = 96) -> str:
@@ -1946,6 +2323,7 @@ class DropdownPopup(QWidget):
         self.scroll_offset = 0
         self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
 
     def set_items(self, items):
@@ -2022,6 +2400,8 @@ class DropdownPopup(QWidget):
         self.move(btn_pos.x(), btn_pos.y() - self.height() - 2)
         self.show()
         self.activateWindow()
+        self.setFocus(Qt.FocusReason.PopupFocusReason)
+        app.installEventFilter(self)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -2102,6 +2482,29 @@ class DropdownPopup(QWidget):
 
     def focusOutEvent(self, event):
         self.hide()
+
+    def hideEvent(self, event):
+        try:
+            app.removeEventFilter(self)
+        except Exception:
+            pass
+        super().hideEvent(event)
+
+    def eventFilter(self, obj, event):
+        if self.isVisible() and event.type() == QEvent.Type.MouseButtonPress:
+            try:
+                global_pos = event.globalPosition().toPoint()
+            except Exception:
+                try:
+                    global_pos = event.globalPos()
+                except Exception:
+                    global_pos = None
+            if global_pos is not None:
+                popup_rect = QRect(self.mapToGlobal(QPoint(0, 0)), self.size())
+                button_rect = QRect(self.parent_button.mapToGlobal(QPoint(0, 0)), self.parent_button.size())
+                if not popup_rect.contains(global_pos) and not button_rect.contains(global_pos):
+                    self.hide()
+        return super().eventFilter(obj, event)
 
 
 class DropdownButton(QPushButton):
@@ -2335,6 +2738,397 @@ class DropdownButton(QPushButton):
 
     def setPopupMinWidthToButton(self, enabled: bool):
         self._popup_min_width_to_button = bool(enabled)
+
+
+class TargetSelectorPopup(QWidget):
+    """Custom popup for Active / All / multi-site target selection."""
+    def __init__(self, parent_button):
+        super().__init__(None)
+        self.parent_button = parent_button
+        self.rows = []
+        self.hovered_index = -1
+        self.item_height = 28
+        self.padding = 6
+        self.scroll_offset = 0
+        self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMouseTracking(True)
+
+    def set_rows(self, rows):
+        self.rows = list(rows or [])
+        self.scroll_offset = 0
+        self.hovered_index = -1
+        self._update_size()
+
+    def _visible_item_capacity(self) -> int:
+        return max(1, (self.height() - self.padding * 2) // self.item_height)
+
+    def _max_scroll_offset(self) -> int:
+        return max(0, len(self.rows) - self._visible_item_capacity())
+
+    def _clamp_scroll_offset(self):
+        self.scroll_offset = max(0, min(self.scroll_offset, self._max_scroll_offset()))
+
+    def _row_at_pos(self, pos) -> int:
+        try:
+            x_pos = float(pos.x())
+            y_pos = float(pos.y())
+        except Exception:
+            return -1
+        if x_pos < 0 or x_pos > self.width() or y_pos < 0 or y_pos > self.height():
+            return -1
+        local_y = y_pos - self.padding
+        if local_y < 0:
+            return -1
+        row = int(local_y // self.item_height)
+        index = self.scroll_offset + row
+        visible_limit = min(len(self.rows), self.scroll_offset + self._visible_item_capacity())
+        if index >= visible_limit:
+            return -1
+        return index
+
+    def _scroll_by(self, steps: int) -> bool:
+        if not self.rows or steps == 0:
+            return False
+        previous = self.scroll_offset
+        self.scroll_offset = max(0, min(self.scroll_offset + steps, self._max_scroll_offset()))
+        return self.scroll_offset != previous
+
+    def _update_size(self):
+        fm = self.fontMetrics()
+        max_width = max(130, self.parent_button.width())
+        for row in self.rows:
+            label = str(row.get('label', '') or '')
+            max_width = max(max_width, fm.horizontalAdvance(label) + 54)
+        height = max(1, len(self.rows)) * self.item_height + self.padding * 2
+        self.setFixedSize(max_width, min(420, height))
+        self._clamp_scroll_offset()
+
+    def show_above_button(self):
+        self.set_rows(self.parent_button.popup_rows())
+        if not self.rows:
+            return
+        btn_pos = self.parent_button.mapToGlobal(self.parent_button.rect().topLeft())
+        self.move(btn_pos.x(), btn_pos.y() - self.height() - 2)
+        self.show()
+        self.activateWindow()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        dark = (
+            bool(getattr(self.parent_button, '_always_dark', False))
+            or bool(getattr(self.parent_button, '_force_dark', False))
+            or is_dark_theme(app)
+        )
+        bg_color = QColor(45, 45, 48, 245) if dark else QColor(255, 255, 255, 248)
+        border_color = QColor(70, 70, 75) if dark else QColor(232, 232, 232)
+        hover_color = QColor(80, 80, 85) if dark else QColor(245, 245, 245)
+        selected_color = QColor(0, 122, 255, 95) if dark else QColor(17, 17, 17, 18)
+        text_color = QColor(240, 240, 240) if dark else QColor(32, 36, 43)
+        muted_color = QColor(150, 150, 155) if dark else QColor(120, 126, 134)
+        check_color = QColor(10, 132, 255)
+
+        bg_path = QPainterPath()
+        bg_path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 8, 8)
+        painter.fillPath(bg_path, bg_color)
+        painter.setPen(QPen(border_color, 1))
+        painter.drawPath(bg_path)
+
+        y = self.padding
+        visible_count = self._visible_item_capacity()
+        end_index = min(len(self.rows), self.scroll_offset + visible_count)
+        for i in range(self.scroll_offset, end_index):
+            row = self.rows[i]
+            kind = row.get('kind', 'site')
+            rect = QRectF(self.padding, y, self.width() - self.padding * 2, self.item_height)
+            if kind == 'separator':
+                painter.setPen(QPen(border_color, 1))
+                painter.drawLine(int(rect.left() + 8), int(rect.center().y()), int(rect.right() - 8), int(rect.center().y()))
+                y += self.item_height
+                continue
+            if i == self.hovered_index:
+                hover_path = QPainterPath()
+                hover_path.addRoundedRect(rect, 4, 4)
+                painter.fillPath(hover_path, hover_color)
+            selected = bool(row.get('checked', False))
+            if selected:
+                select_path = QPainterPath()
+                select_path.addRoundedRect(rect, 4, 4)
+                painter.fillPath(select_path, selected_color)
+
+            indicator = QRectF(rect.left() + 8, rect.top() + 7, 14, 14)
+            painter.setPen(QPen(check_color if selected else muted_color, 1.5))
+            painter.setBrush(QColor(check_color) if selected else QBrush(Qt.BrushStyle.NoBrush))
+            if kind in ('active', 'all'):
+                painter.drawEllipse(indicator)
+                if selected:
+                    painter.setBrush(QColor('#FFFFFF'))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(indicator.adjusted(4, 4, -4, -4))
+            else:
+                painter.drawRoundedRect(indicator, 3, 3)
+                if selected:
+                    painter.setPen(QPen(QColor('#FFFFFF'), 2))
+                    painter.drawLine(int(indicator.left() + 3), int(indicator.center().y()), int(indicator.left() + 6), int(indicator.bottom() - 4))
+                    painter.drawLine(int(indicator.left() + 6), int(indicator.bottom() - 4), int(indicator.right() - 3), int(indicator.top() + 4))
+
+            painter.setPen(text_color)
+            label_rect = rect.adjusted(30, 0, -8, 0)
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, str(row.get('label', '') or ''))
+            y += self.item_height
+        painter.end()
+
+    def mouseMoveEvent(self, event):
+        index = self._row_at_pos(event.position())
+        if index != self.hovered_index:
+            self.hovered_index = index
+            self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if not QRectF(0, 0, self.width(), self.height()).contains(event.position()):
+            self.hide()
+            event.accept()
+            return
+        index = self._row_at_pos(event.position())
+        if 0 <= index < len(self.rows):
+            self.parent_button.handle_popup_row(self.rows[index])
+            self.set_rows(self.parent_button.popup_rows())
+            self.update()
+            event.accept()
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta == 0:
+            event.ignore()
+            return
+        steps = max(1, abs(delta) // 120)
+        direction = -steps if delta > 0 else steps
+        if self._scroll_by(direction):
+            self.update()
+            event.accept()
+            return
+        event.ignore()
+
+    def leaveEvent(self, event):
+        self.hovered_index = -1
+        self.update()
+
+    def focusOutEvent(self, event):
+        self.hide()
+
+
+class TargetSelectorButton(QPushButton):
+    targetChanged = pyqtSignal()
+
+    def __init__(self, parent=None, always_dark=False):
+        super().__init__(parent)
+        self._always_dark = bool(always_dark)
+        self._force_dark = False
+        self._theme_updating = False
+        self._panel = None
+        self._target_mode = 'active'
+        self._custom_indices = set()
+        self._popup = TargetSelectorPopup(self)
+        self.clicked.connect(self._show_popup)
+        self.setFixedHeight(30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._apply_theme()
+        self._update_text()
+
+    def set_panel(self, panel):
+        self._panel = panel
+        self._normalize_selection()
+        self._update_text()
+
+    def _target_items(self) -> list[dict]:
+        panel = self._panel
+        if panel is not None and hasattr(panel, 'target_items'):
+            return list(panel.target_items())
+        return []
+
+    def _normalize_selection(self):
+        items = self._target_items()
+        count = len(items)
+        if count <= 0:
+            self._target_mode = 'active'
+            self._custom_indices.clear()
+            return
+        valid = {int(item.get('index', -1)) for item in items}
+        self._custom_indices = {idx for idx in self._custom_indices if idx in valid}
+        if self._target_mode == 'custom':
+            if not self._custom_indices:
+                self._target_mode = 'active'
+            elif len(self._custom_indices) == count:
+                self._target_mode = 'all'
+                self._custom_indices.clear()
+        elif self._target_mode not in ('active', 'all'):
+            self._target_mode = 'active'
+
+    def _set_mode(self, mode: str):
+        mode = mode if mode in ('active', 'all', 'custom') else 'active'
+        self._target_mode = mode
+        if mode != 'custom':
+            self._custom_indices.clear()
+        self._normalize_selection()
+        self._update_text()
+        self.targetChanged.emit()
+
+    def _set_custom_indices(self, indices):
+        self._target_mode = 'custom'
+        self._custom_indices = {int(idx) for idx in indices}
+        self._normalize_selection()
+        self._update_text()
+        self.targetChanged.emit()
+
+    def shift_target_indices_after_insert(self, index: int):
+        index = int(index)
+        if self._target_mode == 'custom':
+            self._custom_indices = {idx + 1 if idx >= index else idx for idx in self._custom_indices}
+        self._normalize_selection()
+        self._update_text()
+
+    def shift_target_indices_after_delete(self, index: int):
+        index = int(index)
+        if self._target_mode == 'custom':
+            shifted = set()
+            for idx in self._custom_indices:
+                if idx == index:
+                    continue
+                shifted.add(idx - 1 if idx > index else idx)
+            self._custom_indices = shifted
+        self._normalize_selection()
+        self._update_text()
+
+    def popup_rows(self):
+        self._normalize_selection()
+        rows = [
+            {'kind': 'active', 'label': 'Active', 'checked': self._target_mode == 'active'},
+            {'kind': 'all', 'label': 'All', 'checked': self._target_mode == 'all'},
+        ]
+        items = self._target_items()
+        if items:
+            rows.append({'kind': 'separator', 'label': '', 'checked': False})
+        for item in items:
+            idx = int(item.get('index', -1))
+            checked = self._target_mode == 'all' or (self._target_mode == 'custom' and idx in self._custom_indices)
+            label = str(item.get('label', '') or item.get('url', '') or f'Tab {idx + 1}')
+            rows.append({'kind': 'site', 'label': label, 'index': idx, 'checked': checked})
+        return rows
+
+    def handle_popup_row(self, row):
+        kind = row.get('kind')
+        if kind == 'active':
+            self._set_mode('active')
+            return
+        if kind == 'all':
+            self._set_mode('all')
+            return
+        if kind == 'site':
+            idx = int(row.get('index', -1))
+            if idx < 0:
+                return
+            current = set()
+            if self._target_mode == 'all':
+                current = {int(item.get('index', -1)) for item in self._target_items()}
+                current.discard(-1)
+            elif self._target_mode == 'custom':
+                current = set(self._custom_indices)
+            if idx in current:
+                current.remove(idx)
+            else:
+                current.add(idx)
+            self._set_custom_indices(current)
+
+    def selected_target_indices(self, panel=None) -> list[int]:
+        if panel is not None and panel is not self._panel:
+            self.set_panel(panel)
+        self._normalize_selection()
+        panel = self._panel
+        if panel is None or not hasattr(panel, '_views'):
+            return []
+        count = len(panel._views)
+        if count <= 0:
+            return []
+        if self._target_mode == 'all':
+            return [idx for idx, view in enumerate(panel._views) if view is not None]
+        if self._target_mode == 'custom':
+            indices = [idx for idx in sorted(self._custom_indices) if 0 <= idx < count and panel._views[idx] is not None]
+            if indices:
+                return indices
+        active = int(getattr(panel, '_active_idx', 0) or 0)
+        return [active] if 0 <= active < count and panel._views[active] is not None else []
+
+    def selected_target_views(self, panel=None) -> list:
+        if panel is not None and panel is not self._panel:
+            self.set_panel(panel)
+        panel = self._panel
+        if panel is None or not hasattr(panel, '_views'):
+            return []
+        return [panel._views[idx] for idx in self.selected_target_indices(panel)]
+
+    def target_all(self) -> bool:
+        self._normalize_selection()
+        return self._target_mode == 'all'
+
+    def _display_text(self) -> str:
+        self._normalize_selection()
+        if self._target_mode == 'all':
+            return 'All'
+        if self._target_mode == 'custom':
+            return 'Customized'
+        return 'Active'
+
+    def _update_text(self):
+        self.setText(self._display_text())
+
+    def _show_popup(self):
+        if self._popup.isVisible():
+            self._popup.hide()
+            return
+        self._popup.show_above_button()
+
+    def _apply_theme(self):
+        if self._theme_updating:
+            return
+        self._theme_updating = True
+        dark = self._always_dark or self._force_dark or is_dark_theme(app)
+        try:
+            if dark:
+                bg = "#404145"
+                hover = "#4A4B4F"
+                pressed = "#343538"
+                text = "#FFFFFF"
+            else:
+                bg = "#FFFFFF"
+                hover = "#F5F5F5"
+                pressed = "#ECECEC"
+                text = "#444444"
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    border: 1px solid transparent;
+                    background-color: {bg};
+                    border-radius: 15px;
+                    padding: 5px 20px;
+                    color: {text};
+                    text-align: left;
+                }}
+                QPushButton:hover {{ background-color: {hover}; }}
+                QPushButton:pressed {{ background-color: {pressed}; }}
+            """)
+        finally:
+            self._theme_updating = False
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if self._theme_updating:
+            return
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._apply_theme()
+            if self._popup.isVisible():
+                self._popup.update()
 
 
 def normalize_profile_entry(entry: dict, fallback_name: str) -> dict:
@@ -4931,6 +5725,7 @@ def default_global_settings() -> dict:
         'embedding_profile': '',
         'webfetch_download_path': '',
         'always_on_top': True,
+        'start_on_login': is_start_on_login_enabled(),
         'terminal_shell_mode': DEFAULT_TERMINAL_SHELL_MODE,
         'terminal_use_bash': False,
         'annotation_pen_color': '#FF3B30',
@@ -4958,6 +5753,7 @@ def default_global_settings() -> dict:
         'specialized_profiles': default_specialized_profiles(),
         'specialized_execution_modes': default_specialized_execution_modes(),
         'userscripts': [],
+        **default_background_vision_settings(),
     }
 
 
@@ -4999,6 +5795,7 @@ def load_settings_store() -> dict:
                 'embedding_profile': str(store['globals'].get('embedding_profile', globals_store['embedding_profile'])).strip(),
                 'webfetch_download_path': str(store['globals'].get('webfetch_download_path', globals_store['webfetch_download_path'])).strip(),
                 'always_on_top': bool(store['globals'].get('always_on_top', globals_store['always_on_top'])),
+                'start_on_login': bool(store['globals'].get('start_on_login', globals_store['start_on_login'])),
                 'terminal_shell_mode': normalize_terminal_shell_mode(
                     store['globals'].get('terminal_shell_mode', globals_store['terminal_shell_mode'])
                 ),
@@ -5051,6 +5848,7 @@ def load_settings_store() -> dict:
             )
         raw_memory_items = store['globals'].get('memory_items', globals_store['memory_items'])
         globals_store['memory_items'] = normalize_memory_item_records(raw_memory_items)
+        globals_store.update(normalize_background_vision_settings(store['globals']))
 
     active_profile = str(store.get('active_profile', profiles[0]['name'])).strip()
     if active_profile not in {profile['name'] for profile in profiles}:
@@ -7057,6 +7855,301 @@ def create_openai_client(api_key: str, endpoint: str, timeout: int):
     return OpenAI(api_key=api_key, base_url=endpoint, timeout=timeout)
 
 
+def capture_all_screens_png_bytes() -> bytes:
+    try:
+        import Quartz as _Quartz
+        from PIL import Image as _PILImage
+    except Exception as exc:
+        raise RuntimeError(f'Background vision screenshot dependencies unavailable: {exc}') from exc
+
+    image = _Quartz.CGWindowListCreateImage(
+        _Quartz.CGRectInfinite,
+        _Quartz.kCGWindowListOptionOnScreenOnly,
+        _Quartz.kCGNullWindowID,
+        _Quartz.kCGWindowImageDefault,
+    )
+    if image is None:
+        raise RuntimeError('No screen image captured. Check macOS Screen Recording permission for Broccoli.')
+
+    width = _Quartz.CGImageGetWidth(image)
+    height = _Quartz.CGImageGetHeight(image)
+    bytes_per_row = _Quartz.CGImageGetBytesPerRow(image)
+    provider = _Quartz.CGImageGetDataProvider(image)
+    raw_data = _Quartz.CGDataProviderCopyData(provider)
+    pil_image = _PILImage.frombuffer(
+        'RGBA',
+        (width, height),
+        bytes(raw_data),
+        'raw',
+        'BGRA',
+        bytes_per_row,
+        1,
+    )
+    with BytesIO() as output:
+        pil_image.save(output, format='PNG')
+        return output.getvalue()
+
+
+class BackgroundVisionWorker(QThread):
+    status = pyqtSignal(str)
+    error = pyqtSignal(str)
+    record_ready = pyqtSignal(object)
+
+    def __init__(self, targets: list[dict], settings: dict, parent=None):
+        super().__init__(parent)
+        self.targets = [dict(target) for target in targets if isinstance(target, dict)]
+        self.settings = normalize_background_vision_settings(settings)
+        self._stop_event = threading.Event()
+        self._executor = None
+        self._round_index = 0
+        self._active_rounds = 0
+        self._active_rounds_lock = threading.Lock()
+        self._history_lock = threading.Lock()
+        self._history_turns_by_target = {}
+        self._after_completion_event = threading.Event()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def _wait_with_countdown(self, total_seconds: float) -> bool:
+        deadline = time.monotonic() + max(0.0, float(total_seconds or 0))
+        while not self._stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if self._stop_event.wait(min(1.0, remaining)):
+                return True
+        return True
+
+    def _try_reserve_round_slot(self) -> bool:
+        with self._active_rounds_lock:
+            if self._active_rounds >= int(self.settings.get('background_vision_max_workers', 1)):
+                return False
+            self._active_rounds += 1
+            return True
+
+    def _release_round_slot(self):
+        with self._active_rounds_lock:
+            if self._active_rounds > 0:
+                self._active_rounds -= 1
+
+    def run(self):
+        if not self.targets:
+            self.error.emit('Background vision has no usable profile target.')
+            return
+        max_workers = int(self.settings.get('background_vision_max_workers', 1) or 1)
+        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='broccoli-bg-vision')
+        try:
+            if self.settings.get('background_vision_schedule_mode') == 'after_completion':
+                self._run_after_completion_schedule()
+            else:
+                self._run_fixed_interval_schedule()
+        finally:
+            if self._executor is not None:
+                self._executor.shutdown(wait=True, cancel_futures=False)
+                self._executor = None
+
+    def _run_fixed_interval_schedule(self):
+        interval = int(self.settings.get('background_vision_interval_sec', DEFAULT_BACKGROUND_VISION_INTERVAL_SECONDS) or DEFAULT_BACKGROUND_VISION_INTERVAL_SECONDS)
+        next_run = time.monotonic()
+        while not self._stop_event.is_set():
+            now = time.monotonic()
+            if now < next_run:
+                if self._wait_with_countdown(next_run - now):
+                    break
+                continue
+            self._submit_round()
+            next_run += max(1, interval)
+
+    def _run_after_completion_schedule(self):
+        delay = int(self.settings.get('background_vision_completion_delay_sec', DEFAULT_BACKGROUND_VISION_COMPLETION_DELAY_SECONDS) or 0)
+        while not self._stop_event.is_set():
+            self._after_completion_event.clear()
+            self._submit_round()
+            while not self._stop_event.is_set():
+                if self._after_completion_event.wait(0.2):
+                    break
+            if self._stop_event.is_set():
+                break
+            if delay > 0 and self._wait_with_countdown(delay):
+                break
+
+    def _submit_round(self):
+        if self._executor is None or self._stop_event.is_set():
+            return
+        self._round_index += 1
+        round_id = self._round_index
+        if not self._try_reserve_round_slot():
+            self.status.emit('Background vision skipped one round because concurrency is full.')
+            return
+        try:
+            self._executor.submit(self._run_round_and_release, round_id)
+        except Exception:
+            self._release_round_slot()
+            raise
+
+    def _run_round_and_release(self, round_id: int):
+        try:
+            self._run_single_round(round_id)
+        finally:
+            self._release_round_slot()
+
+    def _save_capture_image(self, round_id: int, image_png: bytes) -> str:
+        if not bool(self.settings.get('background_vision_save_captures', False)):
+            return ''
+        capture_dir = str(self.settings.get('background_vision_capture_dir', '') or BACKGROUND_VISION_CAPTURE_DIR).strip() or BACKGROUND_VISION_CAPTURE_DIR
+        os.makedirs(capture_dir, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        path = os.path.join(capture_dir, f'background_vision_{round_id:04d}_{timestamp}.png')
+        with open(path, 'wb') as handle:
+            handle.write(image_png)
+        return path
+
+    def _encode_image_payload(self, png_bytes: bytes, image_format: str) -> dict:
+        image_format = normalize_background_vision_image_format(image_format)
+        if image_format == 'webp_lossless':
+            try:
+                from PIL import Image as _PILImage
+                with _PILImage.open(BytesIO(png_bytes)) as image:
+                    converted = image.convert('RGBA') if image.mode not in ('RGB', 'RGBA') else image.copy()
+                with BytesIO() as output:
+                    converted.save(output, format='WEBP', lossless=True, method=6)
+                    image_bytes = output.getvalue()
+                return {
+                    'format': 'webp_lossless',
+                    'mime_type': 'image/webp',
+                    'base64': base64.b64encode(image_bytes).decode('utf-8'),
+                }
+            except Exception:
+                pass
+        return {
+            'format': 'png',
+            'mime_type': 'image/png',
+            'base64': base64.b64encode(png_bytes).decode('utf-8'),
+        }
+
+    def _get_history_turns(self, history_key: str) -> list[tuple[str, str]]:
+        if not bool(self.settings.get('background_vision_keep_history_context', False)):
+            return []
+        with self._history_lock:
+            return list(self._history_turns_by_target.get(history_key, []))
+
+    def _append_history_turn(self, history_key: str, round_id: int, assistant_text: str):
+        if not bool(self.settings.get('background_vision_keep_history_context', False)):
+            return
+        max_messages = int(self.settings.get('background_vision_max_history_messages', 0) or 0)
+        with self._history_lock:
+            turns = self._history_turns_by_target.setdefault(history_key, [])
+            turns.append((f'Round {round_id}: new full-screen screenshot.', str(assistant_text or '').strip()))
+            max_turns = max_messages // 2
+            if max_turns <= 0:
+                turns.clear()
+            elif len(turns) > max_turns:
+                self._history_turns_by_target[history_key] = turns[-max_turns:]
+
+    def _run_single_round(self, round_id: int):
+        created_at = datetime.datetime.now().isoformat(timespec='seconds')
+        record = {
+            'id': f'vision-{int(time.time() * 1000)}-{round_id}',
+            'round_id': round_id,
+            'created_at': created_at,
+            'completed_at': '',
+            'complete': False,
+            'prompt': str(self.settings.get('background_vision_prompt', DEFAULT_BACKGROUND_VISION_PROMPT) or ''),
+            'capture_path': '',
+            'targets': [],
+            'context_text': '',
+        }
+        try:
+            self.status.emit(f'Background vision round {round_id}: capturing screen')
+            png_bytes = capture_all_screens_png_bytes()
+            record['capture_path'] = self._save_capture_image(round_id, png_bytes)
+            payload = self._encode_image_payload(
+                png_bytes,
+                self.settings.get('background_vision_image_format', 'png'),
+            )
+            if len(self.targets) == 1:
+                results = [self._run_single_target(round_id, self.targets[0], payload)]
+            else:
+                worker_count = max(1, min(len(self.targets), 16))
+                results = []
+                with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix=f'bg-vision-round-{round_id}') as executor:
+                    futures = [executor.submit(self._run_single_target, round_id, target, payload) for target in self.targets]
+                    for future in as_completed(futures):
+                        results.append(future.result())
+            record['targets'] = results
+            record['complete'] = any(item.get('status') == 'ok' and str(item.get('text', '')).strip() for item in results)
+            record['context_text'] = self._build_context_text(results)
+            record['completed_at'] = datetime.datetime.now().isoformat(timespec='seconds')
+            self.record_ready.emit(record)
+            self.status.emit(f'Background vision round {round_id}: complete')
+        except Exception as exc:
+            record['completed_at'] = datetime.datetime.now().isoformat(timespec='seconds')
+            record['targets'] = [{'profile': '', 'model': '', 'status': 'error', 'text': '', 'error': str(exc)}]
+            self.record_ready.emit(record)
+            self.error.emit(str(exc))
+        finally:
+            if self.settings.get('background_vision_schedule_mode') == 'after_completion':
+                self._after_completion_event.set()
+
+    def _run_single_target(self, round_id: int, target: dict, image_payload: dict) -> dict:
+        profile_name = str(target.get('name', '') or 'Profile').strip()
+        model = str(target.get('model', '') or '').strip()
+        result = {'profile': profile_name, 'model': model, 'status': 'error', 'text': '', 'error': ''}
+        try:
+            api_key = str(target.get('api_key', '') or '').strip()
+            endpoint = str(target.get('endpoint', '') or '').strip()
+            timeout = _coerce_int(target.get('timeout', 60), 60, 5, 600)
+            if not api_key or not endpoint or not model:
+                raise RuntimeError('profile is missing API key, endpoint, or model')
+            client = create_openai_client(api_key, endpoint, timeout)
+            prompt = str(self.settings.get('background_vision_prompt', DEFAULT_BACKGROUND_VISION_PROMPT) or '').strip() or DEFAULT_BACKGROUND_VISION_PROMPT
+            messages = [{'role': 'system', 'content': prompt}]
+            for user_text, assistant_text in self._get_history_turns(profile_name):
+                messages.append({'role': 'user', 'content': user_text})
+                messages.append({'role': 'assistant', 'content': assistant_text})
+            data_url = f"data:{image_payload['mime_type']};base64,{image_payload['base64']}"
+            messages.append({
+                'role': 'user',
+                'content': [
+                    {'type': 'text', 'text': 'Analyze this current full-screen screenshot for background context.'},
+                    {'type': 'image_url', 'image_url': {'url': data_url}},
+                ],
+            })
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=False,
+            )
+            text = str(response.choices[0].message.content or '').strip()
+            result.update({'status': 'ok', 'text': text, 'error': ''})
+            self._append_history_turn(profile_name, round_id, text)
+        except Exception as exc:
+            result['error'] = str(exc)
+        finally:
+            if (
+                self.settings.get('background_vision_schedule_mode') == 'after_completion'
+                and self.settings.get('background_vision_multi_target_wait_mode') == 'first_done'
+            ):
+                self._after_completion_event.set()
+        return result
+
+    def _build_context_text(self, results: list[dict]) -> str:
+        ok_items = [
+            item for item in results
+            if isinstance(item, dict) and item.get('status') == 'ok' and str(item.get('text', '')).strip()
+        ]
+        if not ok_items:
+            return ''
+        blocks = []
+        for item in ok_items:
+            profile_name = str(item.get('profile', '') or 'Vision model').strip()
+            text = _compact_background_vision_text(item.get('text', ''), 2400)
+            if text:
+                blocks.append(f'[{profile_name}] {text}')
+        return _compact_background_vision_text('\n'.join(blocks), DEFAULT_BACKGROUND_VISION_CONTEXT_MAX_CHARS)
+
+
 def get_specialized_profiles_from_store(store: dict | None = None) -> dict:
     if store is None:
         store = load_settings_store()
@@ -8728,6 +9821,10 @@ class AsyncPreflightThread(threading.Thread):
                 memory_context = owner._build_saved_memory_prompt_context(question_text)
                 if memory_context:
                     context_blocks.append(memory_context)
+            if not skip_retrieval_for_blank_prompt:
+                vision_context = owner._build_background_vision_prompt_context()
+                if vision_context:
+                    context_blocks.append(vision_context)
             history = '\n\n'.join(block for block in context_blocks if block).strip()
             shared_context = '\n\n'.join(
                 block for block in ([history, attachment_context] if attachment_context else [history]) if block
@@ -9622,7 +10719,8 @@ class GlobalHotkeyManager(QObject):
 
 
 # Create the icon
-icon = QIcon("/Applications/Broccoli.app/Contents/Resources/Broccolimen.icns")
+ensure_broccoli_resource_dir()
+icon = QIcon(resource_path('Broccolimen.icns'))
 
 # Create the tray
 tray = QSystemTrayIcon()
@@ -9645,9 +10743,14 @@ action8 = QAction("👀 Show/Hide dock icon")
 action8.setCheckable(True)
 menu.addAction(action8)
 
+action10 = QAction("🛠️ Start on login")
+action10.setCheckable(True)
+action10.setChecked(is_start_on_login_enabled())
+menu.addAction(action10)
+
 try:
-    showhide = codecs.open(SHOWHIDE_PATH, 'r', encoding='utf-8').read()
-except FileNotFoundError:
+    showhide = read_text_file(SHOWHIDE_PATH, '1')
+except Exception:
     showhide = '1'
 if showhide == '0':
     action7.setVisible(False)
@@ -10689,7 +11792,7 @@ class WebNavBar(QWidget):
     site_back_requested   = pyqtSignal(int)        # navigate back
     site_forward_requested = pyqtSignal(int)       # navigate forward
     site_home_requested   = pyqtSignal(int)        # navigate to root URL
-    PLUS_ICON_PATH = '/Applications/Broccoli.app/Contents/Resources/plus2.png'
+    PLUS_ICON_PATH = resource_path('plus2.png')
 
     def __init__(self, sites, parent=None):
         super().__init__(parent)
@@ -10964,6 +12067,8 @@ class WebViewPanel(QWidget):
     def attach_prompt_dock(self, dock: QWidget):
         self._prompt_dock = dock
         dock.setParent(self)
+        if hasattr(dock, 'set_target_panel'):
+            dock.set_target_panel(self)
         dock.setMaximumHeight(0)
         dock.setMinimumHeight(0)
         dock.hide()
@@ -11074,6 +12179,8 @@ class WebViewPanel(QWidget):
         view.iconChanged.connect(lambda icon, idx=pill_idx: self._on_icon(idx, icon))
         view.urlChanged.connect(lambda u, idx=pill_idx: self._on_url(idx, u))
         view.loadFinished.connect(lambda ok, idx=pill_idx: self._on_load(idx, ok))
+        if self._prompt_dock is not None and hasattr(self._prompt_dock, 'shift_target_indices_after_insert'):
+            self._prompt_dock.shift_target_indices_after_insert(pill_idx)
         self._active_idx = pill_idx
         self._stack.setCurrentIndex(pill_idx)
         self.view_switched.emit()
@@ -11088,6 +12195,8 @@ class WebViewPanel(QWidget):
             view = self._views.pop(idx)
             self._stack.removeWidget(view)
             view.deleteLater()
+            if self._prompt_dock is not None and hasattr(self._prompt_dock, 'shift_target_indices_after_delete'):
+                self._prompt_dock.shift_target_indices_after_delete(idx)
             self._active_idx = min(self._nav._active, len(self._views) - 1)
             if self._views:
                 self._stack.setCurrentIndex(self._active_idx)
@@ -11207,6 +12316,27 @@ class WebViewPanel(QWidget):
     # ── 公开接口 ──────────────────────────────────────────────
     def active_view(self):
         return self._views[self._active_idx]
+
+    def target_items(self) -> list[dict]:
+        items = []
+        for idx, view in enumerate(self._views):
+            if view is None:
+                continue
+            site = self._sites[idx] if 0 <= idx < len(self._sites) and isinstance(self._sites[idx], dict) else {}
+            label = str(site.get('label', '') or '').strip()
+            url_text = ''
+            try:
+                url = view.url()
+                url_text = url.toString()
+                host = url.host()
+                if host:
+                    label = host
+            except Exception:
+                pass
+            if not label:
+                label = str(site.get('url', '') or url_text or f'Tab {idx + 1}')
+            items.append({'index': idx, 'label': label, 'url': url_text or str(site.get('url', '') or '')})
+        return items
 
     def reload_all_views(self):
         for view in self._views:
@@ -12655,8 +13785,8 @@ class AssistantPill(QWidget):
     """
     clicked_sig = pyqtSignal()
     CIRCLE_SIZE = 34
-    SETTINGS_ICON_PATH = '/Applications/Broccoli.app/Contents/Resources/set2.png'
-    TRANSFER_ICON_PATH = '/Applications/Broccoli.app/Contents/Resources/transfer2.png'
+    SETTINGS_ICON_PATH = resource_path('set2.png')
+    TRANSFER_ICON_PATH = resource_path('transfer2.png')
 
     def __init__(self, icon_text, content_widget, parent=None):
         super().__init__(parent)
@@ -13372,10 +14502,9 @@ class ExternalPromptDock(QWidget):
         self.custom_prompt_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.custom_prompt_combo.currentIndexChanged.connect(self._on_custom_prompt_changed)
 
-        self.target_combo = DropdownButton(self, always_dark=False)
-        self.target_combo.addItems(['Active', 'All'])
-        self.target_combo.setCurrentIndex(0)
-        self.target_combo.setFixedWidth(110)
+        self.target_selector = TargetSelectorButton(self, always_dark=False)
+        self.target_selector.setFixedWidth(120)
+        self.target_combo = self.target_selector
 
         self.send_button = AssistantCapsuleButton('🔺 Send', self)
         self.send_button.clicked.connect(self.send_requested.emit)
@@ -13575,7 +14704,19 @@ class ExternalPromptDock(QWidget):
         return self.attachment_tray.get_paths()
 
     def target_all(self) -> bool:
-        return self.target_combo.currentIndex() == 1
+        return self.target_selector.target_all()
+
+    def set_target_panel(self, panel):
+        self.target_selector.set_panel(panel)
+
+    def shift_target_indices_after_insert(self, index: int):
+        self.target_selector.shift_target_indices_after_insert(index)
+
+    def shift_target_indices_after_delete(self, index: int):
+        self.target_selector.shift_target_indices_after_delete(index)
+
+    def selected_target_views(self, panel) -> list:
+        return self.target_selector.selected_target_views(panel)
 
     def selected_mode(self) -> str:
         try:
@@ -16112,6 +17253,495 @@ class SharePanel(QWidget):
             self._apply_theme()
 
 
+class BackgroundVisionToast(QFrame):
+    closed = pyqtSignal(object)
+
+    def __init__(self, title: str, body: str, owner_window=None):
+        super().__init__(owner_window if isinstance(owner_window, QWidget) else None)
+        self._owner_window = owner_window if isinstance(owner_window, QWidget) else None
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFixedWidth(360)
+        self._move_anim = None
+        self._closing = False
+        self._ttl_timer = QTimer(self)
+        self._ttl_timer.setSingleShot(True)
+        self._ttl_timer.timeout.connect(self.fade_out)
+
+        card = QFrame(self)
+        card.setObjectName('BackgroundVisionToastCard')
+        card.setStyleSheet('''
+            QFrame#BackgroundVisionToastCard {
+                background: #FFFFFF;
+                border: 1px solid rgba(0, 0, 0, 24);
+                border-radius: 18px;
+            }
+            QLabel#BackgroundVisionToastTitle {
+                color: #20242B;
+                font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QPushButton#BackgroundVisionToastClose {
+                background: #FF5F57;
+                border: 1px solid rgba(0, 0, 0, 28);
+                border-radius: 6px;
+            }
+            QPushButton#BackgroundVisionToastClose:hover {
+                background: #FF453A;
+            }
+            QPushButton#BackgroundVisionToastClose:pressed {
+                background: #D9362D;
+            }
+            QTextEdit#BackgroundVisionToastBody {
+                background: transparent;
+                border: none;
+                color: #4F5865;
+                font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+                font-size: 13px;
+                selection-background-color: rgba(0, 122, 255, 48);
+            }
+            QTextEdit#BackgroundVisionToastBody QScrollBar:vertical {
+                background: transparent;
+                width: 6px;
+                margin: 2px 0 2px 0;
+            }
+            QTextEdit#BackgroundVisionToastBody QScrollBar::handle:vertical {
+                background: rgba(31, 37, 46, 70);
+                border-radius: 3px;
+                min-height: 24px;
+            }
+            QTextEdit#BackgroundVisionToastBody QScrollBar::add-line:vertical,
+            QTextEdit#BackgroundVisionToastBody QScrollBar::sub-line:vertical {
+                height: 0;
+                background: transparent;
+                border: none;
+            }
+            QTextEdit#BackgroundVisionToastBody QScrollBar::add-page:vertical,
+            QTextEdit#BackgroundVisionToastBody QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
+        ''')
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(card)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 14, 18, 16)
+        layout.setSpacing(8)
+        header_row = QWidget(card)
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+        close_button = QPushButton('', header_row)
+        close_button.setObjectName('BackgroundVisionToastClose')
+        close_button.setFixedSize(12, 12)
+        close_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        close_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_button.clicked.connect(self.fade_out)
+        title_label = QLabel(title, header_row)
+        title_label.setObjectName('BackgroundVisionToastTitle')
+        title_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        header_layout.addWidget(close_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        header_layout.addWidget(title_label, 1, Qt.AlignmentFlag.AlignVCenter)
+        body_label = QTextEdit(card)
+        body_label.setObjectName('BackgroundVisionToastBody')
+        body_label.setPlainText(_compact_background_vision_text(body, 3000))
+        body_label.setReadOnly(True)
+        body_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        body_label.setFrameShape(QFrame.Shape.NoFrame)
+        body_label.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body_label.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        body_label.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        body_label.setFixedHeight(128)
+        body_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout.addWidget(header_row)
+        layout.addWidget(body_label)
+        self.adjustSize()
+
+    def show_at(self, target_rect: QRect, ttl_ms: int = 12000):
+        # print(f'[Broccoli background vision toast] show_at ttl_ms={ttl_ms} rect={target_rect.getRect()}')
+        start_rect = QRect(target_rect)
+        start_rect.moveTop(start_rect.top() + 18)
+        self.setGeometry(start_rect)
+        self.show()
+        self.raise_()
+        QTimer.singleShot(0, self.raise_)
+        QTimer.singleShot(80, self.raise_)
+        QTimer.singleShot(180, self.raise_)
+        self._move_anim = QPropertyAnimation(self, b'geometry', self)
+        self._move_anim.setDuration(260)
+        self._move_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._move_anim.setStartValue(start_rect)
+        self._move_anim.setEndValue(target_rect)
+        self._move_anim.start()
+        self._ttl_timer.start(max(1000, int(ttl_ms)))
+
+    def move_to(self, target_rect: QRect):
+        # print(f'[Broccoli background vision toast] move_to visible={self.isVisible()} rect={target_rect.getRect()}')
+        if not self.isVisible():
+            self.setGeometry(target_rect)
+            self.raise_()
+            return
+        self._move_anim = QPropertyAnimation(self, b'geometry', self)
+        self._move_anim.setDuration(220)
+        self._move_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._move_anim.setStartValue(self.geometry())
+        self._move_anim.setEndValue(target_rect)
+        self._move_anim.start()
+        QTimer.singleShot(0, self.raise_)
+        QTimer.singleShot(80, self.raise_)
+
+    def fade_out(self):
+        if self._closing:
+            return
+        self._closing = True
+        # print('[Broccoli background vision toast] ttl expired; closing')
+        self._ttl_timer.stop()
+        self._finish_close()
+
+    def _finish_close(self):
+        # print('[Broccoli background vision toast] finish_close')
+        self.hide()
+        self.closed.emit(self)
+        self.deleteLater()
+
+    def hideEvent(self, event):
+        # print(f'[Broccoli background vision toast] hideEvent closing={self._closing} ttl_active={self._ttl_timer.isActive()}')
+        super().hideEvent(event)
+
+
+class BackgroundVisionToastHost(QWidget):
+    def __init__(self, anchor_widget=None):
+        super().__init__(None)
+        self.anchor_widget = anchor_widget if isinstance(anchor_widget, QWidget) else None
+        self._allow_hide = True
+        self._native_nonactivating_configured = False
+        flags = (
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.Tool |
+            Qt.WindowType.WindowStaysOnTopHint
+        )
+        if hasattr(Qt.WindowType, 'WindowDoesNotAcceptFocus'):
+            flags |= Qt.WindowType.WindowDoesNotAcceptFocus
+        self.setWindowFlags(flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        if hasattr(Qt.WidgetAttribute, 'WA_ShowWithoutActivating'):
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setObjectName('BackgroundVisionToastHost')
+        self.setStyleSheet('QWidget#BackgroundVisionToastHost { background: transparent; }')
+        self.setMask(QRegion())
+        self._configure_native_nonactivating()
+        self.hide()
+
+    def _native_window(self):
+        if sys.platform != 'darwin' or objc is None:
+            return None
+        try:
+            native = objc.objc_object(c_void_p=int(self.winId()))
+            if hasattr(native, 'window'):
+                window = native.window()
+                if window is not None:
+                    return window
+            return native
+        except Exception:
+            return None
+
+    def _configure_native_nonactivating(self):
+        if sys.platform != 'darwin' or AppKit is None or objc is None:
+            return
+        window = self._native_window()
+        if window is None:
+            return
+        try:
+            style_mask = int(window.styleMask())
+            nonactivating_panel = int(getattr(AppKit, 'NSWindowStyleMaskNonactivatingPanel', 1 << 7))
+            window.setStyleMask_(style_mask | nonactivating_panel)
+        except Exception:
+            pass
+        try:
+            level = getattr(AppKit, 'NSStatusWindowLevel', getattr(AppKit, 'NSFloatingWindowLevel', 3))
+            window.setLevel_(level)
+        except Exception:
+            pass
+        try:
+            behavior = 0
+            for name in (
+                'NSWindowCollectionBehaviorCanJoinAllSpaces',
+                'NSWindowCollectionBehaviorTransient',
+                'NSWindowCollectionBehaviorIgnoresCycle',
+                'NSWindowCollectionBehaviorFullScreenAuxiliary',
+            ):
+                behavior |= int(getattr(AppKit, name, 0))
+            if behavior:
+                window.setCollectionBehavior_(behavior)
+        except Exception:
+            pass
+        for method_name, value in (
+            ('setHidesOnDeactivate_', False),
+            ('setCanHide_', False),
+            ('setIgnoresMouseEvents_', False),
+            ('setAcceptsMouseMovedEvents_', False),
+        ):
+            try:
+                getattr(window, method_name)(value)
+            except Exception:
+                pass
+        self._native_nonactivating_configured = True
+
+    def _order_front_without_activating(self):
+        if sys.platform == 'darwin':
+            self._configure_native_nonactivating()
+            window = self._native_window()
+            if window is not None:
+                try:
+                    window.orderFrontRegardless()
+                    return
+                except Exception:
+                    pass
+        self.raise_()
+
+    def show_without_activating(self):
+        self._allow_hide = False
+        self._configure_native_nonactivating()
+        self.show()
+        self._order_front_without_activating()
+        self.clearFocus()
+
+    def hide_for_empty_stack(self):
+        self._allow_hide = True
+        self.clearMask()
+        self.hide()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.clearFocus()
+
+    def focusInEvent(self, event):
+        self.clearFocus()
+        event.ignore()
+
+    def closeEvent(self, event):
+        self._allow_hide = True
+        super().closeEvent(event)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if not self._allow_hide:
+            QTimer.singleShot(0, self.show_without_activating)
+
+
+class BackgroundVisionToastManager(QObject):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._container = parent if isinstance(parent, QWidget) else None
+        self._toasts = []
+
+    def set_container(self, container):
+        self._container = container if isinstance(container, QWidget) else None
+        self._relayout()
+
+    def show_record(self, record: dict, ttl_ms: int = DEFAULT_BACKGROUND_VISION_TOAST_SECONDS * 1000):
+        if not isinstance(record, dict) or not bool(record.get('complete')):
+            return
+        body = str(record.get('context_text', '') or '').strip()
+        if not body:
+            return
+        # print(f'[Broccoli background vision toast] show_record id={record.get("id", "")} body_len={len(body)}')
+        title = 'Background vision'
+        completed = str(record.get('completed_at', '') or '').strip()
+        if completed:
+            title += f' · {completed[-8:]}'
+        container = self._container or (self.parent() if isinstance(self.parent(), QWidget) else None)
+        toast = BackgroundVisionToast(title, body, container)
+        toast.closed.connect(self._remove_toast)
+        self._toasts.append(toast)
+        self._relayout(new_toast=toast, ttl_ms=ttl_ms)
+
+    def _remove_toast(self, toast):
+        self._toasts = [item for item in self._toasts if item is not toast]
+        self._relayout()
+
+    def _clamp_rect_offset(self, rect: QRect, offset: QPoint, available: QRect, margin: int) -> QPoint:
+        candidate = QRect(rect)
+        candidate.translate(offset)
+        dx = offset.x()
+        dy = offset.y()
+        if candidate.left() < available.left() + margin:
+            dx += available.left() + margin - candidate.left()
+        if candidate.right() > available.right() - margin:
+            dx -= candidate.right() - (available.right() - margin)
+        if candidate.top() < available.top() + margin:
+            dy += available.top() + margin - candidate.top()
+        if candidate.bottom() > available.bottom() - margin:
+            dy -= candidate.bottom() - (available.bottom() - margin)
+        return QPoint(dx, dy)
+
+    def _avoid_cursor_overlap(self, rects: dict, union_rect: QRect, available: QRect, margin: int) -> tuple[dict, QRect]:
+        cursor_pos = QCursor.pos()
+        avoid_rect = union_rect.adjusted(-14, -14, 14, 14)
+        if union_rect.isNull() or not avoid_rect.contains(cursor_pos):
+            return rects, union_rect
+        candidate_offsets = [
+            QPoint(0, cursor_pos.y() - avoid_rect.bottom() - 24),
+            QPoint(0, cursor_pos.y() - avoid_rect.top() + 24),
+            QPoint(cursor_pos.x() - avoid_rect.right() - 24, 0),
+            QPoint(cursor_pos.x() - avoid_rect.left() + 24, 0),
+        ]
+        chosen = QPoint(0, 0)
+        for offset in candidate_offsets:
+            clamped = self._clamp_rect_offset(union_rect, offset, available, margin)
+            candidate = QRect(union_rect)
+            candidate.translate(clamped)
+            if not candidate.adjusted(-14, -14, 14, 14).contains(cursor_pos):
+                chosen = clamped
+                break
+        if chosen == QPoint(0, 0):
+            chosen = self._clamp_rect_offset(union_rect, candidate_offsets[0], available, margin)
+        if chosen == QPoint(0, 0):
+            return rects, union_rect
+        shifted_rects = {}
+        shifted_union = QRect()
+        for toast, rect in rects.items():
+            shifted = QRect(rect)
+            shifted.translate(chosen)
+            shifted_rects[toast] = shifted
+            shifted_union = QRect(shifted) if shifted_union.isNull() else shifted_union.united(shifted)
+        return shifted_rects, shifted_union
+
+    def _relayout_host(self, host: BackgroundVisionToastHost, new_toast=None, ttl_ms: int = DEFAULT_BACKGROUND_VISION_TOAST_SECONDS * 1000):
+        margin = 24
+        gap = 12
+        visible_toasts = list(self._toasts[-5:])
+        if not visible_toasts:
+            host.hide_for_empty_stack()
+            return
+
+        anchor = host.anchor_widget if isinstance(host.anchor_widget, QWidget) else None
+        anchor_rect = anchor.frameGeometry() if anchor is not None and anchor.isVisible() else QRect()
+        screen = None
+        if anchor is not None:
+            screen = anchor.screen()
+        if screen is None and not anchor_rect.isNull():
+            screen = QGuiApplication.screenAt(anchor_rect.center())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else QRect(0, 0, 1280, 800)
+        if anchor_rect.isNull() or anchor_rect.width() <= 0 or anchor_rect.height() <= 0:
+            anchor_rect = available
+
+        compact_anchor = False
+        if anchor is not None and anchor.isVisible():
+            compact_anchor = (
+                anchor_rect.width() <= 90 and anchor_rect.height() <= 90
+                or (hasattr(anchor, 'qw3') and not anchor.qw3.isVisible())
+            )
+
+        toast_width = min(360, max(260, available.width() - margin * 2))
+        if not compact_anchor:
+            toast_width = min(toast_width, max(260, anchor_rect.width() - margin * 2))
+        x = anchor_rect.center().x() - toast_width // 2
+        x = max(available.left() + margin, min(x, available.right() - toast_width - margin + 1))
+
+        if compact_anchor:
+            y = anchor_rect.top() - 16
+            if y < available.top() + margin + 120:
+                y = min(available.bottom() - margin, anchor_rect.bottom() + 16 + 180)
+        else:
+            y = anchor_rect.top() + int(anchor_rect.height() * 0.48)
+            y = min(y, anchor_rect.top() + max(margin + 160, anchor_rect.height() // 2 - 10))
+
+        global_rects = {}
+        union_rect = QRect()
+        for toast in reversed(visible_toasts):
+            toast.setFixedWidth(toast_width)
+            toast.adjustSize()
+            h = toast.sizeHint().height()
+            rect = QRect(x, y - h + 1, toast_width, h)
+            y = rect.top() - gap
+            global_rects[toast] = rect
+            union_rect = QRect(rect) if union_rect.isNull() else union_rect.united(rect)
+
+        previous_global_rects = {}
+        if host.isVisible():
+            host_origin = host.geometry().topLeft()
+            for toast in visible_toasts:
+                if toast.isVisible():
+                    previous_global_rects[toast] = QRect(toast.geometry()).translated(host_origin)
+
+        host_rect = union_rect.adjusted(-2, -2, 2, 2)
+        host.setGeometry(host_rect)
+        host.show_without_activating()
+
+        mask_region = QRegion()
+        for toast in reversed(visible_toasts):
+            target_rect = QRect(global_rects[toast]).translated(-host_rect.topLeft())
+            mask_region = mask_region.united(QRegion(target_rect.adjusted(-2, -2, 2, 2)))
+            if toast is new_toast:
+                toast.show_at(target_rect, ttl_ms=ttl_ms)
+            else:
+                if toast in previous_global_rects:
+                    toast.setGeometry(QRect(previous_global_rects[toast]).translated(-host_rect.topLeft()))
+                toast.move_to(target_rect)
+
+        host.setMask(mask_region)
+        QTimer.singleShot(0, host._order_front_without_activating)
+        QTimer.singleShot(100, host._order_front_without_activating)
+        for stale in list(self._toasts[:-5]):
+            stale.fade_out()
+
+    def _relayout(self, new_toast=None, ttl_ms: int = DEFAULT_BACKGROUND_VISION_TOAST_SECONDS * 1000):
+        owner = self._container or (self.parent() if isinstance(self.parent(), QWidget) else None)
+        # print(f'[Broccoli background vision toast] relayout count={len(self._toasts)} owner={type(owner).__name__ if owner is not None else None}')
+        if isinstance(owner, BackgroundVisionToastHost):
+            self._relayout_host(owner, new_toast=new_toast, ttl_ms=ttl_ms)
+            return
+        if isinstance(owner, QWidget):
+            if owner.parentWidget() is not None:
+                owner.setGeometry(owner.parentWidget().rect())
+            available = owner.rect()
+        else:
+            screen = QGuiApplication.primaryScreen()
+            available = screen.availableGeometry() if screen else QRect(0, 0, 1280, 800)
+        margin = 24
+        gap = 12
+        visible_toasts = list(self._toasts[-5:])
+        if not visible_toasts:
+            if isinstance(owner, QWidget):
+                owner.clearMask()
+                owner.hide()
+            return
+        if isinstance(owner, QWidget):
+            owner.show()
+            owner.raise_()
+        toast_width = min(360, max(260, available.width() - margin * 2))
+        anchor_bottom = available.top() + int(available.height() * 0.48)
+        anchor_bottom = min(anchor_bottom, available.top() + max(margin + 160, available.height() // 2 - 10))
+        y = anchor_bottom
+        mask_region = QRegion()
+        for toast in reversed(visible_toasts):
+            toast.setFixedWidth(toast_width)
+            toast.adjustSize()
+            h = toast.sizeHint().height()
+            x = available.left() + max(margin, (available.width() - toast.width()) // 2)
+            rect = QRect(x, y - h + 1, toast.width(), h)
+            y = rect.top() - gap
+            mask_region = mask_region.united(QRegion(rect.adjusted(-2, -2, 2, 2)))
+            if toast is new_toast:
+                toast.show_at(rect, ttl_ms=ttl_ms)
+            else:
+                toast.move_to(rect)
+        if isinstance(owner, QWidget):
+            owner.setMask(mask_region)
+            QTimer.singleShot(0, owner.raise_)
+            QTimer.singleShot(100, owner.raise_)
+        for stale in list(self._toasts[:-5]):
+            stale.fade_out()
+
+
 class MyWidget(QWidget):  # 主窗口
     silent_screenshot_finished = pyqtSignal(object)
 
@@ -16159,6 +17789,12 @@ class MyWidget(QWidget):  # 主窗口
         self._force_send_blank_prompt_once = False
         self._force_external_blank_prompt_once = False
         self._force_web_auto_send_once = False
+        self._background_vision_worker = None
+        self._background_vision_stopping_workers = []
+        self._background_vision_generation = 0
+        self._background_vision_signature = ''
+        self._background_vision_toasts = BackgroundVisionToastManager(self)
+        app.aboutToQuit.connect(self.stop_background_vision)
 
         home_dir = str(Path.home())
         tarname1 = "BroccoliAppPath"
@@ -16547,6 +18183,8 @@ class MyWidget(QWidget):  # 主窗口
         vbox3.addWidget(self.btn_00)
         vbox3.addWidget(self.qw3)
         self.setLayout(vbox3)
+        self._background_vision_toast_host = BackgroundVisionToastHost(self)
+        self._background_vision_toasts.set_container(self._background_vision_toast_host)
         self.activate()
         self._settings_trigger_band_h = 32
         self._settings_trigger_btn = QPushButton('', self)
@@ -16838,6 +18476,7 @@ class MyWidget(QWidget):  # 主窗口
         self._daily_memory_timer.timeout.connect(self._start_daily_memory_rollup)
         self._schedule_daily_memory_rollup()
         QTimer.singleShot(1500, self._check_daily_memory_rollup_on_startup)
+        QTimer.singleShot(0, self.apply_background_vision_settings)
 
     def _set_prompt_edit_read_only(self, enabled: bool):
         self.text1.setReadOnly(bool(enabled))
@@ -18949,6 +20588,14 @@ class MyWidget(QWidget):  # 主窗口
         _panel, dock = self._current_external_prompt_pair()
         return dock
 
+    @staticmethod
+    def _sync_external_prompt_dock_height(panel, dock):
+        try:
+            if panel is not None and dock is not None and panel.is_prompt_dock_visible():
+                panel.set_prompt_dock_height(dock.sizeHint().height())
+        except Exception:
+            pass
+
     def _toggle_current_external_prompt_dock(self):
         panel, _dock = self._current_external_prompt_pair()
         if panel is None:
@@ -19056,6 +20703,10 @@ class MyWidget(QWidget):  # 主窗口
             memory_context = self._build_saved_memory_prompt_context(raw_question)
             if memory_context:
                 context_blocks.append(memory_context)
+        if not skip_retrieval:
+            vision_context = self._build_background_vision_prompt_context()
+            if vision_context:
+                context_blocks.append(vision_context)
         if attachment_context:
             context_blocks.append(attachment_context)
 
@@ -19082,9 +20733,16 @@ class MyWidget(QWidget):  # 主窗口
         return dock.build_mode_prompt(base_prompt), [], attachments
 
     def SendExternalPromptDockX(self, tab_index: int):
-        panel, _dock = self._external_prompt_panel_for_index(int(tab_index))
+        panel, dock = self._external_prompt_panel_for_index(int(tab_index))
         view = panel.active_view() if panel is not None else None
-        if view is not None and self._is_claude_web_view(view):
+        selected_views = dock.selected_target_views(panel) if panel is not None and dock is not None and hasattr(dock, 'selected_target_views') else []
+        if (
+            view is not None
+            and dock is not None
+            and len(selected_views) == 1
+            and selected_views[0] is view
+            and self._is_claude_web_view(view)
+        ):
             self.SendClaudeDockX(tab_index)
             return
         self.SendWebX(tab_index=tab_index, force_auto_send=True)
@@ -19201,11 +20859,9 @@ class MyWidget(QWidget):  # 主窗口
             dock,
             skip_retrieval=skip_retrieval,
         )
-        views = []
-        if dock.target_all() and hasattr(panel, '_views'):
-            views = [view for view in panel._views if view is not None]
-        else:
-            views = [panel.active_view()]
+        views = dock.selected_target_views(panel) if hasattr(dock, 'selected_target_views') else [panel.active_view()]
+        if not views:
+            return
         image_items = self._collect_direct_image_attachments(direct_attachments)
         upload_paths = self._collect_web_upload_paths(dock)
         force_web_auto_send_once = bool(getattr(self, '_force_web_auto_send_once', False))
@@ -20421,6 +22077,113 @@ class MyWidget(QWidget):  # 主窗口
     def set_hotkey_manager(self, hotkey_manager):
         self.settings_panel.set_hotkey_manager(hotkey_manager)
 
+    def _background_vision_targets_from_store(self, store: dict) -> list[dict]:
+        globals_store = store.get('globals', {}) if isinstance(store, dict) else {}
+        settings = normalize_background_vision_settings(globals_store)
+        selected_names = normalize_background_vision_profile_names(settings.get('background_vision_profile_names', []))
+        profiles = list(store.get('profiles', []) if isinstance(store, dict) else [])
+        by_name = {
+            str(profile.get('name', '') or '').strip(): profile
+            for profile in profiles
+            if isinstance(profile, dict) and str(profile.get('name', '') or '').strip()
+        }
+        if not selected_names:
+            active_name = str(store.get('active_profile', '') or '').strip() if isinstance(store, dict) else ''
+            selected_names = [active_name] if active_name else []
+        targets = []
+        for name in selected_names:
+            profile = by_name.get(name)
+            if not profile:
+                continue
+            target = dict(profile)
+            target['endpoint'] = profile_runtime_base_url(profile)
+            targets.append(target)
+        if not targets and profiles:
+            profile = profiles[0]
+            target = dict(profile)
+            target['endpoint'] = profile_runtime_base_url(profile)
+            targets.append(target)
+        return targets
+
+    def _background_vision_signature_for(self, settings: dict, targets: list[dict]) -> str:
+        compact_targets = [
+            {
+                'name': str(target.get('name', '') or ''),
+                'endpoint': str(target.get('endpoint', '') or ''),
+                'model': str(target.get('model', '') or ''),
+                'timeout': str(target.get('timeout', '') or ''),
+                'api_key_hint': str(target.get('api_key', '') or '')[:8],
+            }
+            for target in targets
+        ]
+        payload = {
+            'settings': normalize_background_vision_settings(settings),
+            'targets': compact_targets,
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+    def apply_background_vision_settings(self):
+        store = load_settings_store()
+        globals_store = store.get('globals', {})
+        settings = normalize_background_vision_settings(globals_store)
+        if not bool(settings.get('background_vision_enabled', False)):
+            self.stop_background_vision()
+            return
+        targets = self._background_vision_targets_from_store(store)
+        signature = self._background_vision_signature_for(settings, targets)
+        worker = getattr(self, '_background_vision_worker', None)
+        if worker is not None and worker.isRunning() and signature == getattr(self, '_background_vision_signature', ''):
+            return
+        self.stop_background_vision()
+        if not targets:
+            return
+        self._background_vision_generation += 1
+        generation = self._background_vision_generation
+        worker = BackgroundVisionWorker(targets, settings)
+        worker.record_ready.connect(lambda record, gen=generation: self._on_background_vision_record_ready(record, gen))
+        worker.error.connect(lambda message, gen=generation: self._on_background_vision_error(message, gen))
+        worker.finished.connect(worker.deleteLater)
+        self._background_vision_worker = worker
+        self._background_vision_signature = signature
+        worker.start()
+
+    def stop_background_vision(self):
+        self._background_vision_generation += 1
+        worker = getattr(self, '_background_vision_worker', None)
+        self._background_vision_worker = None
+        self._background_vision_signature = ''
+        if worker is not None:
+            try:
+                self._background_vision_stopping_workers.append(worker)
+                worker.finished.connect(lambda w=worker: self._background_vision_stopping_workers.remove(w) if w in self._background_vision_stopping_workers else None)
+                worker.stop()
+                worker.wait(500)
+            except Exception:
+                pass
+
+    def _on_background_vision_record_ready(self, record, generation: int):
+        if generation != getattr(self, '_background_vision_generation', 0):
+            return
+        if not isinstance(record, dict):
+            return
+        settings = normalize_background_vision_settings(load_settings_store().get('globals', {}))
+        append_background_vision_record(record, settings.get('background_vision_max_records', DEFAULT_BACKGROUND_VISION_MAX_RECORDS))
+        if bool(settings.get('background_vision_show_overlay', True)) and bool(record.get('complete')):
+            ttl_ms = int(settings.get('background_vision_toast_sec', DEFAULT_BACKGROUND_VISION_TOAST_SECONDS) or DEFAULT_BACKGROUND_VISION_TOAST_SECONDS) * 1000
+            self._background_vision_toasts.show_record(record, ttl_ms=ttl_ms)
+
+    def _on_background_vision_error(self, message: str, generation: int):
+        if generation != getattr(self, '_background_vision_generation', 0):
+            return
+        # Keep background failures non-modal; the record file stores round-level errors.
+        return
+
+    def _build_background_vision_prompt_context(self) -> str:
+        globals_store = load_settings_store().get('globals', {})
+        if not bool(globals_store.get('background_vision_enabled', False)):
+            return ''
+        return load_latest_background_vision_context()
+
     def _refresh_history_panel(self):
         self.history_panel.set_records(list_conversation_records())
 
@@ -20648,8 +22411,10 @@ class MyWidget(QWidget):  # 主窗口
         if current_index in (0, 2):
             panel, dock = self._external_prompt_panel_for_index(current_index)
             if panel is not None and dock is not None:
+                dock.add_files_instant(paths, use_embedding=use_embedding)
                 panel.set_prompt_dock_visible(True, animated=True)
-                dock.add_files(paths, use_embedding=use_embedding)
+                QTimer.singleShot(0, lambda p=panel, d=dock: self._sync_external_prompt_dock_height(p, d))
+                QTimer.singleShot(240, lambda p=panel, d=dock: self._sync_external_prompt_dock_height(p, d))
             return
         if current_index == 3:
             terminal = getattr(self, 'terminal_widget', None)
@@ -20688,7 +22453,10 @@ class MyWidget(QWidget):  # 主窗口
             fallback = self._materialize_output_context_file(output)
             if fallback:
                 paths.append(fallback)
-        self._add_context_files_to_current_tab(paths)
+        if paths:
+            self._add_context_files_to_current_tab(paths)
+            if getattr(self, '_outputs_panel_visible', False):
+                self.hide_outputs_panel()
 
     def _run_profile_chat_completion(self, profile: dict, messages: list[dict]) -> str:
         api_key = str(profile.get('api_key', '')).strip()
@@ -22848,6 +24616,14 @@ end run'''"""
         except Exception as e:
             pass
 
+    def _relayout_background_vision_toasts(self):
+        if hasattr(self, '_background_vision_toasts'):
+            self._background_vision_toasts._relayout()
+
+    def _schedule_background_vision_toast_relayout(self):
+        for delay in (0, 220, 450):
+            QTimer.singleShot(delay, self._relayout_background_vision_toasts)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragPosition = event.globalPosition().toPoint() - self.pos()
@@ -22857,6 +24633,10 @@ end run'''"""
             return
         if event.buttons() == Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self.dragPosition)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._relayout_background_vision_toasts()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -22882,6 +24662,7 @@ end run'''"""
             self._update_text1_popup_geometry()
         if hasattr(self, '_external_prompt_trigger_btn'):
             self._update_external_prompt_trigger_geometry()
+        self._relayout_background_vision_toasts()
 
     # ── window-level file drag interception ───────────────────────────────────
     # QWebEngineView's Chromium layer intercepts drags before child-level event
@@ -23519,9 +25300,14 @@ end run'''"""
         target_dock = getattr(self, '_screenshot_target_dock', None)
         target_panel = getattr(self, '_screenshot_target_panel', None)
         if target_dock is not None and hasattr(target_dock, 'add_files'):
-            target_dock.add_files([path])
+            if hasattr(target_dock, 'add_files_instant'):
+                target_dock.add_files_instant([path])
+            else:
+                target_dock.add_files([path])
             if target_panel is not None and hasattr(target_panel, 'set_prompt_dock_visible'):
                 target_panel.set_prompt_dock_visible(True, animated=True)
+                QTimer.singleShot(0, lambda p=target_panel, d=target_dock: self._sync_external_prompt_dock_height(p, d))
+                QTimer.singleShot(240, lambda p=target_panel, d=target_dock: self._sync_external_prompt_dock_height(p, d))
             return
         self._attachment_tray.add_file(path)
         self._attachment_tray.show_drop_hint(False)
@@ -24060,6 +25846,10 @@ end run'''"""
             memory_context = self._build_saved_memory_prompt_context(raw_question)
             if memory_context:
                 context_blocks.append(memory_context)
+        if not skip_retrieval_for_blank_prompt:
+            vision_context = self._build_background_vision_prompt_context()
+            if vision_context:
+                context_blocks.append(vision_context)
         history = '\n\n'.join(block for block in context_blocks if block).strip()
         shared_context = '\n\n'.join(block for block in ([history, attachment_context] if attachment_context else [history]) if block).strip()
 
@@ -24105,7 +25895,7 @@ end run'''"""
         home_dir = str(Path.home())
         fj = QFileDialog.getExistingDirectory(self, 'Open', home_dir)
         if fj != '':
-            ConText = codecs.open('/Applications/Broccoli.app/Contents/Resources/output.txt', 'r', encoding='utf-8').read()
+            ConText = read_file_contents(BasePath + 'output.txt', '')
             ISOTIMEFORMAT = '%Y%m%d %H-%M-%S-%f'
             theTime = datetime.datetime.now().strftime(ISOTIMEFORMAT)
             tarname = theTime + " GPToutput.md"
@@ -24269,15 +26059,14 @@ end run'''"""
                 self.text1.setPlainText(str(e))
 
     def RunCommand(self):
-        comm = codecs.open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'r', encoding='utf-8').read()
+        comm = read_file_contents(BasePath + 'command.txt', '')
         try:
             subprocess.call(['osascript', '-e', comm])
         except:
             pass
 
     def ChangeCmd(self, changed_cmd=''):
-        with open('/Applications/Broccoli.app/Contents/Resources/command.txt', 'w', encoding='utf-8') as f0:
-            f0.write(str(changed_cmd or ''))
+        write_text_file(BasePath + 'command.txt', str(changed_cmd or ''))
 
     def md2html(self, mdstr, display_prefix_html: str = '', display_prefix_map: dict[str, str] | None = None):
         return render_markdown_document_to_html(
@@ -24326,13 +26115,38 @@ end run'''"""
 
         self.move_window(x_center, y_center)
         self.show()
+        self._schedule_background_vision_toast_relayout()
 
     def showhidedock(self):
         visible = action8.isChecked()
         action7.setVisible(visible)
-        with open(SHOWHIDE_PATH, 'w', encoding='utf-8') as f0:
-            f0.write('1' if visible else '0')
+        write_text_file(SHOWHIDE_PATH, '1' if visible else '0')
         set_dock_icon_visible(visible, activate=visible)
+
+    def sync_start_on_login_action(self, enabled: bool):
+        action = globals().get('action10')
+        if action is not None:
+            with QSignalBlocker(action):
+                action.setChecked(bool(enabled))
+        settings_panel = getattr(self, 'settings_panel', None)
+        checkbox = getattr(settings_panel, 'start_on_login_checkbox', None)
+        if checkbox is not None:
+            with QSignalBlocker(checkbox):
+                checkbox.setChecked(bool(enabled))
+
+    def toggle_start_on_login(self, checked: bool):
+        enabled = bool(checked)
+        try:
+            set_start_on_login_enabled(enabled)
+            store = load_settings_store()
+            store.setdefault('globals', default_global_settings())
+            store['globals']['start_on_login'] = enabled
+            save_settings_store(store)
+            self.sync_start_on_login_action(enabled)
+        except Exception as exc:
+            actual = is_start_on_login_enabled()
+            self.sync_start_on_login_action(actual)
+            show_broccoli_message(self, 'Start on login', f'Failed to update start on login: {exc}')
 
     def cleanlinebreak(self, a):  # 设置清除断行的基本代码块
         for i in range(10):
@@ -25665,6 +27479,7 @@ end run'''"""
         self.close()
 
     def totalquit(self):
+        self.stop_background_vision()
         app.quit()
 
 
@@ -25690,6 +27505,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self._external_context_source_records = []
         self._code_runner_updating = False
         self._code_runner_records = []
+        self._background_vision_updating = False
         self._prompt_records = []
         self._skill_records = []
         self.specialized_profile_combos = {}
@@ -25748,6 +27564,10 @@ class SettingsPanel(QWidget):  # Customization settings
         self.refresh_embedding_profile_selector(self.settings_store.get('globals', {}).get('embedding_profile', ''))
         self.refresh_specialized_profile_selectors(self.settings_store.get('globals', {}).get('specialized_profiles', {}))
         self.refresh_specialized_execution_selectors(self.settings_store.get('globals', {}).get('specialized_execution_modes', {}))
+        if hasattr(self, 'background_vision_profile_list_widget'):
+            self.refresh_background_vision_profile_list(
+                self.settings_store.get('globals', {}).get('background_vision_profile_names', [])
+            )
 
     def refresh_embedding_profile_selector(self, selected_name: str | None = None):
         selected_name = str(selected_name or '').strip()
@@ -25790,6 +27610,115 @@ class SettingsPanel(QWidget):  # Customization settings
             combo.setCurrentIndex(index if index >= 0 else 0)
             combo.blockSignals(False)
 
+    def refresh_background_vision_profile_list(self, selected_names=None):
+        if not hasattr(self, 'background_vision_profile_list_widget'):
+            return
+        selected = set(normalize_background_vision_profile_names(selected_names))
+        self._background_vision_updating = True
+        self.background_vision_profile_list_widget.clear()
+        for profile in self.settings_store.get('profiles', []):
+            name = str(profile.get('name', '') or '').strip()
+            if not name:
+                continue
+            item = QListWidgetItem(name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if name in selected else Qt.CheckState.Unchecked)
+            self.background_vision_profile_list_widget.addItem(item)
+        self._background_vision_updating = False
+
+    def _current_background_vision_profile_names(self) -> list[str]:
+        if not hasattr(self, 'background_vision_profile_list_widget'):
+            return []
+        names = []
+        for index in range(self.background_vision_profile_list_widget.count()):
+            item = self.background_vision_profile_list_widget.item(index)
+            if item and item.checkState() == Qt.CheckState.Checked:
+                names.append(item.text().strip())
+        return [name for name in names if name]
+
+    def _set_dropdown_current_data(self, combo: DropdownButton, value, fallback_index: int = 0):
+        index = combo.findData(value)
+        combo.setCurrentIndex(index if index >= 0 else fallback_index)
+
+    def _set_background_vision_settings(self, globals_store: dict):
+        settings = normalize_background_vision_settings(globals_store)
+        self._background_vision_updating = True
+        try:
+            self.background_vision_enabled_checkbox.setChecked(bool(settings['background_vision_enabled']))
+            self.background_vision_show_overlay_checkbox.setChecked(bool(settings['background_vision_show_overlay']))
+            self.refresh_background_vision_profile_list(settings['background_vision_profile_names'])
+            self._set_dropdown_current_data(self.background_vision_schedule_combo, settings['background_vision_schedule_mode'])
+            self.background_vision_interval_input.setText(str(settings['background_vision_interval_sec']))
+            self.background_vision_completion_delay_input.setText(str(settings['background_vision_completion_delay_sec']))
+            self.background_vision_toast_duration_input.setText(str(settings['background_vision_toast_sec']))
+            self._set_dropdown_current_data(self.background_vision_wait_mode_combo, settings['background_vision_multi_target_wait_mode'])
+            self.background_vision_max_workers_input.setText(str(settings['background_vision_max_workers']))
+            self._set_dropdown_current_data(self.background_vision_image_format_combo, settings['background_vision_image_format'])
+            self.background_vision_keep_history_checkbox.setChecked(bool(settings['background_vision_keep_history_context']))
+            self.background_vision_max_history_input.setText(str(settings['background_vision_max_history_messages']))
+            self.background_vision_prompt_edit.setPlainText(settings['background_vision_prompt'])
+            self.background_vision_save_captures_checkbox.setChecked(bool(settings['background_vision_save_captures']))
+            self.background_vision_capture_dir_input.setText(settings['background_vision_capture_dir'])
+            self.background_vision_max_records_input.setText(str(settings['background_vision_max_records']))
+        finally:
+            self._background_vision_updating = False
+        self._update_background_vision_controls()
+
+    def _current_background_vision_settings(self) -> dict:
+        return normalize_background_vision_settings({
+            'background_vision_enabled': self.background_vision_enabled_checkbox.isChecked(),
+            'background_vision_show_overlay': self.background_vision_show_overlay_checkbox.isChecked(),
+            'background_vision_profile_names': self._current_background_vision_profile_names(),
+            'background_vision_schedule_mode': self.background_vision_schedule_combo.currentData(),
+            'background_vision_interval_sec': self.background_vision_interval_input.text(),
+            'background_vision_completion_delay_sec': self.background_vision_completion_delay_input.text(),
+            'background_vision_toast_sec': self.background_vision_toast_duration_input.text(),
+            'background_vision_multi_target_wait_mode': self.background_vision_wait_mode_combo.currentData(),
+            'background_vision_max_workers': self.background_vision_max_workers_input.text(),
+            'background_vision_image_format': self.background_vision_image_format_combo.currentData(),
+            'background_vision_keep_history_context': self.background_vision_keep_history_checkbox.isChecked(),
+            'background_vision_max_history_messages': self.background_vision_max_history_input.text(),
+            'background_vision_prompt': self.background_vision_prompt_edit.toPlainText(),
+            'background_vision_save_captures': self.background_vision_save_captures_checkbox.isChecked(),
+            'background_vision_capture_dir': self.background_vision_capture_dir_input.text(),
+            'background_vision_max_records': self.background_vision_max_records_input.text(),
+        })
+
+    def _update_background_vision_controls(self):
+        enabled = bool(self.background_vision_enabled_checkbox.isChecked())
+        show_enabled = enabled
+        self.background_vision_show_overlay_checkbox.setEnabled(show_enabled)
+        for widget in (
+            self.background_vision_profile_list_widget,
+            self.background_vision_schedule_combo,
+            self.background_vision_interval_input,
+            self.background_vision_completion_delay_input,
+            self.background_vision_toast_duration_input,
+            self.background_vision_wait_mode_combo,
+            self.background_vision_max_workers_input,
+            self.background_vision_image_format_combo,
+            self.background_vision_keep_history_checkbox,
+            self.background_vision_max_history_input,
+            self.background_vision_prompt_edit,
+            self.background_vision_save_captures_checkbox,
+            self.background_vision_capture_dir_input,
+            self.background_vision_capture_dir_button,
+            self.background_vision_max_records_input,
+        ):
+            widget.setEnabled(enabled)
+        self.background_vision_capture_dir_input.setEnabled(enabled and self.background_vision_save_captures_checkbox.isChecked())
+        self.background_vision_capture_dir_button.setEnabled(enabled and self.background_vision_save_captures_checkbox.isChecked())
+
+    def _browse_background_vision_capture_dir(self):
+        chosen = QFileDialog.getExistingDirectory(
+            self,
+            'Select background vision screenshot folder',
+            self.background_vision_capture_dir_input.text().strip() or BACKGROUND_VISION_CAPTURE_DIR,
+        )
+        if chosen:
+            self.background_vision_capture_dir_input.setText(chosen)
+            self._mark_dirty_if_needed()
+
     def _update_embedding_status_hint(self, message: str | None = None):
         if message is not None:
             self.embedding_status_label.setText(message)
@@ -25815,6 +27744,7 @@ class SettingsPanel(QWidget):  # Customization settings
         globals_store = self.settings_store['globals']
         self._set_languages(globals_store.get('languages', ''))
         self.checkBox_top.setChecked(bool(globals_store.get('always_on_top', True)))
+        self.start_on_login_checkbox.setChecked(is_start_on_login_enabled())
         self.checkBox_display_history.setChecked(bool(globals_store.get('prefer_displayed_history_context', False)))
         self.allow_blank_prompt_checkbox.setChecked(bool(globals_store.get('allow_blank_prompt_with_attachments', False)))
         self.skip_blank_retrieval_checkbox.setChecked(bool(globals_store.get('skip_retrieval_for_blank_prompt', False)))
@@ -25842,6 +27772,7 @@ class SettingsPanel(QWidget):  # Customization settings
             globals_store.get('code_execution_timeout', CODE_EXECUTION_DEFAULT_TIMEOUT_SECONDS)
         )))
         self._set_code_runner_records(globals_store.get('code_runners', []))
+        self._set_background_vision_settings(globals_store)
         self.webfetch_download_input.setText(globals_store.get('webfetch_download_path', ''))
         self._set_prompt_records(parse_custom_prompt_storage(globals_store.get('custom_prompt', '')))
         self._set_skill_records(globals_store.get('skills', []))
@@ -25928,10 +27859,20 @@ class SettingsPanel(QWidget):  # Customization settings
             if value == profile_name:
                 specialized[key] = ''
         self.settings_store['globals']['specialized_profiles'] = specialized
+        vision_names = normalize_background_vision_profile_names(
+            self.settings_store['globals'].get('background_vision_profile_names', [])
+        )
+        self.settings_store['globals']['background_vision_profile_names'] = [
+            name for name in vision_names
+            if name != profile_name
+        ]
         save_settings_store(self.settings_store)
         sync_profile_to_legacy_files(self.settings_store['profiles'][0], self.settings_store['globals'])
         if self.hotkey_manager is not None:
             self.hotkey_manager.reload_shortcuts()
+        window = self.window()
+        if hasattr(window, 'apply_background_vision_settings'):
+            window.apply_background_vision_settings()
         self.reload_from_store()
 
     def collect_global_settings(self) -> dict:
@@ -25949,6 +27890,7 @@ class SettingsPanel(QWidget):  # Customization settings
             'skills': serialize_skill_records(self._current_skill_records(), validate=True),
             'languages': self._current_languages(),
             'always_on_top': self.checkBox_top.isChecked(),
+            'start_on_login': self.start_on_login_checkbox.isChecked(),
             'prefer_displayed_history_context': self.checkBox_display_history.isChecked(),
             'display_history_context_max_chars': normalize_display_history_context_max_chars(self.display_history_limit_input.text()),
             'allow_blank_prompt_with_attachments': self.allow_blank_prompt_checkbox.isChecked(),
@@ -25989,14 +27931,15 @@ class SettingsPanel(QWidget):  # Customization settings
                     },
                 }
             ),
-            'specialized_execution_modes': normalize_specialized_execution_modes(
-                {
-                    capability: str(combo.currentData() or '').strip()
-                    for capability, combo in self.specialized_execution_combos.items()
-                }
-            ),
-            'userscripts': self._current_userscripts(),
-        }
+                'specialized_execution_modes': normalize_specialized_execution_modes(
+                    {
+                        capability: str(combo.currentData() or '').strip()
+                        for capability, combo in self.specialized_execution_combos.items()
+                    }
+                ),
+                'userscripts': self._current_userscripts(),
+                **self._current_background_vision_settings(),
+            }
 
     def collect_profile_settings(self) -> dict:
         profile_name = self.profile_name_input.text().strip()
@@ -26055,10 +27998,25 @@ class SettingsPanel(QWidget):  # Customization settings
             globals_store['embedding_profile'] = profile['name']
         if globals_store.get('embedding_profile') and globals_store['embedding_profile'] not in {item['name'] for item in updated_profiles}:
             globals_store['embedding_profile'] = ''
+        vision_names = normalize_background_vision_profile_names(globals_store.get('background_vision_profile_names', []))
+        if previous_profile_name and profile['name'] != previous_profile_name:
+            vision_names = [profile['name'] if name == previous_profile_name else name for name in vision_names]
+        valid_profile_names = {item['name'] for item in updated_profiles}
+        globals_store['background_vision_profile_names'] = [
+            name for name in vision_names
+            if name in valid_profile_names
+        ]
 
         self.settings_store['profiles'] = updated_profiles
         self.settings_store['active_profile'] = profile['name']
         self.settings_store['globals'] = globals_store
+        try:
+            set_start_on_login_enabled(bool(globals_store.get('start_on_login', False)))
+        except Exception as exc:
+            raise ValueError(f'Start on login update failed: {exc}') from exc
+        window = self.window()
+        if hasattr(window, 'sync_start_on_login_action'):
+            window.sync_start_on_login_action(bool(globals_store.get('start_on_login', False)))
         save_settings_store(self.settings_store)
         sync_profile_to_legacy_files(profile, globals_store)
 
@@ -26068,13 +28026,14 @@ class SettingsPanel(QWidget):  # Customization settings
         self.refresh_profile_selector(profile['name'])
         if self.hotkey_manager is not None:
             self.hotkey_manager.reload_shortcuts()
-        window = self.window()
         if hasattr(window, 'set_always_on_top'):
             window.set_always_on_top(globals_store.get('always_on_top', True))
         if hasattr(window, 'apply_webfetch_watch_settings'):
             window.apply_webfetch_watch_settings(globals_store.get('webfetch_download_path', ''))
         if hasattr(window, 'terminal_widget'):
             window.terminal_widget.reload_shell_preferences(notify=True)
+        if hasattr(window, 'apply_background_vision_settings'):
+            window.apply_background_vision_settings()
         self._capture_baseline()
 
     def reset_record_buttons(self):
@@ -26239,6 +28198,7 @@ class SettingsPanel(QWidget):  # Customization settings
             self.userscript_list_widget.setStyleSheet(list_style)
             self.external_context_list_widget.setStyleSheet(list_style)
             self.code_runner_list_widget.setStyleSheet(list_style)
+            self.background_vision_profile_list_widget.setStyleSheet(list_style)
             self.embedding_status_label.setStyleSheet(
                 f'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
                 f'font-size: 11px; color: {"#8E8E93" if dark else "#8E8E93"};'
@@ -26259,6 +28219,13 @@ class SettingsPanel(QWidget):  # Customization settings
                 self.code_runner_language_input,
                 self.code_runner_command_input,
                 self.code_runner_args_input,
+                self.background_vision_interval_input,
+                self.background_vision_completion_delay_input,
+                self.background_vision_toast_duration_input,
+                self.background_vision_max_workers_input,
+                self.background_vision_max_history_input,
+                self.background_vision_capture_dir_input,
+                self.background_vision_max_records_input,
                 self.le_ui,
                 self.le_same_position_screenshot,
                 self.webfetch_download_input,
@@ -26273,6 +28240,7 @@ class SettingsPanel(QWidget):  # Customization settings
             self.memory_text_edit.setStyleSheet(textedit_style)
             self.prompt_body_edit.setStyleSheet(textedit_style)
             self.skill_body_edit.setStyleSheet(textedit_style)
+            self.background_vision_prompt_edit.setStyleSheet(textedit_style)
             frame_style = f'QFrame {{ color: {"#3A3A3A" if dark else "#ECECEC"}; background: transparent; }}'
             self.frame1.setStyleSheet(frame_style)
             self.frame2.setStyleSheet(frame_style)
@@ -27127,6 +29095,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self.display_history_limit_input.setPlaceholderText(str(DISPLAY_HISTORY_CONTEXT_MAX_CHARS))
         self.display_history_limit_input.setFixedHeight(22)
         self.checkBox_top = QCheckBox('Keep the main window always on top', self)
+        self.start_on_login_checkbox = QCheckBox('Start Broccoli on login', self)
         self.terminal_shell_mode_combo = DropdownButton(self, always_dark=False, compact_light=True)
         self.terminal_shell_mode_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.terminal_shell_mode_combo.setMinimumWidth(220)
@@ -27356,6 +29325,60 @@ class SettingsPanel(QWidget):  # Customization settings
         self.code_runner_new_button.setFixedWidth(settings_action_button_w)
         self.code_runner_delete_button.setFixedWidth(settings_action_button_w)
 
+        self.background_vision_enabled_checkbox = QCheckBox('Enable background vision', self)
+        self.background_vision_show_overlay_checkbox = QCheckBox('Show floating vision window', self)
+        self.background_vision_profile_list_widget = QListWidget(self)
+        self.background_vision_profile_list_widget.setStyleSheet(self.memory_list_widget.styleSheet())
+        self.background_vision_profile_list_widget.itemChanged.connect(self._mark_dirty_if_needed)
+
+        self.background_vision_schedule_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.background_vision_schedule_combo.setMinimumWidth(220)
+        self.background_vision_schedule_combo.addItem('Fixed interval', 'fixed_interval')
+        self.background_vision_schedule_combo.addItem('After round completion', 'after_completion')
+
+        self.background_vision_interval_input = QLineEdit(self)
+        self.background_vision_interval_input.setPlaceholderText(str(DEFAULT_BACKGROUND_VISION_INTERVAL_SECONDS))
+        self.background_vision_interval_input.setFixedHeight(22)
+        self.background_vision_completion_delay_input = QLineEdit(self)
+        self.background_vision_completion_delay_input.setPlaceholderText(str(DEFAULT_BACKGROUND_VISION_COMPLETION_DELAY_SECONDS))
+        self.background_vision_completion_delay_input.setFixedHeight(22)
+        self.background_vision_toast_duration_input = QLineEdit(self)
+        self.background_vision_toast_duration_input.setPlaceholderText(str(DEFAULT_BACKGROUND_VISION_TOAST_SECONDS))
+        self.background_vision_toast_duration_input.setFixedHeight(22)
+
+        self.background_vision_wait_mode_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.background_vision_wait_mode_combo.setMinimumWidth(220)
+        self.background_vision_wait_mode_combo.addItem('First profile finished', 'first_done')
+        self.background_vision_wait_mode_combo.addItem('All profiles finished', 'all_done')
+
+        self.background_vision_max_workers_input = QLineEdit(self)
+        self.background_vision_max_workers_input.setPlaceholderText(str(DEFAULT_BACKGROUND_VISION_MAX_WORKERS))
+        self.background_vision_max_workers_input.setFixedHeight(22)
+
+        self.background_vision_image_format_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.background_vision_image_format_combo.setMinimumWidth(220)
+        self.background_vision_image_format_combo.addItem('PNG', 'png')
+        self.background_vision_image_format_combo.addItem('Lossless WebP', 'webp_lossless')
+
+        self.background_vision_keep_history_checkbox = QCheckBox('Keep background vision history', self)
+        self.background_vision_max_history_input = QLineEdit(self)
+        self.background_vision_max_history_input.setPlaceholderText(str(DEFAULT_BACKGROUND_VISION_MAX_HISTORY_MESSAGES))
+        self.background_vision_max_history_input.setFixedHeight(22)
+
+        self.background_vision_prompt_edit = QTextEdit(self)
+        self.background_vision_prompt_edit.setAcceptRichText(False)
+        self.background_vision_prompt_edit.setPlaceholderText('Prompt used by the background vision observer.')
+
+        self.background_vision_save_captures_checkbox = QCheckBox('Save screenshots locally', self)
+        self.background_vision_capture_dir_input = QLineEdit(self)
+        self.background_vision_capture_dir_input.setPlaceholderText(BACKGROUND_VISION_CAPTURE_DIR)
+        self.background_vision_capture_dir_input.setFixedHeight(22)
+        self.background_vision_capture_dir_button = MacNormalButton('Browse', self)
+        self.background_vision_capture_dir_button.clicked.connect(self._browse_background_vision_capture_dir)
+        self.background_vision_max_records_input = QLineEdit(self)
+        self.background_vision_max_records_input.setPlaceholderText(str(DEFAULT_BACKGROUND_VISION_MAX_RECORDS))
+        self.background_vision_max_records_input.setFixedHeight(22)
+
         self.save_button = WhiteButton('Save')
         self.save_button.clicked.connect(self.SaveAPI)
         self.save_button.setMinimumWidth(120)
@@ -27423,6 +29446,7 @@ class SettingsPanel(QWidget):  # Customization settings
         form_layout.addRow('', self.skip_blank_retrieval_checkbox)
         form_layout.addRow('', self.clear_attachments_after_send_checkbox)
         form_layout.addRow('', self.checkBox_top)
+        form_layout.addRow('', self.start_on_login_checkbox)
 
         shortcut_row_ui = QWidget()
         shortcut_row_ui_layout = QHBoxLayout()
@@ -27575,18 +29599,63 @@ class SettingsPanel(QWidget):  # Customization settings
         general_page_4_layout.addWidget(code_runner_actions)
         general_page_4_layout.addLayout(code_runner_fields)
 
+        general_page_5 = QWidget()
+        general_page_5_layout = QVBoxLayout(general_page_5)
+        general_page_5_layout.setContentsMargins(0, 0, 0, 0)
+        general_page_5_layout.setSpacing(12)
+        background_vision_form = QFormLayout()
+        background_vision_form.setContentsMargins(0, 0, 0, 0)
+        background_vision_form.setSpacing(10)
+        background_vision_capture_row = QWidget()
+        background_vision_capture_row_layout = QHBoxLayout(background_vision_capture_row)
+        background_vision_capture_row_layout.setContentsMargins(0, 0, 0, 0)
+        background_vision_capture_row_layout.setSpacing(6)
+        background_vision_capture_row_layout.addWidget(self.background_vision_capture_dir_input, 1)
+        background_vision_capture_row_layout.addWidget(self.background_vision_capture_dir_button)
+        background_vision_form.addRow('Schedule mode', self.background_vision_schedule_combo)
+        background_vision_form.addRow('Interval (sec)', self.background_vision_interval_input)
+        background_vision_form.addRow('Completion delay', self.background_vision_completion_delay_input)
+        background_vision_form.addRow('Floating window seconds', self.background_vision_toast_duration_input)
+        background_vision_form.addRow('Profile wait mode', self.background_vision_wait_mode_combo)
+        background_vision_form.addRow('Max concurrent rounds', self.background_vision_max_workers_input)
+        background_vision_form.addRow('Image format', self.background_vision_image_format_combo)
+        general_page_5_layout.addWidget(self.background_vision_enabled_checkbox)
+        general_page_5_layout.addWidget(self.background_vision_show_overlay_checkbox)
+        general_page_5_layout.addWidget(QLabel('Background vision profiles'))
+        general_page_5_layout.addWidget(self.background_vision_profile_list_widget, 1)
+        general_page_5_layout.addLayout(background_vision_form)
+        general_page_5_layout.addStretch(1)
+
+        general_page_6 = QWidget()
+        general_page_6_layout = QVBoxLayout(general_page_6)
+        general_page_6_layout.setContentsMargins(0, 0, 0, 0)
+        general_page_6_layout.setSpacing(12)
+        background_vision_storage_form = QFormLayout()
+        background_vision_storage_form.setContentsMargins(0, 0, 0, 0)
+        background_vision_storage_form.setSpacing(10)
+        background_vision_storage_form.addRow('Max history messages', self.background_vision_max_history_input)
+        background_vision_storage_form.addRow('Max JSON records', self.background_vision_max_records_input)
+        background_vision_storage_form.addRow('Screenshot folder', background_vision_capture_row)
+        general_page_6_layout.addWidget(self.background_vision_keep_history_checkbox)
+        general_page_6_layout.addWidget(self.background_vision_save_captures_checkbox)
+        general_page_6_layout.addLayout(background_vision_storage_form)
+        general_page_6_layout.addWidget(QLabel('Background vision prompt'))
+        general_page_6_layout.addWidget(self.background_vision_prompt_edit, 1)
+
         self.general_pages = QStackedWidget(self)
         self.general_pages.addWidget(general_page_1)
         self.general_pages.addWidget(general_page_2)
         self.general_pages.addWidget(general_page_3)
         self.general_pages.addWidget(general_page_4)
+        self.general_pages.addWidget(general_page_5)
+        self.general_pages.addWidget(general_page_6)
         self.general_prev_button = MacNormalButton('‹', self)
         self.general_next_button = MacNormalButton('›', self)
         self.general_prev_button.setFixedWidth(44)
         self.general_next_button.setFixedWidth(44)
         self.general_prev_button.clicked.connect(lambda: self._set_general_page(self.general_pages.currentIndex() - 1))
         self.general_next_button.clicked.connect(lambda: self._set_general_page(self.general_pages.currentIndex() + 1))
-        self.general_page_label = QLabel('1 / 4', self)
+        self.general_page_label = QLabel('1 / 6', self)
         self.general_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         general_pager = QWidget()
         general_pager_layout = QHBoxLayout(general_pager)
@@ -27806,10 +29875,17 @@ class SettingsPanel(QWidget):  # Customization settings
             self.code_runner_language_input,
             self.code_runner_command_input,
             self.code_runner_args_input,
+            self.background_vision_interval_input,
+            self.background_vision_completion_delay_input,
+            self.background_vision_toast_duration_input,
+            self.background_vision_max_workers_input,
+            self.background_vision_max_history_input,
+            self.background_vision_capture_dir_input,
+            self.background_vision_max_records_input,
         ]
         for widget in widgets:
             widget.textChanged.connect(self._mark_dirty_if_needed)
-        for text_edit in (self.memory_text_edit,):
+        for text_edit in (self.memory_text_edit, self.background_vision_prompt_edit):
             text_edit.textChanged.connect(self._mark_dirty_if_needed)
         self.language_list_widget.currentItemChanged.connect(self._mark_dirty_if_needed)
         self.language_list_widget.itemChanged.connect(self._mark_dirty_if_needed)
@@ -27832,6 +29908,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self.skip_blank_retrieval_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.clear_attachments_after_send_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.checkBox_top.toggled.connect(self._mark_dirty_if_needed)
+        self.start_on_login_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.terminal_shell_mode_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
         self.terminal_use_bash_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.web_auto_send_checkbox.toggled.connect(self._mark_dirty_if_needed)
@@ -27845,6 +29922,16 @@ class SettingsPanel(QWidget):  # Customization settings
         self.external_context_list_widget.itemChanged.connect(self._mark_dirty_if_needed)
         self.code_runner_list_widget.currentItemChanged.connect(self._mark_dirty_if_needed)
         self.code_runner_list_widget.itemChanged.connect(self._mark_dirty_if_needed)
+        self.background_vision_enabled_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.background_vision_enabled_checkbox.toggled.connect(self._update_background_vision_controls)
+        self.background_vision_show_overlay_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.background_vision_profile_list_widget.itemChanged.connect(self._mark_dirty_if_needed)
+        self.background_vision_schedule_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
+        self.background_vision_wait_mode_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
+        self.background_vision_image_format_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
+        self.background_vision_keep_history_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.background_vision_save_captures_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.background_vision_save_captures_checkbox.toggled.connect(self._update_background_vision_controls)
         self.annotation_pen_color_input.textChanged.connect(self._mark_dirty_if_needed)
         self.endpoint_v1_checkbox.toggled.connect(self._mark_dirty_if_needed)
 
@@ -27901,6 +29988,7 @@ class SettingsPanel(QWidget):  # Customization settings
                     }
                 ),
                 'userscripts': self._current_userscripts(),
+                **self._current_background_vision_settings(),
             },
             'profile': {
                 'profile_name': self.profile_name_input.text().strip(),
@@ -28254,6 +30342,7 @@ if __name__ == '__main__':
     action4.triggered.connect(w3.show_settings_panel)
     action7.triggered.connect(w3.assigntoall)
     action8.triggered.connect(w3.showhidedock)
+    action10.triggered.connect(w3.toggle_start_on_login)
     set_dock_icon_visible(action8.isChecked())
     btna4.triggered.connect(w3.pin_a_tab)
     hotkey_manager.ui_hotkey_pressed.connect(w3.pin_a_tab)
