@@ -3,19 +3,30 @@
 
 block_cipher = None
 
-__version__ = '1.2.0'
+__version__ = '2.0.1'
 
 
 a = Analysis(
     ['Broccoli.py'],
-    pathex=['/Users/ryanshenefield/Downloads/Broccoli.py'],
+    pathex=['/Users/ryanshen/Downloads/Broccoli.py'],
     binaries=[],
-    datas=[('Broccolimen.icns', '.'), ('Broccolidsk.icns', '.'), ('Broccolimen.png', '.'), ('wechat50.png', '.'), ('wechat20.png', '.'), ('wechat10.png', '.'), ('wechat5.png', '.'), ('alipay50.png', '.'), ('alipay20.png', '.'), ('alipay10.png', '.'), ('alipay5.png', '.'), ('api.txt', '.'), ('output.txt', '.'), ('which.txt', '.'), ('command.txt', '.'), ('history.txt', '.'), ('wp.txt', '.'), ('title.txt', '.'), ('api2.txt', '.'), ('bear.txt', '.'), ('third.txt', '.'), ('temp.txt', '.'), ('max.txt', '.'), ('timeout.txt', '.'), ('showref.txt', '.'), ('ref.txt', '.'), ('set2.png', '.'), ('prog.txt', '.'), ('total.txt', '.'), ('modelnow.txt', '.'), ('close.png', '.'), ('transfer2.png', '.'), ('UI_short.txt', '.'), ('MINI_short.txt', '.'), ('which_short.txt', '.'), ('/Library/Frameworks/Python.framework/Versions/3.11/lib/python3.11/site-packages/jieba', 'jieba')],
-    hiddenimports=['torch', 'transformers', 'anyio', 'anyio._backends', 'requests', 'tqdm'],
+    datas=[('Broccolimen.icns', '.'), ('Broccolidsk.icns', '.'), ('Broccolimen.png', '.'), ('wechat50.png', '.'), ('wechat20.png', '.'), ('wechat10.png', '.'), ('wechat5.png', '.'), ('alipay50.png', '.'), ('alipay20.png', '.'), ('alipay10.png', '.'), ('alipay5.png', '.'), ('api.txt', '.'), ('output.txt', '.'), ('which.txt', '.'), ('command.txt', '.'), ('history.txt', '.'), ('wp.txt', '.'), ('api2.txt', '.'), ('bear.txt', '.'), ('third.txt', '.'), ('timeout.txt', '.'), ('showref.txt', '.'), ('set2.png', '.'), ('plus2.png', '.'), ('modelnow.txt', '.'), ('transfer2.png', '.'), ('UI_short.txt', '.'), ('showhide.txt', '.'), ('/Users/ryanshen/Documents/A-workingfilewithp3.11/.venv/lib/python3.11/site-packages/jieba/', 'jieba')],
+    hiddenimports=[
+    'PyQt6.QtWebEngineWidgets',
+    'PyQt6.QtWebEngineCore',
+    'PyQt6.QtPdf',
+    'fitz',
+    'pdfminer.high_level',
+    'PIL.Image',
+    'pytesseract',
+    'watchdog.observers',
+    'watchdog.events',
+    'anyio._backends._asyncio',
+],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['PyQt5', 'PyQt5_sip', 'PySide2', 'PySide6'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
