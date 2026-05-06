@@ -10,8 +10,8 @@ from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QSizePolicy, QColorDialog,
                              QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QTreeView, QSplitter, QGraphicsView,
                              QGraphicsScene, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsLineItem)
-from PyQt6.QtCore import Qt, QRect, QRectF, QPropertyAnimation, QTimer, QThread, pyqtSignal, QObject, QEasingCurve, QPoint, QPointF, QUrl, QProcess, QEvent, QSize, QSignalBlocker
-from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem, QRegion
+from PyQt6.QtCore import Qt, QRect, QRectF, QPropertyAnimation, QParallelAnimationGroup, QTimer, QThread, pyqtSignal, QObject, QEasingCurve, QPoint, QPointF, QUrl, QProcess, QEvent, QSize, QSignalBlocker
+from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem, QRegion, QLinearGradient
 import PyQt6.QtGui
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript
@@ -151,7 +151,7 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.2'
+VERSION = '2.0.3'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
 BUNDLED_RESOURCES_DIR = _resolve_bundled_resources_dir()
@@ -183,6 +183,8 @@ DEFAULT_ENDPOINT = 'https://api.openai.com'
 DEFAULT_MODEL = 'gpt-3.5-turbo'
 CHAT_HISTORY_PATH = os.path.join(BROCCOLI_APP_DATA_DIR, 'output_messages.json')
 CONVERSATIONS_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'Conversations')
+WEB_CONVERSATION_BINDINGS_PATH = os.path.join(BROCCOLI_APP_DATA_DIR, 'web_conversation_bindings.json')
+POPCLIP_TRANSLATE_SOURCE = 'PopClip Translate'
 WEBFETCH_INBOX_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'WebFetchInbox')
 SCREENSHOT_CAPTURE_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'CaptureAttachments')
 TAB_GENERATED_OUTPUTS_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'TabGeneratedOutputs')
@@ -2396,11 +2398,16 @@ class DropdownPopup(QWidget):
         if not self.items:
             return
         self._update_size()
+        no_focus = bool(getattr(self.parent_button, '_popup_no_focus', False))
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, no_focus)
+        self.setWindowFlag(Qt.WindowType.WindowDoesNotAcceptFocus, no_focus)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus if no_focus else Qt.FocusPolicy.StrongFocus)
         btn_pos = self.parent_button.mapToGlobal(self.parent_button.rect().topLeft())
         self.move(btn_pos.x(), btn_pos.y() - self.height() - 2)
         self.show()
-        self.activateWindow()
-        self.setFocus(Qt.FocusReason.PopupFocusReason)
+        if not no_focus:
+            self.activateWindow()
+            self.setFocus(Qt.FocusReason.PopupFocusReason)
         app.installEventFilter(self)
 
     def paintEvent(self, event):
@@ -2481,7 +2488,8 @@ class DropdownPopup(QWidget):
         self.update()
 
     def focusOutEvent(self, event):
-        self.hide()
+        if not bool(getattr(self.parent_button, '_popup_no_focus', False)):
+            self.hide()
 
     def hideEvent(self, event):
         try:
@@ -6100,6 +6108,107 @@ def load_runtime_openai_client_config() -> tuple[str, str]:
     return api_key, profile_runtime_base_url(profile)
 
 
+def load_language_items() -> list[str]:
+    ensure_broccoli_data_dir()
+    try:
+        raw = Path(LANGUAGE_LIST_PATH).read_text(encoding='utf-8')
+        items = [item.strip() for item in raw.splitlines() if item.strip()]
+    except Exception:
+        items = []
+    return items or ['English', '中文', '日本語']
+
+
+def build_translation_prompt(prompt_input: str, source_language: str, target_language: str) -> str:
+    return (
+        'You are a translation engine that can only translate text and cannot interpret it. '
+        f'Translate this text from {source_language} to {target_language}. '
+        'Don\'t reply any other explanations. Before the translated text starts, write "「「START」」" '
+        f'and write "「「END」」" after it ends. Text: {prompt_input}. '
+    )
+
+
+def extract_marked_translation(text: str) -> str:
+    content = str(text or '').strip()
+    match = re.search(r'「「START」」(?P<body>.*?)「「END」」', content, flags=re.DOTALL)
+    if match:
+        return match.group('body').strip()
+    match = re.search(r'START[」\]）\)]*(?P<body>.*?)「?「?END', content, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group('body').strip()
+    return content
+
+
+def language_alias_key(name: str) -> str:
+    text = str(name or '').strip().lower()
+    compact = re.sub(r'[\s_\-()（）]+', '', text)
+    aliases = {
+        'english': {'english', 'en', 'anglais', '英語', '英语', '英文'},
+        'chinese': {'chinese', 'zh', '中文', '汉语', '漢語', '简体中文', '繁體中文', 'traditionalchinese', 'simplifiedchinese'},
+        'japanese': {'japanese', 'ja', '日本語', '日语', '日文'},
+        'korean': {'korean', 'ko', '한국어', '韩语', '韓語', '朝鲜语'},
+        'french': {'french', 'fr', 'français', '法语', '法文'},
+        'german': {'german', 'de', 'deutsch', '德语', '德文'},
+        'spanish': {'spanish', 'es', 'español', '西班牙语', '西语'},
+        'italian': {'italian', 'it', 'italiano', '意大利语'},
+        'portuguese': {'portuguese', 'pt', 'português', '葡萄牙语'},
+        'russian': {'russian', 'ru', 'русский', '俄语', '俄文'},
+    }
+    for key, values in aliases.items():
+        if compact in {re.sub(r'[\s_\-()（）]+', '', value.lower()) for value in values}:
+            return key
+    return compact
+
+
+def canonical_language_display(key: str) -> str:
+    return {
+        'english': 'English',
+        'chinese': '中文',
+        'japanese': '日本語',
+        'korean': '한국어',
+        'french': 'Français',
+        'german': 'Deutsch',
+        'spanish': 'Español',
+        'italian': 'Italiano',
+        'portuguese': 'Português',
+        'russian': 'Русский',
+    }.get(str(key or '').strip(), str(key or '').strip() or 'English')
+
+
+def match_configured_language(canonical_key: str, configured_languages: list[str]) -> str:
+    for item in configured_languages:
+        if language_alias_key(item) == canonical_key:
+            return item
+    return canonical_language_display(canonical_key)
+
+
+def detect_selected_text_language(text: str, configured_languages: list[str] | None = None) -> str:
+    configured = list(configured_languages or load_language_items())
+    sample = str(text or '').strip()
+    if not sample:
+        return configured[0] if configured else 'English'
+    try:
+        from lingua import LanguageDetectorBuilder
+        detector = LanguageDetectorBuilder.from_all_languages().build()
+        detected = detector.detect_language_of(sample[:8000])
+        if detected is not None:
+            key = str(getattr(detected, 'name', '') or '').strip().lower()
+            if key:
+                return match_configured_language(key, configured)
+    except Exception:
+        pass
+    counts = {
+        'chinese': len(re.findall(r'[\u4e00-\u9fff]', sample)),
+        'japanese': len(re.findall(r'[\u3040-\u30ff]', sample)),
+        'korean': len(re.findall(r'[\uac00-\ud7af]', sample)),
+        'russian': len(re.findall(r'[\u0400-\u04ff]', sample)),
+        'english': len(re.findall(r'[A-Za-z]', sample)),
+    }
+    key = max(counts, key=counts.get)
+    if counts.get(key, 0) <= 0:
+        key = language_alias_key(configured[0]) if configured else 'english'
+    return match_configured_language(key, configured)
+
+
 def get_profile_from_store_by_name(store: dict, profile_name: str) -> dict | None:
     target = str(profile_name or '').strip()
     if not target:
@@ -6918,6 +7027,9 @@ def normalize_chat_history_message(item: dict) -> dict | None:
     normalized = {'role': role, 'content': content}
     if timestamp:
         normalized['timestamp'] = timestamp
+    source = str(item.get('source', '') or '').strip()
+    if source:
+        normalized['source'] = source[:40]
     display_prefix_html = str(item.get('display_prefix_html', '') or '').strip()
     if display_prefix_html and role == 'assistant':
         normalized['display_prefix_html'] = display_prefix_html
@@ -6978,10 +7090,16 @@ def render_chat_history_display_markup(messages: list[dict]) -> tuple[str, dict[
         label = 'Q' if message['role'] == 'user' else 'A'
         label_class = 'q' if message['role'] == 'user' else 'a'
         timestamp = message.get('timestamp', '')
+        source = str(message.get('source', '') or '').strip()
+        meta_parts = []
         if timestamp:
+            meta_parts.append(f'<span class="qa-time">{html.escape(timestamp)}</span>')
+        if source:
+            meta_parts.append(f'<span class="qa-source">{html.escape(source)}</span>')
+        if meta_parts:
             blocks.append(
                 f'<div class="qa-meta-row"><span class="qa-label qa-label-{label_class}">{label}</span>'
-                f'<span class="qa-time">{timestamp}</span></div>'
+                f'{"".join(meta_parts)}</div>'
             )
         else:
             blocks.append(f'<span class="qa-label qa-label-{label_class}">{label}</span>')
@@ -8549,6 +8667,13 @@ def render_markdown_document_to_html(mdstr: str, dark: bool, display_prefix_html
             font-weight: 500;
             letter-spacing: 0.02em;
         }
+        .qa-source {
+            color: %s;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            opacity: 0.88;
+        }
         .user-message-plain {
             margin: 0 0 18px 0;
             white-space: pre-wrap;
@@ -8647,7 +8772,7 @@ def render_markdown_document_to_html(mdstr: str, dark: bool, display_prefix_html
     middlehtml = html_template % (
         table_fg, border, th_bg, border, td_bg, border,
         separator_left, separator_right,
-        qa_q_bg, qa_q_fg, qa_a_bg, qa_a_fg, qa_time,
+        qa_q_bg, qa_q_fg, qa_a_bg, qa_a_fg, qa_time, qa_time,
         '#343436' if dark else '#F7F8FA',
         '#4A4B4F' if dark else '#E2E5EA',
         '#F2F2F7' if dark else '#20242B',
@@ -10548,7 +10673,7 @@ class BrowserBridgeServer(threading.Thread):
                     self.end_headers()
 
             def do_POST(self):
-                if self.path != '/ask':
+                if self.path not in {'/ask', '/translate-popup'}:
                     self.send_response(404)
                     self.end_headers()
                     return
@@ -10565,6 +10690,8 @@ class BrowserBridgeServer(threading.Thread):
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                if self.path == '/translate-popup':
+                    payload['action'] = 'translate_popup'
                 signals.received.emit(payload)
 
         class ReusableTCPServer(socketserver.TCPServer):
@@ -11711,6 +11838,432 @@ _ICON_JS = (
     "})()"
 )
 
+_WEB_CONVERSATION_CAPTURE_JS = r"""
+(() => {
+  const clean = (value) => String(value || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  const host = String(window.location.hostname || '').toLowerCase();
+  const serviceName = (() => {
+    if (host.includes('claude.ai')) return 'Claude';
+    if (host.includes('chatgpt.com') || host.includes('openai.com')) return 'ChatGPT';
+    if (host.includes('gemini.google.com')) return 'Gemini';
+    if (host.includes('chat.z.ai') || host === 'z.ai' || host.endsWith('.z.ai')) return 'Z.ai';
+    if (host.includes('kimi.com')) return 'Kimi';
+    if (host.includes('qwen')) return 'Qwen';
+    if (host.includes('perplexity')) return 'Perplexity';
+    if (host.includes('grok')) return 'Grok';
+    return 'Web';
+  })();
+  const normalizedKey = (value) => clean(value).toLowerCase().replace(/\s+/g, ' ');
+  const cloneText = (el) => {
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('button, nav, menu, svg, style, script, textarea, input, [aria-hidden="true"]').forEach((node) => node.remove());
+    return clean(clone.innerText || clone.textContent || '');
+  };
+  const stripNoiseLines = (text) => {
+    const lines = clean(text).split('\n').map((line) => line.trim()).filter(Boolean);
+    const kept = [];
+    let previous = '';
+    for (const line of lines) {
+      if (/^\d{1,2}:\d{2}(\s?(am|pm))?$/i.test(line)) continue;
+      if (/^\d+\s+lines?$/i.test(line)) continue;
+      if (/^(txt|pdf|docx?|png|jpe?g|webp)$/i.test(line)) continue;
+      if (/^excerpt_from_previous_.*\.txt$/i.test(line)) continue;
+      if (/^(searched the web|searching the web|search results)$/i.test(line)) continue;
+      if (line === previous) continue;
+      kept.push(line);
+      previous = line;
+    }
+    return clean(kept.join('\n'));
+  };
+  const collapseRepeatedPrefix = (text) => {
+    let value = clean(text);
+    if (value.length < 8) return value;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let size = Math.floor(value.length / 2); size >= 8; size -= 1) {
+        const prefix = value.slice(0, size);
+        const prefixKey = normalizedKey(prefix);
+        if (!prefixKey || prefixKey.length < 8) continue;
+        const rest = value.slice(size).trimStart();
+        const restKey = normalizedKey(rest);
+        if (restKey === prefixKey || restKey.startsWith(prefixKey + ' ') || restKey.startsWith(prefixKey)) {
+          const duplicateEnd = restKey === prefixKey ? rest.length : size;
+          value = clean(prefix + rest.slice(duplicateEnd));
+          changed = true;
+          break;
+        }
+      }
+    }
+    return value;
+  };
+  const stripRoleMarkers = (role, text) => {
+    let value = stripNoiseLines(text);
+    if (role === 'assistant') {
+      const markers = [
+        /(?:^|\n)\s*(?:Claude|ChatGPT|Gemini|Kimi|Qwen|Grok|Perplexity)\s+(?:responded|replied|said)\s*:\s*/i,
+        /(?:^|\n)\s*(?:Claude|ChatGPT|Gemini|Kimi|Qwen|Grok|Perplexity)\s+(?:responded|replied|said)\s+/i,
+        /(?:^|\n)\s*(?:assistant|model|ai)\s+(?:responded|replied|said)\s*:\s*/i,
+        /(?:^|\n)\s*(?:assistant|model|ai)\s+(?:responded|replied|said)\s+/i,
+        /(?:^|\n)\s*(?:回答|回复)\s*[:：]\s*/i
+      ];
+      for (const marker of markers) {
+        const match = value.match(marker);
+        if (match && typeof match.index === 'number') {
+          value = value.slice(match.index + match[0].length);
+          break;
+        }
+      }
+      value = value.replace(/^\s*(?:Claude|ChatGPT|Gemini|Kimi|Qwen|Grok|Perplexity|Assistant|Model|AI)\s+(?:responded|replied|said)\s*/i, '');
+      value = value.replace(/^\s*(?:Claude|ChatGPT|Gemini|Kimi|Qwen|Grok|Perplexity|Assistant|Model|AI)\s*[:：]\s*/i, '');
+    } else if (role === 'user') {
+      const markers = [
+        /(?:^|\n)\s*(?:You said|User said|Human said)\s*:\s*/i,
+        /(?:^|\n)\s*(?:You said|User said|Human said)\s+/i,
+        /(?:^|\n)\s*(?:用户|提问|问题)\s*[:：]\s*/i
+      ];
+      for (const marker of markers) {
+        const match = value.match(marker);
+        if (match && typeof match.index === 'number') {
+          value = value.slice(match.index + match[0].length);
+          break;
+        }
+      }
+      const assistantMarker = value.search(/(?:^|\n)\s*(?:Claude|ChatGPT|Gemini|Kimi|Qwen|Grok|Perplexity|assistant|model|ai)\s+(?:responded|replied|said)(?:\s*[:：]|\s+)/i);
+      if (assistantMarker > 0) value = value.slice(0, assistantMarker);
+      value = value.replace(/^\s*(?:You said|User said|Human said|User|You|Human)\s+/i, '');
+      value = value.replace(/^\s*(?:You said|User said|Human said|User|You|Human)\s*[:：]\s*/i, '');
+    }
+    value = value.replace(/\b\d{1,2}:\d{2}\s?(?:AM|PM)\b\s*$/i, '');
+    value = value.replace(/^\s*\b\d{1,2}:\d{2}\s?(?:AM|PM)\b\s*/i, '');
+    return collapseRepeatedPrefix(stripNoiseLines(value));
+  };
+  const markerRole = (marker) => {
+    const text = String(marker || '').toLowerCase();
+    if (/\b(you|user|human)\s+said\b/.test(text) || /用户|提问|问题/.test(text)) return 'user';
+    return 'assistant';
+  };
+  const parseMarkedTranscript = (rawText) => {
+    const text = clean(rawText);
+    if (!text) return [];
+    const markerRe = /(^|\n)\s*(You said|User said|Human said|Claude responded|Claude replied|Claude said|ChatGPT responded|ChatGPT replied|ChatGPT said|Gemini responded|Gemini replied|Gemini said|Kimi responded|Kimi replied|Kimi said|Qwen responded|Qwen replied|Qwen said|Grok responded|Grok replied|Grok said|Perplexity responded|Perplexity replied|Perplexity said|Assistant responded|Assistant replied|Assistant said|Model responded|Model replied|Model said|用户说|用户提问|助手回答|模型回答|AI回答)(?:\s*[:：]|\s+)/ig;
+    const markers = [];
+    let match;
+    while ((match = markerRe.exec(text)) !== null) {
+      markers.push({
+        role: markerRole(match[2]),
+        index: match.index + match[1].length,
+        end: markerRe.lastIndex
+      });
+    }
+    if (!markers.length) return [];
+    const items = [];
+    for (let idx = 0; idx < markers.length; idx += 1) {
+      const current = markers[idx];
+      const next = markers[idx + 1];
+      let segment = text.slice(current.end, next ? next.index : text.length);
+      segment = stripRoleMarkers(current.role, segment);
+      if (!segment || segment.length < 2) continue;
+      items.push({ role: current.role, content: segment, source: serviceName });
+    }
+    return compactItems(items);
+  };
+  const visibleMainText = () => {
+    const roots = Array.from(document.querySelectorAll('main, [role="main"], [class*="conversation"], [class*="chat"], [class*="thread"], [class*="messages"], body'));
+    let best = '';
+    for (const root of roots) {
+      const text = stripNoiseLines(cloneText(root));
+      if (text.length > best.length) best = text;
+    }
+    return best;
+  };
+  const fallbackPageContent = () => {
+    const text = visibleMainText();
+    if (!text || normalizedKey(text).length < 8) return [];
+    return [{ role: 'assistant', content: collapseRepeatedPrefix(text), source: serviceName }];
+  };
+  const roleFromText = (value) => {
+    const text = String(value || '').toLowerCase();
+    if (/\b(user|you|human|question)\b/.test(text) || text.includes('用户') || text.includes('提问')) return 'user';
+    if (/\b(assistant|answer|response|reply|chatgpt|claude|gemini|kimi|qwen|grok|perplexity|model|bot|ai)\b/.test(text) || text.includes('助手') || text.includes('回答') || text.includes('回复') || text.includes('模型')) return 'assistant';
+    return '';
+  };
+  const roleFromElement = (el) => {
+    if (!el) return '';
+    const attrs = [
+      el.getAttribute('data-message-author-role'),
+      el.getAttribute('data-author'),
+      el.getAttribute('data-role'),
+      el.getAttribute('aria-label'),
+      el.getAttribute('class'),
+    ].filter(Boolean).join(' ');
+    return roleFromText(attrs);
+  };
+  const hasBothRoles = (items) => items.some((m) => m.role === 'user') && items.some((m) => m.role === 'assistant');
+  const collect = (elements, roleForElement) => {
+    const seen = new Set();
+    const items = [];
+    const add = (role, el) => {
+      if (!el || (role !== 'user' && role !== 'assistant')) return;
+      const text = stripRoleMarkers(role, cloneText(el));
+      if (!text || text.length < 2) return;
+      const key = role + '\n' + normalizedKey(text);
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({ role, content: text, source: serviceName });
+    };
+    Array.from(elements || []).forEach((el, idx) => add(roleForElement(el, idx), el));
+    return compactItems(items);
+  };
+  const compactItems = (items) => {
+    const result = [];
+    for (const item of items || []) {
+      const key = normalizedKey(item.content);
+      if (!key) continue;
+      let handled = false;
+      for (let idx = 0; idx < result.length; idx += 1) {
+        if (result[idx].role !== item.role) continue;
+        const existingKey = normalizedKey(result[idx].content);
+        if (existingKey === key) {
+          handled = true;
+          break;
+        }
+        if (existingKey.includes(key) && key.length > 20) {
+          handled = true;
+          break;
+        }
+        if (key.includes(existingKey) && existingKey.length > 20) {
+          result[idx] = item;
+          handled = true;
+          break;
+        }
+      }
+      if (!handled) result.push(item);
+    }
+    return result;
+  };
+  const mergeAdjacentSameRole = (items) => {
+    const merged = [];
+    for (const item of items || []) {
+      const content = stripRoleMarkers(item.role, item.content);
+      if (!content) continue;
+      const previous = merged[merged.length - 1];
+      if (previous && previous.role === item.role) {
+        const previousKey = normalizedKey(previous.content);
+        const contentKey = normalizedKey(content);
+        if (previousKey === contentKey || previousKey.includes(contentKey)) {
+          continue;
+        }
+        if (contentKey.includes(previousKey)) {
+          previous.content = content;
+        } else {
+          previous.content = collapseRepeatedPrefix(clean(previous.content + '\n' + content));
+        }
+      } else {
+        merged.push({ role: item.role, content, source: item.source || serviceName });
+      }
+    }
+    return compactItems(merged);
+  };
+  const candidates = [];
+  const preferredCandidates = [];
+  let forcedMessages = [];
+  const pushCandidate = (items) => {
+    if (Array.isArray(items) && items.length) candidates.push(items);
+  };
+  const pushPreferredCandidate = (items) => {
+    if (!Array.isArray(items) || !items.length) return;
+    preferredCandidates.push(items);
+    candidates.push(items);
+  };
+  const useForcedIfMarked = (items) => {
+    const textTotal = (values) => (values || []).reduce((sum, item) => sum + String(item.content || '').length, 0);
+    if (hasBothRoles(items) && (!forcedMessages.length || textTotal(items) > textTotal(forcedMessages))) {
+      forcedMessages = items;
+    }
+  };
+
+  if (host.includes('claude.ai')) {
+    const claudeBodyMarked = parseMarkedTranscript(document.body ? (document.body.innerText || document.body.textContent || '') : '');
+    useForcedIfMarked(claudeBodyMarked);
+    pushPreferredCandidate(claudeBodyMarked);
+    Array.from(document.querySelectorAll('main, [role="main"], [data-testid*="conversation"], [class*="conversation"], [class*="chat"]'))
+      .forEach((el) => {
+        const marked = parseMarkedTranscript(cloneText(el));
+        useForcedIfMarked(marked);
+        pushPreferredCandidate(marked);
+      });
+  }
+
+  pushCandidate(collect(
+    document.querySelectorAll('[data-message-author-role]'),
+    (el) => roleFromElement(el)
+  ));
+
+  if (host.includes('chatgpt.com')) {
+    pushCandidate(collect(
+      document.querySelectorAll('[data-message-author-role="user"], [data-testid*="user-message"]'),
+      () => 'user'
+    ));
+    pushCandidate(collect(
+      document.querySelectorAll('[data-message-author-role="assistant"], [data-testid*="assistant-message"], [data-testid*="conversation-turn"] div.markdown'),
+      (el) => roleFromElement(el) || 'assistant'
+    ));
+  }
+
+  if (host.includes('gemini.google.com')) {
+    const geminiMarked = parseMarkedTranscript(visibleMainText());
+    useForcedIfMarked(geminiMarked);
+    pushPreferredCandidate(geminiMarked);
+    const geminiNodes = Array.from(document.querySelectorAll(
+      'user-query, model-response, response-container, message-content, ' +
+      '[class*="user-query"], [class*="query-text"], [class*="model-response"], [class*="response-container"], [class*="response-content"]'
+    )).sort((a, b) => {
+      const pos = a.compareDocumentPosition(b);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
+    pushPreferredCandidate(collect(
+      geminiNodes,
+      (el) => {
+        const text = [
+          el.tagName,
+          el.getAttribute('class'),
+          el.getAttribute('aria-label'),
+          el.getAttribute('data-test-id'),
+          el.getAttribute('data-testid')
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (text.includes('user') || text.includes('query')) return 'user';
+        if (text.includes('model') || text.includes('response') || text.includes('message-content')) return 'assistant';
+        return roleFromElement(el);
+      }
+    ));
+  }
+
+  pushCandidate(collect(
+    document.querySelectorAll('[data-role], [data-author], [aria-label]'),
+    (el) => roleFromElement(el)
+  ));
+
+  pushCandidate(collect(
+    document.querySelectorAll('[data-testid*="conversation-turn"], [data-testid*="message"], [class*="conversation-turn"], [class*="message"], [class*="chat-message"]'),
+    (el) => roleFromElement(el)
+  ));
+
+  const articles = Array.from(document.querySelectorAll('main article, article'))
+    .filter((el) => clean(el.innerText || el.textContent || '').length > 2);
+  pushCandidate(collect(
+    articles,
+    (el, idx) => roleFromElement(el) || (idx % 2 === 0 ? 'user' : 'assistant')
+  ));
+
+  if (!candidates.some(hasBothRoles)) {
+    const main = document.querySelector('main') || document.body;
+    const blocks = Array.from(main.querySelectorAll(':scope > section, :scope > article, :scope > div, [role="listitem"]'))
+      .filter((el) => {
+        const rect = el.getBoundingClientRect();
+        const text = clean(el.innerText || el.textContent || '');
+        return rect.width > 80 && rect.height > 20 && text.length > 8;
+      });
+    pushCandidate(collect(
+      blocks,
+      (el, idx) => roleFromElement(el) || (idx % 2 === 0 ? 'user' : 'assistant')
+    ));
+  }
+
+  const score = (items) => {
+    const both = hasBothRoles(items) ? 100000 : 0;
+    const roleBalance = Math.min(
+      items.filter((m) => m.role === 'user').length,
+      items.filter((m) => m.role === 'assistant').length
+    ) * 1000;
+    const textTotal = items.reduce((sum, item) => sum + String(item.content || '').length, 0);
+    return both + roleBalance + items.length * 10 + Math.min(textTotal, 20000);
+  };
+  const sourceCandidates = preferredCandidates.some(hasBothRoles) ? preferredCandidates : candidates;
+  sourceCandidates.sort((a, b) => score(b) - score(a));
+  let messages = forcedMessages.length ? forcedMessages : (sourceCandidates.length ? sourceCandidates[0] : []);
+
+  const expanded = [];
+  for (const item of messages) {
+    const parsed = parseMarkedTranscript(item.content);
+    if (parsed.length) {
+      parsed.forEach((parsedItem) => expanded.push(parsedItem));
+    } else {
+      expanded.push({
+        role: item.role,
+        content: stripRoleMarkers(item.role, item.content),
+        source: item.source || serviceName
+      });
+    }
+  }
+  messages = mergeAdjacentSameRole(compactItems(expanded));
+
+  const seenFinal = new Set();
+  const userTextKeys = new Set(messages.filter((item) => item.role === 'user').map((item) => normalizedKey(item.content)));
+  messages = messages.filter((item) => {
+    const contentKey = normalizedKey(item.content);
+    if (item.role === 'assistant' && userTextKeys.has(contentKey)) return false;
+    const key = item.role + '\n' + contentKey;
+    if (seenFinal.has(key)) return false;
+    seenFinal.add(key);
+    return true;
+  });
+
+  const totalText = messages.reduce((sum, item) => sum + String(item.content || '').length, 0);
+  if (!messages.length || totalText < 40) {
+    const fallback = fallbackPageContent();
+    const fallbackText = fallback.reduce((sum, item) => sum + String(item.content || '').length, 0);
+    if (fallbackText > totalText) messages = fallback;
+  }
+
+  return {
+    url: String(window.location.href || ''),
+    title: clean(document.title || ''),
+    source: serviceName,
+    captured_at: new Date().toISOString(),
+    messages
+  };
+})()
+"""
+
+
+def load_web_conversation_bindings() -> dict:
+    ensure_broccoli_data_dir()
+    try:
+        with open(WEB_CONVERSATION_BINDINGS_PATH, 'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_web_conversation_bindings(bindings: dict) -> None:
+    ensure_broccoli_data_dir()
+    payload = bindings if isinstance(bindings, dict) else {}
+    with open(WEB_CONVERSATION_BINDINGS_PATH, 'w', encoding='utf-8') as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def web_conversation_title_with_source(title: str, source: str = '') -> str:
+    base = sanitize_conversation_title(title or 'Web conversation')
+    src = str(source or '').strip()
+    if not src or src == 'Web':
+        return base
+    base = re.sub(
+        r'\s*[-–—]\s*(Claude|ChatGPT|Gemini|Kimi|Qwen|Grok|Perplexity)\s*$',
+        '',
+        base,
+        flags=re.IGNORECASE,
+    ).strip() or 'Web conversation'
+    return sanitize_conversation_title(f'{base} - {src}')
+
 
 class _IconFetcher(QObject):
     """Download a favicon URL in a background thread; deliver raw bytes to the main thread."""
@@ -11894,7 +12447,8 @@ class WebNavBar(QWidget):
         self.view_selected.emit(idx)
 
     def _select(self, idx):
-        self._select_pill(self._pills[idx])
+        if 0 <= idx < len(self._pills):
+            self._select_pill(self._pills[idx])
 
     # ── 更新 URL 文字 ─────────────────────────────────────────
     def update_active_url(self, url):
@@ -11977,6 +12531,7 @@ class WebViewPanel(QWidget):
     """
     active_load_finished = pyqtSignal(bool)   # 活跃 view loadFinished 时发出
     view_switched        = pyqtSignal()       # 面板内切换 view 时发出（用于触发 bg 更新）
+    prompt_dock_visibility_changed = pyqtSignal(bool)
 
     def __init__(self, sites, profile, sites_path=None, parent=None):
         """
@@ -12029,6 +12584,7 @@ class WebViewPanel(QWidget):
         self._prompt_dock_visible = False
         self._nav_anim = None
         self._prompt_dock_anim = None
+        self._switch_anim = None
 
         # ── 每个 site 一个独立 view，全部预加载 ──
         self._stack = QStackedWidget()
@@ -12113,6 +12669,7 @@ class WebViewPanel(QWidget):
             self._nav_wrap.setVisible(not visible)
             if not visible:
                 self._prompt_dock.hide()
+            self.prompt_dock_visibility_changed.emit(visible)
             return
         self._prompt_dock_anim = QPropertyAnimation(self._prompt_dock, b'maximumHeight', self)
         self._prompt_dock_anim.setDuration(220)
@@ -12132,6 +12689,7 @@ class WebViewPanel(QWidget):
             self._nav_anim.start()
             self._prompt_dock_anim.finished.connect(self._prompt_dock.hide)
         self._prompt_dock_anim.start()
+        self.prompt_dock_visibility_changed.emit(visible)
 
     def is_prompt_dock_visible(self) -> bool:
         return bool(self._prompt_dock_visible)
@@ -12146,9 +12704,95 @@ class WebViewPanel(QWidget):
     # ── 切换 ────────────────────────────────────────────────
     def _switch(self, idx):
         if 0 <= idx < len(self._views):
+            old_idx = self._active_idx
             self._active_idx = idx
+            self._animate_or_set_view(old_idx, idx)
+            self.view_switched.emit()
+
+    def _animate_or_set_view(self, old_idx: int, new_idx: int):
+        if old_idx == new_idx or not (0 <= old_idx < len(self._views)) or not (0 <= new_idx < len(self._views)):
+            self._stack.setCurrentIndex(new_idx)
+            return
+        old_view = self._views[old_idx]
+        new_view = self._views[new_idx]
+        if old_view is None or new_view is None or self._stack.width() <= 1:
+            self._stack.setCurrentIndex(new_idx)
+            return
+        if self._switch_anim is not None:
+            self._switch_anim.stop()
+            self._switch_anim = None
+        area = self._stack.rect()
+        old_pix = old_view.grab(area)
+        self._stack.setCurrentIndex(new_idx)
+        QApplication.processEvents()
+        new_pix = new_view.grab(area)
+        if old_pix.isNull() or new_pix.isNull():
+            return
+        direction = 1 if new_idx > old_idx else -1
+        offset = direction * area.width()
+        old_start = QRect(0, 0, area.width(), area.height())
+        old_end = QRect(-offset, 0, area.width(), area.height())
+        new_start = QRect(offset, 0, area.width(), area.height())
+        new_end = QRect(0, 0, area.width(), area.height())
+
+        old_label = QLabel(self._stack)
+        new_label = QLabel(self._stack)
+        old_label.setPixmap(old_pix)
+        new_label.setPixmap(new_pix)
+        old_label.setGeometry(old_start)
+        new_label.setGeometry(new_start)
+        old_label.show()
+        new_label.show()
+        old_label.raise_()
+        new_label.raise_()
+
+        old_anim = QPropertyAnimation(old_label, b'geometry', self)
+        old_anim.setDuration(180)
+        old_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        old_anim.setStartValue(old_start)
+        old_anim.setEndValue(old_end)
+        new_anim = QPropertyAnimation(new_label, b'geometry', self)
+        new_anim.setDuration(180)
+        new_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        new_anim.setStartValue(new_start)
+        new_anim.setEndValue(new_end)
+        group = QParallelAnimationGroup(self)
+        group.addAnimation(old_anim)
+        group.addAnimation(new_anim)
+
+        def _finish():
+            old_label.deleteLater()
+            new_label.deleteLater()
+            self._switch_anim = None
+
+        group.finished.connect(_finish)
+        self._switch_anim = group
+        group.start()
+
+    def active_index(self) -> int:
+        return int(self._active_idx)
+
+    def site_count(self) -> int:
+        return len([view for view in self._views if view is not None])
+
+    def select_site(self, idx: int):
+        if not (0 <= idx < len(self._views)) or self._views[idx] is None:
+            return
+        if idx == self._active_idx:
             self._stack.setCurrentIndex(idx)
             self.view_switched.emit()
+            return
+        if hasattr(self, '_nav') and self._nav is not None:
+            self._nav._select(idx)
+        else:
+            self._switch(idx)
+
+    def switch_site_delta(self, delta: int):
+        if not self._views:
+            return
+        next_idx = self._active_idx + int(delta)
+        if 0 <= next_idx < len(self._views):
+            self.select_site(next_idx)
 
     # ── "+" 新站点确认（pill 已由 WebNavBar 创建，此处创建 view）
     def _on_site_submitted(self, pill_idx, url):
@@ -13776,6 +14420,212 @@ class AssistantCircleButton(QPushButton):
             self._apply_theme()
 
 
+class ExternalTabSwitchButton(AssistantCircleButton):
+    """Round tab switch button for Web/Localhost prompt docks."""
+    def __init__(self, direction: int, parent=None):
+        super().__init__('‹' if direction < 0 else '›', parent)
+        self._direction = -1 if direction < 0 else 1
+        self._panel = None
+        self._popup = None
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.setInterval(200)
+        self._hide_timer.timeout.connect(self._maybe_hide_popup)
+        self.setToolTip('Previous tab' if self._direction < 0 else 'Next tab')
+        self.clicked.connect(self._switch_one)
+
+    def set_panel(self, panel):
+        self._panel = panel
+        self.refresh()
+
+    def _tab_items(self) -> list[dict]:
+        panel = self._panel
+        if panel is not None and hasattr(panel, 'target_items'):
+            return list(panel.target_items())
+        return []
+
+    def _active_index(self) -> int:
+        panel = self._panel
+        if panel is not None and hasattr(panel, 'active_index'):
+            return int(panel.active_index())
+        return 0
+
+    def _popup_options(self) -> list[tuple[int, str, str]]:
+        active = self._active_index()
+        items = self._tab_items()
+        if self._direction < 0:
+            chosen = [item for item in items if int(item.get('index', -1)) < active]
+        else:
+            chosen = [item for item in items if int(item.get('index', -1)) > active]
+        options = []
+        for item in chosen:
+            idx = int(item.get('index', -1))
+            full = str(item.get('url', '') or item.get('label', '') or f'Tab {idx + 1}')
+            label = self._compact_tab_label(item, idx)
+            options.append((idx, label, full))
+        return options
+
+    @staticmethod
+    def _compact_tab_label(item: dict, idx: int) -> str:
+        label = str(item.get('label', '') or '').strip()
+        url_text = str(item.get('url', '') or '').strip()
+        if label and label != url_text:
+            return label
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url_text)
+            if parsed.netloc:
+                path = (parsed.path or '').strip('/')
+                if path:
+                    return parsed.netloc + '/' + path
+                return parsed.netloc
+        except Exception:
+            pass
+        return url_text or f'Tab {idx + 1}'
+
+    def refresh(self):
+        active = self._active_index()
+        count = len(self._tab_items())
+        if self._direction < 0:
+            self.setEnabled(active > 0)
+        else:
+            self.setEnabled(active < count - 1)
+        if self._popup is not None and self._popup.isVisible():
+            self._show_popup()
+
+    def _switch_one(self):
+        panel = self._panel
+        if panel is not None and hasattr(panel, 'switch_site_delta'):
+            panel.switch_site_delta(self._direction)
+        self.refresh()
+
+    def _popup_stylesheet(self) -> str:
+        dark = is_dark_theme(app)
+        return f"""
+            QFrame#ExternalTabSwitchPopup {{
+                background: {'#2D2D2D' if dark else 'white'};
+                border-radius: 15px;
+            }}
+        """
+
+    def _clear_popup_layout(self, popup):
+        layout = popup.layout()
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _ensure_popup(self):
+        win = self.window()
+        if self._popup is not None and self._popup.parentWidget() is win:
+            return self._popup
+        popup = QFrame(win)
+        popup.setObjectName('ExternalTabSwitchPopup')
+        popup.setStyleSheet(self._popup_stylesheet())
+        shadow = QGraphicsDropShadowEffect(popup)
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(0)
+        shadow.setYOffset(0)
+        shadow.setColor(QColor(0, 0, 0, 40))
+        popup.setGraphicsEffect(shadow)
+        layout = QVBoxLayout(popup)
+        layout.setContentsMargins(6, 3, 6, 3)
+        layout.setSpacing(4)
+        popup.installEventFilter(self)
+        popup.hide()
+        self._popup = popup
+        return popup
+
+    def _show_popup(self):
+        if not self.isEnabled():
+            return
+        options = self._popup_options()
+        if not options:
+            if self._popup is not None:
+                self._popup.hide()
+            return
+        popup = self._ensure_popup()
+        popup.setStyleSheet(self._popup_stylesheet())
+        self._clear_popup_layout(popup)
+        layout = popup.layout()
+        win = self.window()
+        win_w = win.width() if isinstance(win, QWidget) else 540
+        max_popup_w = max(160, win_w - 20)
+        popup_w = max(self.width(), 130)
+        buttons = []
+        for idx, label, full in reversed(options):
+            btn = AssistantCapsuleButton(label, popup)
+            btn_fm = btn.fontMetrics()
+            text_w = btn_fm.horizontalAdvance(label) + 72
+            popup_w = max(popup_w, min(text_w, max_popup_w))
+            btn.setToolTip(full)
+            btn.clicked.connect(lambda _checked=False, _idx=idx: self._select_index_from_popup(_idx))
+            btn.installEventFilter(self)
+            buttons.append(btn)
+            layout.addWidget(btn)
+        popup_w = min(max_popup_w, popup_w)
+        for btn in buttons:
+            full_text = btn.text()
+            btn_fm = btn.fontMetrics()
+            text_area_w = max(40, popup_w - 72)
+            elided = full_text
+            if btn_fm.horizontalAdvance(full_text) > text_area_w:
+                elided = btn_fm.elidedText(full_text, Qt.TextElideMode.ElideMiddle, text_area_w)
+            btn.setText(elided)
+            btn.setFixedWidth(max(0, popup_w - 12))
+        self._hide_timer.stop()
+        popup_h = len(options) * 28 + (len(options) - 1) * 4 + 6
+        popup.setFixedSize(popup_w, popup_h)
+        pos_win = self.mapTo(win, QPoint(0, -popup_h - 4))
+        x = max(10, min(pos_win.x(), win_w - popup_w - 10))
+        popup.setGeometry(x, pos_win.y(), popup_w, popup_h)
+        popup.show()
+        popup.raise_()
+
+    def _maybe_hide_popup(self):
+        if self._popup is None or not self._popup.isVisible():
+            return
+        if not self.underMouse() and not self._popup.underMouse():
+            self._popup.hide()
+
+    def _select_index_from_popup(self, idx: int):
+        panel = self._panel
+        if panel is not None and hasattr(panel, 'select_site'):
+            panel.select_site(idx)
+        if self._popup is not None:
+            self._popup.hide()
+        self.refresh()
+
+    def enterEvent(self, event):
+        self._hide_timer.stop()
+        self._show_popup()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hide_timer.start()
+        super().leaveEvent(event)
+
+    def eventFilter(self, obj, event):
+        if obj is self._popup:
+            if event.type() == QEvent.Type.Enter:
+                self._hide_timer.stop()
+            elif event.type() == QEvent.Type.Leave:
+                self._hide_timer.start()
+        elif event.type() == QEvent.Type.Enter:
+            self._hide_timer.stop()
+        elif event.type() == QEvent.Type.Leave:
+            self._hide_timer.start()
+        return super().eventFilter(obj, event)
+
+    def hideEvent(self, event):
+        if self._popup is not None:
+            self._popup.hide()
+        super().hideEvent(event)
+
+
 class AssistantPill(QWidget):
     """
     A pill inside AssistantBar — mirrors NavSitePill's expand/collapse pattern.
@@ -14456,6 +15306,7 @@ class ExternalPromptDock(QWidget):
         self._tray_anim = None
         self._top_shadow_margin = 10
         self._bottom_margin = 10
+        self._target_panel = None
 
         self.prompt_edit = AssistantPromptInlineEdit(self)
         self.prompt_edit.setPlaceholderText('Prompt this web page...')
@@ -14505,6 +15356,8 @@ class ExternalPromptDock(QWidget):
         self.target_selector = TargetSelectorButton(self, always_dark=False)
         self.target_selector.setFixedWidth(120)
         self.target_combo = self.target_selector
+        self.prev_tab_button = ExternalTabSwitchButton(-1, self)
+        self.next_tab_button = ExternalTabSwitchButton(1, self)
 
         self.send_button = AssistantCapsuleButton('🔺 Send', self)
         self.send_button.clicked.connect(self.send_requested.emit)
@@ -14542,8 +15395,10 @@ class ExternalPromptDock(QWidget):
         self._right_pill = AssistantPill('/', right_content)
         self._bar = AssistantBar(self)
         self._bar.add_fixed_widget(self.target_combo)
+        self._bar.add_fixed_widget(self.prev_tab_button)
         self._bar.add_pill(self._left_pill)
         self._bar.add_pill(self._right_pill)
+        self._bar.add_fixed_widget(self.next_tab_button)
         self._bar.finalize()
         self._bar.setFixedHeight(self._bar.minimumHeight())
         QTimer.singleShot(0, self._right_pill.expand)
@@ -14707,13 +15562,26 @@ class ExternalPromptDock(QWidget):
         return self.target_selector.target_all()
 
     def set_target_panel(self, panel):
+        self._target_panel = panel
         self.target_selector.set_panel(panel)
+        self.prev_tab_button.set_panel(panel)
+        self.next_tab_button.set_panel(panel)
+        try:
+            panel.view_switched.connect(self.refresh_tab_switch_buttons)
+        except Exception:
+            pass
 
     def shift_target_indices_after_insert(self, index: int):
         self.target_selector.shift_target_indices_after_insert(index)
+        self.refresh_tab_switch_buttons()
 
     def shift_target_indices_after_delete(self, index: int):
         self.target_selector.shift_target_indices_after_delete(index)
+        self.refresh_tab_switch_buttons()
+
+    def refresh_tab_switch_buttons(self):
+        self.prev_tab_button.refresh()
+        self.next_tab_button.refresh()
 
     def selected_target_views(self, panel) -> list:
         return self.target_selector.selected_target_views(panel)
@@ -14737,14 +15605,7 @@ class ExternalPromptDock(QWidget):
         return data_dir
 
     def _load_language_items(self) -> list[str]:
-        path = os.path.join(self._broccoli_data_dir(), "lang.txt")
-        langs = []
-        try:
-            raw = codecs.open(path, 'r', encoding='utf-8').read()
-            langs = [item for item in raw.split('\n') if item]
-        except Exception:
-            langs = []
-        return langs or ['English', '中文', '日本語']
+        return load_language_items()
 
     def _set_combo_items(self, combo: DropdownButton, items: list[str], current_index: int = 0):
         combo.blockSignals(True)
@@ -14815,7 +15676,11 @@ class ExternalPromptDock(QWidget):
         if mode_index == 1:
             return f"""Reply only the Applescript to fullfill this command. Don't reply any other explanations. Before the code starts, write "「「START」」" and write "「「END」」" after it ends. Don't reply with method that needs further information and revision. Command: {prompt_input}. """
         if mode_index == 2:
-            return f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.source_lang_combo.currentText()} to {self.target_lang_combo.currentText()}. Don't reply any other explanations. Before the translated text starts, write "「「START」」" and write "「「END」」" after it ends. Text: {prompt_input}. """
+            return build_translation_prompt(
+                prompt_input,
+                self.source_lang_combo.currentText(),
+                self.target_lang_combo.currentText(),
+            )
         if mode_index == 3:
             return f"""Revise the text in {self.output_lang_combo.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don't reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」" after it ends. Text: {prompt_input}. """
         if mode_index == 4:
@@ -14875,6 +15740,643 @@ class ExternalPromptDock(QWidget):
         if not showing:
             self._tray_anim.finished.connect(self._tray_wrap.hide)
         self._tray_anim.start()
+
+
+def translation_button_label(language: str) -> str:
+    key = language_alias_key(language)
+    return {
+        'english': 'En',
+        'chinese': '中',
+        'japanese': '日',
+        'korean': '한',
+        'french': 'Fr',
+        'german': 'De',
+        'spanish': 'Es',
+        'italian': 'It',
+        'portuguese': 'Pt',
+        'russian': 'Ru',
+    }.get(key, str(language or '')[:3] or '?')
+
+
+def translation_language_color(language: str) -> tuple[int, int, int, int]:
+    key = language_alias_key(language)
+    return {
+        'english': (118, 183, 255, 205),
+        'chinese': (255, 132, 116, 205),
+        'japanese': (255, 190, 105, 205),
+        'korean': (128, 217, 171, 205),
+        'french': (142, 164, 255, 205),
+        'german': (245, 207, 84, 205),
+        'spanish': (255, 148, 99, 205),
+        'italian': (113, 211, 153, 205),
+        'portuguese': (92, 201, 197, 205),
+        'russian': (184, 154, 255, 205),
+    }.get(key, (255, 255, 255, 55))
+
+
+class TranslationGlassButton(QPushButton):
+    def __init__(self, text: str = '', radius: int = 30, parent=None, bg_color: tuple[int, int, int, int] | None = None):
+        super().__init__(text, parent)
+        self.radius = radius
+        self._selected = False
+        self._hovered = False
+        self._base_color = QColor(*(bg_color or (255, 255, 255, 42)))
+        self._border_color = QColor(255, 255, 255, 68)
+        self._text_color = QColor(34, 38, 46)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)
+        self.setStyleSheet('background: transparent; border: none;')
+        self._install_shadow()
+
+    def _install_shadow(self):
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setColor(QColor(0, 0, 0, 38))
+        shadow.setOffset(0, 3)
+        self.setGraphicsEffect(shadow)
+
+    def set_base_color(self, color: tuple[int, int, int, int] | QColor):
+        self._base_color = QColor(color) if isinstance(color, QColor) else QColor(*color)
+        self.update()
+
+    def set_selected(self, selected: bool):
+        self._selected = bool(selected)
+        self.update()
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(3, 3, -3, -3)
+        color = QColor(self._base_color)
+        if self._hovered or self._selected:
+            color = QColor(
+                max(0, color.red() - 32),
+                max(0, color.green() - 32),
+                max(0, color.blue() - 32),
+                min(255, color.alpha() + 58),
+            )
+        if self.isDown():
+            color = QColor(
+                max(0, color.red() - 26),
+                max(0, color.green() - 26),
+                max(0, color.blue() - 26),
+                min(255, color.alpha() + 20),
+            )
+        painter.setBrush(QBrush(color))
+        painter.setPen(QPen(self._border_color, 2 if self._selected else 1))
+        painter.drawRoundedRect(rect, self.radius, self.radius)
+        highlight = QLinearGradient(rect.left(), rect.top(), rect.left(), rect.bottom())
+        highlight.setColorAt(0, QColor(255, 255, 255, 105))
+        highlight.setColorAt(0.48, QColor(255, 255, 255, 20))
+        highlight.setColorAt(1, QColor(255, 255, 255, 0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QBrush(highlight), 1))
+        painter.drawRoundedRect(rect.adjusted(4, 4, -4, -4), max(2, self.radius - 4), max(2, self.radius - 4))
+        painter.setPen(QPen(self._text_color))
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSize(16 if min(self.width(), self.height()) < 90 else 22)
+        painter.setFont(font)
+        painter.drawText(rect.adjusted(8, 8, -8, -8), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, self.text())
+
+
+class TranslationWorkerSignals(QObject):
+    finished = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+
+class TranslationWorkerThread(threading.Thread):
+    def __init__(self, config: dict, signals: TranslationWorkerSignals):
+        super().__init__(daemon=True)
+        self.config = config
+        self.signals = signals
+
+    def run(self):
+        try:
+            client = OpenAI(
+                api_key=self.config['api_key'],
+                base_url=self.config['endpoint'],
+                timeout=int(self.config.get('timeout', 60) or 60),
+            )
+            response = client.chat.completions.create(
+                model=self.config['model'],
+                messages=[
+                    {
+                        'role': 'system',
+                        'content': 'You are a precise translation engine. Return only the requested translation markers and translated text.',
+                    },
+                    {
+                        'role': 'user',
+                        'content': self.config['prompt'],
+                    },
+                ],
+                stream=False,
+            )
+            raw_answer = response.choices[0].message.content or ''
+            self.signals.finished.emit({
+                'raw_answer': raw_answer,
+                'translation': extract_marked_translation(raw_answer),
+            })
+        except Exception as exc:
+            self.signals.failed.emit(str(exc))
+
+
+class TranslationPopupWindow(QWidget):
+    closed = pyqtSignal(object)
+
+    def __init__(self, selected_text: str, owner=None):
+        super().__init__(None)
+        self.owner = owner
+        self.selected_text = str(selected_text or '').strip()
+        self.languages = load_language_items()[:4] or ['English', '中文', '日本語']
+        while len(self.languages) < 4:
+            for fallback in ['English', '中文', '日本語', '한국어']:
+                if fallback not in self.languages:
+                    self.languages.append(fallback)
+                if len(self.languages) >= 4:
+                    break
+        self.source_language = detect_selected_text_language(self.selected_text, self.languages)
+        self.target_language = ''
+        self.translation_text = ''
+        self._worker_signals = None
+        self._worker_thread = None
+        self._animations = []
+        self._selecting = True
+        self._result_animating = False
+        self._pending_result_actions = False
+        self._pending_result_text = ''
+        self._result_rect = QRect(110, 92, 700, 312)
+        self._result_start_rect = QRect(410, 214, 100, 72)
+        self._left_big_rect = QRect(225, 150, 220, 220)
+        self._right_big_rect = QRect(475, 150, 220, 220)
+        self._merge_rect = QRect(400, 170, 120, 120)
+        self._translate_rect = QRect(374, 400, 172, 48)
+        self._selection_close_rect = QRect(374, 456, 172, 48)
+
+        self.setWindowTitle('Broccoli Translate')
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Window
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        if hasattr(Qt.WidgetAttribute, 'WA_MacAlwaysShowToolWindow'):
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+        self.setFixedSize(920, 520)
+
+        self.left_big = TranslationGlassButton('', 110, self)
+        self.right_big = TranslationGlassButton('', 110, self)
+        self.left_big.setGeometry(self._left_big_rect)
+        self.right_big.setGeometry(self._right_big_rect)
+
+        self.left_buttons = []
+        self.right_buttons = []
+        left_positions = self._small_button_positions(self._left_big_rect.center(), left_side=True)
+        right_positions = self._small_button_positions(self._right_big_rect.center(), left_side=False)
+        for index, language in enumerate(self.languages[:4]):
+            btn = TranslationGlassButton(
+                translation_button_label(language),
+                32,
+                self,
+                bg_color=translation_language_color(language),
+            )
+            btn.setToolTip(language)
+            btn.setGeometry(left_positions[index])
+            btn.clicked.connect(lambda _checked=False, lang=language: self._select_source(lang))
+            self.left_buttons.append(btn)
+
+            target_btn = TranslationGlassButton(
+                translation_button_label(language),
+                32,
+                self,
+                bg_color=translation_language_color(language),
+            )
+            target_btn.setToolTip(language)
+            target_btn.setGeometry(right_positions[index])
+            target_btn.clicked.connect(lambda _checked=False, lang=language: self._select_target(lang))
+            self.right_buttons.append(target_btn)
+
+        action_button_color = (255, 255, 255, 132)
+        self.translate_button = TranslationGlassButton('Translate', 26, self, bg_color=action_button_color)
+        self.translate_button.setGeometry(self._translate_rect)
+        self.translate_button.clicked.connect(self.start_translation)
+
+        self.selection_close_button = TranslationGlassButton('Close', 26, self, bg_color=action_button_color)
+        self.selection_close_button.setGeometry(self._selection_close_rect)
+        self.selection_close_button.clicked.connect(self.close)
+
+        self.result_box = QTextEdit(self)
+        self.result_box.setReadOnly(True)
+        self.result_box.setGeometry(self._result_start_rect)
+        self.result_box.setStyleSheet(
+            '''
+            QTextEdit {
+                background: rgba(255, 255, 255, 232);
+                border: 2px solid rgba(120, 120, 120, 130);
+                border-radius: 26px;
+                padding: 18px;
+                color: #22262e;
+                font-size: 18px;
+                line-height: 1.45;
+            }
+            '''
+        )
+        self.result_box.hide()
+        self._result_opacity = QGraphicsOpacityEffect(self.result_box)
+        self.result_box.setGraphicsEffect(self._result_opacity)
+        self._result_opacity.setOpacity(0.0)
+
+        self.back_button = TranslationGlassButton('Back', 24, self, bg_color=action_button_color)
+        self.copy_button = TranslationGlassButton('Copy', 24, self, bg_color=action_button_color)
+        self.close_button = TranslationGlassButton('Close', 24, self, bg_color=action_button_color)
+        self.again_button = TranslationGlassButton('Again', 24, self, bg_color=action_button_color)
+        for i, btn in enumerate([self.back_button, self.copy_button, self.close_button, self.again_button]):
+            btn.setGeometry(230 + i * 122, 426, 100, 48)
+            btn.hide()
+        self.back_button.clicked.connect(lambda _checked=False: self.reset_selection_state(animated=True))
+        self.copy_button.clicked.connect(self.copy_result)
+        self.close_button.clicked.connect(self.close)
+        self.again_button.clicked.connect(self.reset_for_again)
+
+        self._refresh_labels()
+        self._prepare_intro_state()
+
+    def _small_button_positions(self, center: QPoint, left_side: bool) -> list[QRect]:
+        size = 64
+        radius = 170
+        angles = [240, 200, 160, 120] if left_side else [-60, -20, 20, 60]
+        rects = []
+        for angle in angles:
+            rad = math.radians(angle)
+            x = center.x() + int(radius * math.cos(rad)) - size // 2
+            y = center.y() + int(radius * math.sin(rad)) - size // 2
+            rects.append(QRect(x, y, size, size))
+        return rects
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(0, 0, 0, 1))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(self.rect(), 26, 26)
+
+    def show_centered(self):
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            self.move(geo.center().x() - self.width() // 2, geo.center().y() - self.height() // 2)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        QTimer.singleShot(60, self.raise_)
+        QTimer.singleShot(180, self.raise_)
+        QTimer.singleShot(0, self._animate_intro)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.ActivationChange, QEvent.Type.WindowStateChange):
+            if self.isVisible():
+                QTimer.singleShot(0, self.raise_)
+                QTimer.singleShot(80, self.raise_)
+
+    def _tiny_rect_at(self, point: QPoint, size: int = 2) -> QRect:
+        return QRect(point.x() - size // 2, point.y() - size // 2, size, size)
+
+    def _prepare_intro_state(self):
+        left_center = self._left_big_rect.center()
+        right_center = self._right_big_rect.center()
+        self.left_big.setGeometry(self._merge_rect)
+        self.right_big.setGeometry(self._merge_rect)
+        for btn in self.left_buttons:
+            btn.setGeometry(self._tiny_rect_at(left_center))
+        for btn in self.right_buttons:
+            btn.setGeometry(self._tiny_rect_at(right_center))
+        self.translate_button.setGeometry(self._tiny_rect_at(self._merge_rect.center()))
+        self.selection_close_button.setGeometry(self._tiny_rect_at(QPoint(self._selection_close_rect.center().x(), self._selection_close_rect.center().y())))
+
+    def _animate_intro(self):
+        if not self._selecting:
+            return
+        group = QParallelAnimationGroup(self)
+        for widget, end_rect in (
+            (self.left_big, self._left_big_rect),
+            (self.right_big, self._right_big_rect),
+        ):
+            anim = QPropertyAnimation(widget, b'geometry', self)
+            anim.setDuration(340)
+            anim.setStartValue(widget.geometry())
+            anim.setEndValue(end_rect)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            group.addAnimation(anim)
+        for btn, end_rect in zip(self.left_buttons, self._small_button_positions(self._left_big_rect.center(), left_side=True)):
+            anim = QPropertyAnimation(btn, b'geometry', self)
+            anim.setDuration(300)
+            anim.setStartValue(btn.geometry())
+            anim.setEndValue(end_rect)
+            anim.setEasingCurve(QEasingCurve.Type.OutBack)
+            group.addAnimation(anim)
+        for btn, end_rect in zip(self.right_buttons, self._small_button_positions(self._right_big_rect.center(), left_side=False)):
+            anim = QPropertyAnimation(btn, b'geometry', self)
+            anim.setDuration(300)
+            anim.setStartValue(btn.geometry())
+            anim.setEndValue(end_rect)
+            anim.setEasingCurve(QEasingCurve.Type.OutBack)
+            group.addAnimation(anim)
+        for widget, end_rect in (
+            (self.translate_button, self._translate_rect),
+            (self.selection_close_button, self._selection_close_rect),
+        ):
+            anim = QPropertyAnimation(widget, b'geometry', self)
+            anim.setDuration(250)
+            anim.setStartValue(widget.geometry())
+            anim.setEndValue(end_rect)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            group.addAnimation(anim)
+        self._animations.append(group)
+        group.start()
+
+    def _select_source(self, language: str):
+        self.source_language = str(language or '').strip()
+        self._refresh_labels()
+
+    def _select_target(self, language: str):
+        self.target_language = str(language or '').strip()
+        self._refresh_labels()
+
+    def _refresh_labels(self):
+        self.left_big.setText(f'From:\n{self.source_language or ""}')
+        self.right_big.setText(f'To:\n{self.target_language or ""}')
+        self.left_big.set_base_color(translation_language_color(self.source_language))
+        self.right_big.set_base_color(
+            translation_language_color(self.target_language)
+            if self.target_language
+            else (255, 255, 255, 42)
+        )
+        source_key = language_alias_key(self.source_language)
+        target_key = language_alias_key(self.target_language)
+        for btn, language in zip(self.left_buttons, self.languages):
+            btn.set_selected(language_alias_key(language) == source_key)
+        for btn, language in zip(self.right_buttons, self.languages):
+            btn.set_selected(bool(self.target_language) and language_alias_key(language) == target_key)
+        self.translate_button.setEnabled(bool(self.selected_text and self.source_language and self.target_language))
+        self.translate_button.set_selected(bool(self.target_language))
+
+    def _animate_to_result_box(self, loading_text: str):
+        self._selecting = False
+        self._animations.clear()
+        self.translate_button.setEnabled(False)
+        group = QParallelAnimationGroup(self)
+        for widget in self.left_buttons:
+            end_rect = QRect(self._left_big_rect.center().x(), self._left_big_rect.center().y(), 2, 2)
+            anim = QPropertyAnimation(widget, b'geometry', self)
+            anim.setDuration(260)
+            anim.setStartValue(widget.geometry())
+            anim.setEndValue(end_rect)
+            anim.setEasingCurve(QEasingCurve.Type.InBack)
+            group.addAnimation(anim)
+        for widget in self.right_buttons:
+            end_rect = QRect(self._right_big_rect.center().x(), self._right_big_rect.center().y(), 2, 2)
+            anim = QPropertyAnimation(widget, b'geometry', self)
+            anim.setDuration(260)
+            anim.setStartValue(widget.geometry())
+            anim.setEndValue(end_rect)
+            anim.setEasingCurve(QEasingCurve.Type.InBack)
+            group.addAnimation(anim)
+        for widget, end_rect in (
+            (self.left_big, self._merge_rect),
+            (self.right_big, self._merge_rect),
+        ):
+            anim = QPropertyAnimation(widget, b'geometry', self)
+            anim.setDuration(340)
+            anim.setStartValue(widget.geometry())
+            anim.setEndValue(end_rect)
+            anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+            group.addAnimation(anim)
+        translate_end = QRect(
+            self._merge_rect.center().x() - 1,
+            self._merge_rect.center().y() - 1,
+            2,
+            2,
+        )
+        translate_anim = QPropertyAnimation(self.translate_button, b'geometry', self)
+        translate_anim.setDuration(220)
+        translate_anim.setStartValue(self.translate_button.geometry())
+        translate_anim.setEndValue(translate_end)
+        translate_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        group.addAnimation(translate_anim)
+        close_anim = QPropertyAnimation(self.selection_close_button, b'geometry', self)
+        close_anim.setDuration(220)
+        close_anim.setStartValue(self.selection_close_button.geometry())
+        close_anim.setEndValue(translate_end)
+        close_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        group.addAnimation(close_anim)
+        group.finished.connect(lambda: self._replace_selection_with_result_box(loading_text))
+        self._animations.append(group)
+        group.start()
+
+    def _hide_selection_widgets(self):
+        for widget in [self.left_big, self.right_big, *self.left_buttons, *self.right_buttons, self.translate_button, self.selection_close_button]:
+            widget.hide()
+
+    def _replace_selection_with_result_box(self, text: str):
+        self._hide_selection_widgets()
+        self._show_result_box(text, animated=True)
+
+    def _show_result_box(self, text: str, animated: bool = False):
+        self._hide_selection_widgets()
+        if self._pending_result_text:
+            text = self._pending_result_text
+        self.result_box.setPlainText(text)
+        self.result_box.setGeometry(self._result_start_rect if animated else self._result_rect)
+        self._result_opacity.setOpacity(0.0 if animated else 1.0)
+        self.result_box.show()
+        self.result_box.raise_()
+        if not animated:
+            self._result_animating = False
+            return
+        self._result_animating = True
+        group = QParallelAnimationGroup(self)
+        grow = QPropertyAnimation(self.result_box, b'geometry', self)
+        grow.setDuration(260)
+        grow.setStartValue(self._result_start_rect)
+        grow.setEndValue(self._result_rect)
+        grow.setEasingCurve(QEasingCurve.Type.OutCubic)
+        fade = QPropertyAnimation(self._result_opacity, b'opacity', self)
+        fade.setDuration(210)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        group.addAnimation(grow)
+        group.addAnimation(fade)
+        group.finished.connect(self._finish_result_box_animation)
+        self._animations.append(group)
+        group.start()
+
+    def _finish_result_box_animation(self):
+        self._result_animating = False
+        self.result_box.setGeometry(self._result_rect)
+        self._result_opacity.setOpacity(1.0)
+        if self._pending_result_actions:
+            self._pending_result_actions = False
+            self._show_result_actions()
+
+    def start_translation(self):
+        if not self.selected_text or not self.source_language or not self.target_language:
+            return
+        api_key, endpoint = load_runtime_openai_client_config()
+        if not api_key:
+            self._animate_to_result_box('You should set your accounts in Settings.')
+            self._pending_result_actions = True
+            return
+        self._animate_to_result_box('Translating...\n\n' + self.selected_text)
+        prompt = build_translation_prompt(self.selected_text, self.source_language, self.target_language)
+        self._worker_signals = TranslationWorkerSignals()
+        self._worker_signals.finished.connect(self.on_translation_finished, Qt.ConnectionType.QueuedConnection)
+        self._worker_signals.failed.connect(self.on_translation_failed, Qt.ConnectionType.QueuedConnection)
+        self._worker_thread = TranslationWorkerThread(
+            {
+                'api_key': api_key,
+                'endpoint': endpoint,
+                'model': read_text_file(BasePath + 'modelnow.txt', DEFAULT_MODEL),
+                'timeout': load_saved_timeout(),
+                'prompt': prompt,
+            },
+            self._worker_signals,
+        )
+        self._worker_thread.start()
+
+    def on_translation_finished(self, payload: dict):
+        self.translation_text = str(payload.get('translation', '') or '').strip()
+        result_text = self.translation_text or str(payload.get('raw_answer', '') or '').strip()
+        self._pending_result_text = result_text
+        self.result_box.setPlainText(result_text)
+        if self._result_animating:
+            self._pending_result_actions = True
+        else:
+            self._show_result_actions()
+        if self.owner is not None and hasattr(self.owner, '_save_background_translation_record'):
+            self.owner._save_background_translation_record(
+                source_text=self.selected_text,
+                translated_text=self.result_box.toPlainText(),
+                source_language=self.source_language,
+                target_language=self.target_language,
+            )
+
+    def on_translation_failed(self, error_text: str):
+        result_text = 'Error, please try again!' + str(error_text or '')
+        self._pending_result_text = result_text
+        self.result_box.setPlainText(result_text)
+        if self._result_animating:
+            self._pending_result_actions = True
+        else:
+            self._show_result_actions()
+
+    def _show_result_actions(self):
+        for i, btn in enumerate([self.back_button, self.copy_button, self.close_button, self.again_button]):
+            final_rect = QRect(230 + i * 122, 426, 100, 48)
+            start_rect = QRect(final_rect.center().x() - 6, final_rect.center().y() - 6, 12, 12)
+            btn.setGeometry(start_rect)
+            btn.show()
+            btn.raise_()
+            anim = QPropertyAnimation(btn, b'geometry', self)
+            anim.setDuration(190)
+            anim.setStartValue(start_rect)
+            anim.setEndValue(final_rect)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            QTimer.singleShot(i * 55, anim.start)
+            self._animations.append(anim)
+
+    def copy_result(self):
+        QApplication.clipboard().setText(self.result_box.toPlainText())
+
+    def reset_selection_state(self, animated: bool = True):
+        if animated and self.result_box.isVisible():
+            self._animate_back_to_selection()
+            return
+        self._restore_selection_state()
+
+    def _animate_back_to_selection(self):
+        self._animations.clear()
+        self._result_animating = False
+        self._pending_result_actions = False
+        result_group = QParallelAnimationGroup(self)
+        shrink = QPropertyAnimation(self.result_box, b'geometry', self)
+        shrink.setDuration(240)
+        shrink.setStartValue(self.result_box.geometry())
+        shrink.setEndValue(self._result_start_rect)
+        shrink.setEasingCurve(QEasingCurve.Type.InCubic)
+        fade = QPropertyAnimation(self._result_opacity, b'opacity', self)
+        fade.setDuration(200)
+        fade.setStartValue(self._result_opacity.opacity())
+        fade.setEndValue(0.0)
+        fade.setEasingCurve(QEasingCurve.Type.InCubic)
+        result_group.addAnimation(shrink)
+        result_group.addAnimation(fade)
+        for btn in [self.back_button, self.copy_button, self.close_button, self.again_button]:
+            start_rect = btn.geometry()
+            end_rect = QRect(start_rect.center().x() - 6, start_rect.center().y() - 6, 12, 12)
+            anim = QPropertyAnimation(btn, b'geometry', self)
+            anim.setDuration(180)
+            anim.setStartValue(start_rect)
+            anim.setEndValue(end_rect)
+            anim.setEasingCurve(QEasingCurve.Type.InCubic)
+            result_group.addAnimation(anim)
+        result_group.finished.connect(self._finish_back_to_selection)
+        self._animations.append(result_group)
+        result_group.start()
+
+    def _finish_back_to_selection(self):
+        self.result_box.hide()
+        self.result_box.setGeometry(self._result_start_rect)
+        self._result_opacity.setOpacity(0.0)
+        for btn in [self.back_button, self.copy_button, self.close_button, self.again_button]:
+            btn.hide()
+        self._restore_selection_state(collapsed=True)
+        self._animate_intro()
+
+    def _restore_selection_state(self, collapsed: bool = False):
+        self._selecting = True
+        self._result_animating = False
+        self._pending_result_actions = False
+        self._pending_result_text = ''
+        self.result_box.hide()
+        self.result_box.setGeometry(self._result_start_rect)
+        self._result_opacity.setOpacity(0.0)
+        for btn in [self.back_button, self.copy_button, self.close_button, self.again_button]:
+            btn.hide()
+        if collapsed:
+            self._prepare_intro_state()
+        else:
+            self.left_big.setGeometry(self._left_big_rect)
+            self.right_big.setGeometry(self._right_big_rect)
+            for btn, rect in zip(self.left_buttons, self._small_button_positions(self._left_big_rect.center(), left_side=True)):
+                btn.setGeometry(rect)
+            for btn, rect in zip(self.right_buttons, self._small_button_positions(self._right_big_rect.center(), left_side=False)):
+                btn.setGeometry(rect)
+            self.translate_button.setGeometry(self._translate_rect)
+            self.selection_close_button.setGeometry(self._selection_close_rect)
+        for widget in [self.left_big, self.right_big, *self.left_buttons, *self.right_buttons, self.translate_button, self.selection_close_button]:
+            widget.show()
+            widget.raise_()
+        self._refresh_labels()
+
+    def reset_for_again(self):
+        self.translation_text = ''
+        self.reset_selection_state(animated=True)
+
+    def closeEvent(self, event):
+        self.closed.emit(self)
+        super().closeEvent(event)
 
 
 class TransparentClickBand(QWidget):
@@ -15639,6 +17141,62 @@ class WebFetchPanel(QWidget):
     def _on_item_changed(self, item):
         if not self._block_items:
             self.selection_changed.emit()
+
+
+class WebConversationSyncButton(QPushButton):
+    """WebFetch-style round button for importing the current web conversation."""
+    DIAMETER = WebFetchPanel.COLLAPSED_D
+
+    def __init__(self, parent=None):
+        super().__init__('⇄', parent)
+        self._theme_updating = False
+        self.setObjectName('WebConversationSyncButton')
+        self.setFixedSize(self.DIAMETER, self.DIAMETER)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip('Sync current web conversation to API')
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(28)
+        shadow.setXOffset(0)
+        shadow.setYOffset(8)
+        shadow.setColor(QColor(0, 0, 0, 45))
+        self.setGraphicsEffect(shadow)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        if self._theme_updating:
+            return
+        self._theme_updating = True
+        dark = is_dark_theme(app)
+        try:
+            self.setStyleSheet(
+                f'''
+                QPushButton#WebConversationSyncButton {{
+                    background: {"#3A3A3A" if dark else "#F4F4F5"};
+                    color: {"#F2F2F7" if dark else "#20242B"};
+                    border: 1px solid {"#2D2D2D" if dark else "#ECECEC"};
+                    border-radius: {self.DIAMETER // 2}px;
+                    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+                    font-size: 17px;
+                    font-weight: 700;
+                    padding: 0;
+                }}
+                QPushButton#WebConversationSyncButton:hover {{
+                    background: {"#474747" if dark else "#EBEBED"};
+                }}
+                QPushButton#WebConversationSyncButton:pressed {{
+                    background: {"#505050" if dark else "#E1E1E4"};
+                }}
+                '''
+            )
+        finally:
+            self._theme_updating = False
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if self._theme_updating:
+            return
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._apply_theme()
 
 
 def branch_question_preview(text: str, limit: int = 42) -> str:
@@ -17754,6 +19312,7 @@ class MyWidget(QWidget):  # 主窗口
         self._browser_bridge_signals.received.connect(self._on_browser_bridge_request)
         self._browser_bridge_server = BrowserBridgeServer(self._browser_bridge_signals)
         self._browser_bridge_server.start()
+        self._translation_popup_windows = []
         self._reload_userscripts()
 
     def _apply_window_flags(self):
@@ -18124,6 +19683,9 @@ class MyWidget(QWidget):  # 主窗口
         self.ai_web_panel.view_switched.connect(
             lambda: self._on_web_loaded(True, self.ai_web_panel, 0)
         )
+        self.ai_web_panel.prompt_dock_visibility_changed.connect(
+            lambda _visible: self._update_web_conversation_sync_button_geometry()
+        )
 
         # --- Tab 2: Localhost（WebViewPanel，单个 view，可通过"+"扩展）---
         _local_sites_path = os.path.join(self.fulldir1, 'localhost_sites.json')
@@ -18138,6 +19700,9 @@ class MyWidget(QWidget):  # 主窗口
         )
         self.localhost_panel.view_switched.connect(
             lambda: self._on_web_loaded(True, self.localhost_panel, 2)
+        )
+        self.localhost_panel.prompt_dock_visibility_changed.connect(
+            lambda _visible: self._update_web_conversation_sync_button_geometry()
         )
 
         self.web_prompt_dock = ExternalPromptDock('Web', self.ai_web_panel)
@@ -18204,6 +19769,10 @@ class MyWidget(QWidget):  # 主窗口
         self._external_prompt_trigger_btn.clicked.connect(self._toggle_current_external_prompt_dock)
         self._external_prompt_trigger_btn.hide()
 
+        self.web_conversation_sync_button = WebConversationSyncButton(self.qw3)
+        self.web_conversation_sync_button.clicked.connect(self._sync_current_web_conversation_to_api)
+        self.web_conversation_sync_button.hide()
+
         self._settings_scrim = SettingsScrim(self.qw3)
         self._settings_scrim.hide()
         self._settings_scrim.clicked.connect(self.hide_settings_panel)
@@ -18221,7 +19790,7 @@ class MyWidget(QWidget):  # 主窗口
         self._branch_states = {}
 
         self._branch_trigger_band_h = 28
-        self._branch_trigger_btn = QPushButton('', self)
+        self._branch_trigger_btn = QPushButton('', self.qw3)
         self._branch_trigger_btn.setObjectName('BranchTriggerButton')
         self._branch_trigger_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._branch_trigger_btn.setStyleSheet('''
@@ -18426,6 +19995,7 @@ class MyWidget(QWidget):  # 主窗口
         self._update_outputs_overlay_geometry()
         self._update_share_overlay_geometry()
         self._update_webfetch_panel_geometry()
+        self._update_web_conversation_sync_button_geometry()
         self.apply_webfetch_watch_settings(load_settings_store().get('globals', {}).get('webfetch_download_path', ''))
         self.terminal_widget.history_records_changed.connect(self._refresh_terminal_history_panel)
 
@@ -18437,6 +20007,7 @@ class MyWidget(QWidget):  # 主窗口
         if self.stacked_widget.currentIndex() == 1:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
+            self._raise_webfetch_panel_if_visible()
         else:
             self._branch_trigger_btn.hide()
         if self.stacked_widget.currentIndex() == 1:
@@ -18453,6 +20024,7 @@ class MyWidget(QWidget):  # 主窗口
             self._hide_terminal_side_triggers()
         self._outputs_trigger_btn.show()
         self._outputs_trigger_btn.raise_()
+        self._update_web_conversation_sync_button_geometry()
         self.trans = 0
         self._chat_stream_timer = QTimer(self)
         self._chat_stream_timer.setSingleShot(True)
@@ -19152,7 +20724,7 @@ class MyWidget(QWidget):  # 主窗口
     def _update_branch_overlay_geometry(self):
         if not hasattr(self, '_branch_scrim'):
             return
-        stacked_pos = self.stacked_widget.mapTo(self, QPoint(0, 0))
+        stacked_pos = self.stacked_widget.mapTo(self.qw3, QPoint(0, 0))
         trigger_w = max(0, self.stacked_widget.width() - 20)
         self._branch_trigger_btn.setGeometry(
             stacked_pos.x() + 10,
@@ -19166,6 +20738,11 @@ class MyWidget(QWidget):  # 主窗口
             self.branch_panel.setGeometry(self._branch_panel_shown_rect())
         else:
             self.branch_panel.setGeometry(self._branch_panel_hidden_rect())
+        self._raise_webfetch_panel_if_visible()
+
+    def _raise_webfetch_panel_if_visible(self):
+        if hasattr(self, 'webfetch_panel') and self.webfetch_panel.isVisible():
+            self.webfetch_panel.raise_()
 
     def _outputs_panel_shown_rect(self):
         safe_w = max(280, self.qw3.width() - 56)
@@ -19298,6 +20875,7 @@ class MyWidget(QWidget):  # 主窗口
         if self.stacked_widget.currentIndex() == 1:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
+            self._raise_webfetch_panel_if_visible()
         self._outputs_trigger_btn.show()
         self._outputs_trigger_btn.raise_()
         self._settings_trigger_btn.show()
@@ -19390,6 +20968,7 @@ class MyWidget(QWidget):  # 主窗口
         if self.stacked_widget.currentIndex() == 1:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
+            self._raise_webfetch_panel_if_visible()
             self._history_trigger_btn.show()
             self._history_trigger_btn.raise_()
             self._links_trigger_btn.show()
@@ -19477,6 +21056,7 @@ class MyWidget(QWidget):  # 主窗口
         if self.stacked_widget.currentIndex() == 1:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
+            self._raise_webfetch_panel_if_visible()
             self._outputs_trigger_btn.show()
             self._outputs_trigger_btn.raise_()
             self._history_trigger_btn.show()
@@ -20627,6 +22207,242 @@ class MyWidget(QWidget):  # 主窗口
         )
         self._external_prompt_trigger_btn.show()
         self._external_prompt_trigger_btn.raise_()
+        self._update_web_conversation_sync_button_geometry()
+
+    def _web_conversation_sync_button_rect(self) -> QRect:
+        diameter = WebConversationSyncButton.DIAMETER
+        try:
+            y = self._webfetch_panel_rect().y()
+        except Exception:
+            y = 58
+        return QRect(20, max(0, y), diameter, diameter)
+
+    def _update_web_conversation_sync_button_geometry(self):
+        if not hasattr(self, 'web_conversation_sync_button'):
+            return
+        index = self.stacked_widget.currentIndex() if hasattr(self, 'stacked_widget') else -1
+        if index not in (0, 2):
+            self.web_conversation_sync_button.hide()
+            return
+        panel, _dock = self._external_prompt_panel_for_index(index)
+        if panel is None or not panel.is_prompt_dock_visible():
+            self.web_conversation_sync_button.hide()
+            return
+        self.web_conversation_sync_button.setGeometry(self._web_conversation_sync_button_rect())
+        self.web_conversation_sync_button.show()
+        self.web_conversation_sync_button.raise_()
+
+    def _sync_current_web_conversation_to_api(self):
+        index = self.stacked_widget.currentIndex() if hasattr(self, 'stacked_widget') else -1
+        panel, _dock = self._external_prompt_panel_for_index(index)
+        if panel is None or not hasattr(panel, 'active_view'):
+            return
+        view = panel.active_view()
+        if view is None:
+            return
+        self.web_conversation_sync_button.setEnabled(False)
+
+        def after_capture(payload, tab_index=index):
+            self.web_conversation_sync_button.setEnabled(True)
+            self._show_web_conversation_sync_menu(tab_index, payload)
+
+        try:
+            view.page().runJavaScript(_WEB_CONVERSATION_CAPTURE_JS, after_capture)
+        except Exception:
+            self.web_conversation_sync_button.setEnabled(True)
+
+    def _web_conversation_source_key(self, tab_index: int) -> str:
+        panel, _dock = self._external_prompt_panel_for_index(tab_index)
+        scope = 'web' if tab_index == 0 else 'localhost' if tab_index == 2 else 'unknown'
+        try:
+            active_idx = int(panel.active_index()) if panel is not None else 0
+        except Exception:
+            active_idx = 0
+        return f'{scope}:{active_idx}'
+
+    def _normalize_web_conversation_capture(self, payload) -> dict:
+        capture = payload if isinstance(payload, dict) else {}
+        now = current_chat_timestamp()
+        messages = []
+        seen = set()
+        for item in capture.get('messages', []) if isinstance(capture.get('messages'), list) else []:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get('role', '')).strip().lower()
+            if role not in {'user', 'assistant'}:
+                continue
+            content = re.sub(r'\n{3,}', '\n\n', str(item.get('content', '') or '')).strip()
+            if not content:
+                continue
+            key = (role, content)
+            if key in seen:
+                continue
+            seen.add(key)
+            source = str(item.get('source', '') or capture.get('source', '') or '').strip()
+            message = {'role': role, 'content': content, 'timestamp': now}
+            if source:
+                message['source'] = source[:40]
+            messages.append(message)
+        title = sanitize_conversation_title(
+            capture.get('title', '') or conversation_title_from_messages(messages, fallback='Web conversation')
+        )
+        source = str(capture.get('source', '') or '').strip()
+        if not source:
+            for message in messages:
+                source = str(message.get('source', '') or '').strip()
+                if source:
+                    break
+        return {
+            'title': title,
+            'url': str(capture.get('url', '') or '').strip(),
+            'source': source,
+            'captured_at': str(capture.get('captured_at', '') or '').strip(),
+            'messages': messages,
+        }
+
+    def _show_web_conversation_sync_menu(self, tab_index: int, payload):
+        capture = self._normalize_web_conversation_capture(payload)
+        messages = capture.get('messages', [])
+        if not messages:
+            self.web_conversation_sync_button.setToolTip('No conversation messages were detected on this page.')
+            return
+        source_key = self._web_conversation_source_key(tab_index)
+        bindings = load_web_conversation_bindings()
+        linked_path = str(bindings.get(source_key, '') or '').strip()
+        linked_exists = bool(linked_path and os.path.exists(linked_path))
+        active_exists = bool(self._active_conversation_path and os.path.exists(self._active_conversation_path))
+
+        menu = QMenu(self)
+        title_action = QAction(f"{len(messages)} messages detected", menu)
+        title_action.setEnabled(False)
+        menu.addAction(title_action)
+        menu.addSeparator()
+
+        new_action = QAction('New API history', menu)
+        new_action.triggered.connect(lambda _checked=False: self._save_web_conversation_new(source_key, capture))
+        menu.addAction(new_action)
+
+        update_action = QAction('Update linked API history', menu)
+        update_action.setEnabled(linked_exists)
+        update_action.triggered.connect(lambda _checked=False, path=linked_path: self._save_web_conversation_update(path, source_key, capture))
+        menu.addAction(update_action)
+
+        append_action = QAction('Append to current API history', menu)
+        append_action.setEnabled(active_exists)
+        append_action.triggered.connect(lambda _checked=False: self._save_web_conversation_append(self._active_conversation_path, source_key, capture))
+        menu.addAction(append_action)
+
+        records = list_conversation_records()
+        if records:
+            choose_menu = menu.addMenu('Choose API history...')
+            for record in records[:24]:
+                label = str(record.get('title', '') or os.path.basename(record.get('path', ''))).strip()
+                if len(label) > 48:
+                    label = label[:45].rstrip() + '...'
+                action = QAction(label, choose_menu)
+                action.setToolTip(str(record.get('path', '')))
+                action.triggered.connect(
+                    lambda _checked=False, path=record.get('path', ''): self._save_web_conversation_append(path, source_key, capture)
+                )
+                choose_menu.addAction(action)
+
+        anchor = self.web_conversation_sync_button
+        menu.exec(anchor.mapToGlobal(QPoint(0, anchor.height() + 6)))
+
+    @staticmethod
+    def _web_message_signature(message: dict) -> tuple[str, str]:
+        return (
+            str(message.get('role', '')).strip().lower(),
+            re.sub(r'\s+', ' ', str(message.get('content', '') or '').strip()),
+        )
+
+    def _merge_web_conversation_messages(self, existing: list[dict], incoming: list[dict]) -> list[dict]:
+        existing = [msg for msg in existing or [] if normalize_chat_history_message(msg)]
+        incoming = [msg for msg in incoming or [] if normalize_chat_history_message(msg)]
+        if not existing:
+            return incoming
+        if not incoming:
+            return existing
+        existing_sig = [self._web_message_signature(msg) for msg in existing]
+        incoming_sig = [self._web_message_signature(msg) for msg in incoming]
+        max_overlap = min(len(existing_sig), len(incoming_sig))
+        overlap = 0
+        for size in range(max_overlap, 0, -1):
+            if existing_sig[-size:] == incoming_sig[:size]:
+                overlap = size
+                break
+        if overlap:
+            return existing + incoming[overlap:]
+        if len(incoming_sig) >= len(existing_sig) and incoming_sig[:len(existing_sig)] == existing_sig:
+            return incoming
+        return existing + incoming
+
+    def _save_web_conversation_record(self,
+                                      path: str,
+                                      capture: dict,
+                                      messages: list[dict],
+                                      source_key: str,
+                                      bind: bool = True) -> dict | None:
+        if not path or not messages:
+            return None
+        now = datetime.datetime.now().isoformat(timespec='seconds')
+        existing = load_conversation_record(path)
+        title_with_source = web_conversation_title_with_source(
+            capture.get('title') or conversation_title_from_messages(messages, fallback='Web conversation'),
+            capture.get('source', ''),
+        )
+        record = existing if existing is not None else {
+            'id': Path(path).stem.split('_', 1)[0],
+            'title': title_with_source,
+            'created_at': now,
+            'messages': [],
+        }
+        record['messages'] = list(messages)
+        record['title'] = sanitize_conversation_title(record.get('title') or title_with_source)
+        record['updated_at'] = now
+        record['rendered_markdown'] = render_chat_history_markdown(messages)
+        saved = write_conversation_record(path, record)
+        if bind:
+            bindings = load_web_conversation_bindings()
+            bindings[source_key] = saved['path']
+            save_web_conversation_bindings(bindings)
+        self._active_conversation_path = saved['path']
+        save_chat_history_messages(saved['messages'])
+        self.render_final_output(saved['rendered_markdown'], history_messages=saved['messages'])
+        self._refresh_history_panel()
+        self._refresh_links_panel()
+        self._refresh_outputs_panel()
+        self._refresh_branch_state_from_current_conversation()
+        return saved
+
+    def _save_web_conversation_new(self, source_key: str, capture: dict):
+        messages = list(capture.get('messages') or [])
+        convo_id = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+        title = web_conversation_title_with_source(
+            capture.get('title') or conversation_title_from_messages(messages, fallback='Web conversation'),
+            capture.get('source', ''),
+        )
+        filename = f"{convo_id}_{sanitize_conversation_filename(title)}.json"
+        path = os.path.join(CONVERSATIONS_DIR, filename)
+        suffix = 2
+        while os.path.exists(path):
+            filename = f"{convo_id}_{sanitize_conversation_filename(title)}-{suffix}.json"
+            path = os.path.join(CONVERSATIONS_DIR, filename)
+            suffix += 1
+        self._save_web_conversation_record(path, capture, messages, source_key, bind=True)
+
+    def _save_web_conversation_update(self, path: str, source_key: str, capture: dict):
+        if not path:
+            return
+        self._save_web_conversation_record(path, capture, list(capture.get('messages') or []), source_key, bind=True)
+
+    def _save_web_conversation_append(self, path: str, source_key: str, capture: dict):
+        if not path:
+            return
+        record = load_conversation_record(path)
+        existing_messages = list(record.get('messages', [])) if record else []
+        merged = self._merge_web_conversation_messages(existing_messages, list(capture.get('messages') or []))
+        self._save_web_conversation_record(path, capture, merged, source_key, bind=True)
 
     def _prepare_web_external_attachments(self, dock: ExternalPromptDock) -> tuple[list, list]:
         direct_attachments = []
@@ -21911,6 +23727,7 @@ class MyWidget(QWidget):  # 主窗口
         else:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
+            self._raise_webfetch_panel_if_visible()
             self._history_trigger_btn.show()
             self._history_trigger_btn.raise_()
             self._links_trigger_btn.show()
@@ -21934,6 +23751,7 @@ class MyWidget(QWidget):  # 主窗口
         self._refresh_outputs_panel()
         if is_external_prompt_tab:
             self._update_external_prompt_trigger_geometry()
+            self._update_web_conversation_sync_button_geometry()
             panel, _dock = self._external_prompt_panel_for_index(index)
             if panel is not None and panel.is_prompt_dock_visible() and getattr(self, '_webfetch_records', None) and not getattr(self, '_webfetch_panel_dismissed', False):
                 self._show_webfetch_panel()
@@ -21941,6 +23759,8 @@ class MyWidget(QWidget):  # 主窗口
                 self.webfetch_panel.hide()
         elif hasattr(self, '_external_prompt_trigger_btn'):
             self._external_prompt_trigger_btn.hide()
+            if hasattr(self, 'web_conversation_sync_button'):
+                self.web_conversation_sync_button.hide()
         if not self._settings_panel_visible:
             self._settings_trigger_btn.show()
             self._settings_trigger_btn.raise_()
@@ -24377,6 +26197,7 @@ class MyWidget(QWidget):  # 主窗口
         if self.stacked_widget.currentIndex() == 1:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
+            self._raise_webfetch_panel_if_visible()
         self._outputs_trigger_btn.show()
         self._outputs_trigger_btn.raise_()
         self._settings_trigger_btn.show()
@@ -24472,6 +26293,7 @@ class MyWidget(QWidget):  # 主窗口
         if self.stacked_widget.currentIndex() == 1:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
+            self._raise_webfetch_panel_if_visible()
             self._outputs_trigger_btn.show()
             self._outputs_trigger_btn.raise_()
             self._settings_trigger_btn.show()
@@ -24564,6 +26386,7 @@ class MyWidget(QWidget):  # 主窗口
         if self.stacked_widget.currentIndex() == 1:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
+            self._raise_webfetch_panel_if_visible()
             self._outputs_trigger_btn.show()
             self._outputs_trigger_btn.raise_()
             self._settings_trigger_btn.show()
@@ -24658,6 +26481,8 @@ end run'''"""
             self._update_share_overlay_geometry()
         if hasattr(self, 'webfetch_panel'):
             self._update_webfetch_panel_geometry()
+        if hasattr(self, 'web_conversation_sync_button'):
+            self._update_web_conversation_sync_button_geometry()
         if hasattr(self, '_text1_popup'):
             self._update_text1_popup_geometry()
         if hasattr(self, '_external_prompt_trigger_btn'):
@@ -24950,7 +26775,7 @@ end run'''"""
         if mode_index == 1:
             prompt = f"""Reply only the Applescript to fullfill this command. Don't reply any other explanations. Before the code starts, write "「「START」」" and write "「「END」」" after it ends. Don't reply with method that needs further information and revision. Command: {prompt_input}. """
         if mode_index == 2:
-            prompt = f"""You are a translation engine that can only translate text and cannot interpret it. Translate this text from {self.widget1.currentText()} to {self.widget2.currentText()}. Don't reply any other explanations. Before the translated text starts, write "「「START」」" and write "「「END」」" after it ends. Text: {prompt_input}. """
+            prompt = build_translation_prompt(prompt_input, self.widget1.currentText(), self.widget2.currentText())
         if mode_index == 3:
             prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don't reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」" after it ends. Text: {prompt_input}. """
         if mode_index == 4:
@@ -25664,6 +27489,9 @@ end run'''"""
             self._inject_userscripts_into_view(view)
 
     def _on_browser_bridge_request(self, payload: dict):
+        if str(payload.get('action', '') or '').strip() == 'translate_popup':
+            self._on_translate_popup_request(payload)
+            return
         question = str(payload.get('question', '')).strip()
         context = str(payload.get('context', '')).strip()
         url = str(payload.get('url', '')).strip()
@@ -25694,6 +27522,78 @@ end run'''"""
             if dock is not None:
                 dock.prompt_edit.setPlainText(composed)
                 self.SendExternalPromptDockX(tab)
+
+    def _on_translate_popup_request(self, payload: dict):
+        selected_text = (
+            str(payload.get('text', '') or '').strip()
+            or str(payload.get('context', '') or '').strip()
+            or str(payload.get('selection', '') or '').strip()
+        )
+        if not selected_text:
+            return
+        window = TranslationPopupWindow(selected_text, owner=self)
+        window.closed.connect(self._remove_translation_popup_window)
+        self._translation_popup_windows.append(window)
+        window.show_centered()
+
+    def _remove_translation_popup_window(self, window):
+        try:
+            if window in self._translation_popup_windows:
+                self._translation_popup_windows.remove(window)
+        except Exception:
+            pass
+
+    def _save_background_translation_record(self, *, source_text: str, translated_text: str, source_language: str, target_language: str):
+        source_text = str(source_text or '').strip()
+        translated_text = str(translated_text or '').strip()
+        if not source_text and not translated_text:
+            return None
+        ensure_broccoli_data_dir()
+        now_iso = datetime.datetime.now().isoformat(timespec='seconds')
+        timestamp = current_chat_timestamp()
+        preview = sanitize_conversation_title(source_text or translated_text, max_len=34)
+        title = sanitize_conversation_title(
+            f'Translate {source_language} to {target_language}: {preview}',
+            max_len=60,
+        )
+        convo_id = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+        filename = f"{convo_id}_{sanitize_conversation_filename(title)}.json"
+        path = os.path.join(CONVERSATIONS_DIR, filename)
+        suffix = 2
+        while os.path.exists(path):
+            filename = f"{convo_id}_{sanitize_conversation_filename(title)}-{suffix}.json"
+            path = os.path.join(CONVERSATIONS_DIR, filename)
+            suffix += 1
+        messages = [
+            {
+                'role': 'user',
+                'content': source_text,
+                'timestamp': timestamp,
+                'source': f'{POPCLIP_TRANSLATE_SOURCE} · {source_language}',
+            },
+            {
+                'role': 'assistant',
+                'content': translated_text,
+                'timestamp': timestamp,
+                'source': f'{POPCLIP_TRANSLATE_SOURCE} · {target_language}',
+            },
+        ]
+        record = write_conversation_record(
+            path,
+            {
+                'id': convo_id,
+                'title': title,
+                'created_at': now_iso,
+                'updated_at': now_iso,
+                'messages': messages,
+                'rendered_markdown': render_chat_history_markdown(messages),
+            },
+        )
+        try:
+            self._refresh_history_panel()
+        except Exception:
+            pass
+        return record
 
     def SendX(self):
         if self.trans % 2 == 1:
@@ -28110,12 +30010,14 @@ class SettingsPanel(QWidget):  # Customization settings
         if has_items:
             self.language_list_widget.setCurrentRow(0)
         self.language_delete_button.setEnabled(has_items)
+        self._refresh_language_move_buttons()
         self._language_updating = False
 
     def _on_language_selection_changed(self, current, previous):
         if self._language_updating:
             return
         self.language_delete_button.setEnabled(current is not None)
+        self._refresh_language_move_buttons()
         self._mark_dirty_if_needed()
 
     def _on_language_item_changed(self, item: QListWidgetItem):
@@ -28128,6 +30030,7 @@ class SettingsPanel(QWidget):  # Customization settings
                 self._language_updating = True
                 self.language_list_widget.takeItem(row)
                 self.language_delete_button.setEnabled(self.language_list_widget.currentItem() is not None)
+                self._refresh_language_move_buttons()
                 self._language_updating = False
         else:
             self._language_updating = True
@@ -28149,6 +30052,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self.language_list_widget.addItem(item)
         self.language_list_widget.setCurrentItem(item)
         self.language_delete_button.setEnabled(True)
+        self._refresh_language_move_buttons()
         self._language_updating = False
         self.language_list_widget.editItem(item)
         self._mark_dirty_if_needed()
@@ -28162,7 +30066,31 @@ class SettingsPanel(QWidget):  # Customization settings
         if self.language_list_widget.count() > 0:
             self.language_list_widget.setCurrentRow(min(row, self.language_list_widget.count() - 1))
         self.language_delete_button.setEnabled(self.language_list_widget.currentItem() is not None)
+        self._refresh_language_move_buttons()
         self._language_updating = False
+        self._mark_dirty_if_needed()
+
+    def _refresh_language_move_buttons(self):
+        if not hasattr(self, 'language_move_up_button') or not hasattr(self, 'language_move_down_button'):
+            return
+        row = self.language_list_widget.currentRow()
+        count = self.language_list_widget.count()
+        self.language_move_up_button.setEnabled(row > 0)
+        self.language_move_down_button.setEnabled(0 <= row < count - 1)
+
+    def _move_language_item(self, direction: int):
+        row = self.language_list_widget.currentRow()
+        count = self.language_list_widget.count()
+        target = row + int(direction)
+        if row < 0 or target < 0 or target >= count:
+            return
+        self._language_updating = True
+        item = self.language_list_widget.takeItem(row)
+        if item is not None:
+            self.language_list_widget.insertItem(target, item)
+            self.language_list_widget.setCurrentItem(item)
+        self._language_updating = False
+        self._refresh_language_move_buttons()
         self._mark_dirty_if_needed()
 
     def _set_memory_items(self, items) -> None:
@@ -29179,9 +31107,17 @@ class SettingsPanel(QWidget):  # Customization settings
         self.language_new_button.clicked.connect(self._add_language_item)
         self.language_delete_button = MacNormalButton('Delete', self)
         self.language_delete_button.clicked.connect(self._delete_language_item)
+        self.language_move_up_button = MacNormalButton('Up', self)
+        self.language_move_up_button.clicked.connect(lambda: self._move_language_item(-1))
+        self.language_move_down_button = MacNormalButton('Down', self)
+        self.language_move_down_button.clicked.connect(lambda: self._move_language_item(1))
         self.language_new_button.setFixedWidth(settings_action_button_w)
         self.language_delete_button.setFixedWidth(settings_action_button_w)
+        self.language_move_up_button.setFixedWidth(settings_action_button_w)
+        self.language_move_down_button.setFixedWidth(settings_action_button_w)
         self.language_delete_button.setEnabled(False)
+        self.language_move_up_button.setEnabled(False)
+        self.language_move_down_button.setEnabled(False)
 
         self.memory_text_edit = QTextEdit(self)
         self.memory_text_edit.setPlaceholderText('Persistent memory about the user, preferences, background, and long-term facts.')
@@ -29764,6 +31700,8 @@ class SettingsPanel(QWidget):  # Customization settings
         language_actions_layout.setSpacing(4)
         language_actions_layout.addWidget(self.language_new_button)
         language_actions_layout.addWidget(self.language_delete_button)
+        language_actions_layout.addWidget(self.language_move_up_button)
+        language_actions_layout.addWidget(self.language_move_down_button)
         language_actions_layout.addStretch()
         language_actions.setLayout(language_actions_layout)
         languages_layout.addWidget(language_actions)

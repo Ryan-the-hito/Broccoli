@@ -3,7 +3,7 @@
 
 block_cipher = None
 
-__version__ = '2.0.2'
+__version__ = '2.0.3'
 
 
 a = Analysis(
@@ -26,7 +26,12 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PyQt5', 'PyQt5_sip', 'PySide2', 'PySide6'],
+    excludes=[
+    'PyQt5', 'PyQt5_sip', 'PySide2', 'PySide6',
+    'torch', 'torchvision', 'torchaudio', 'torchtext', 'torchao',
+    'transformers', 'sentence_transformers',
+    'tensorflow', 'onnxruntime', 'easyocr', 'cv2',
+],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
