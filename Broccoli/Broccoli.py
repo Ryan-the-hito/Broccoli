@@ -151,7 +151,7 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.3'
+VERSION = '2.0.4'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
 BUNDLED_RESOURCES_DIR = _resolve_bundled_resources_dir()
@@ -5497,6 +5497,21 @@ def normalize_terminal_shell_mode(value) -> str:
     return candidate if candidate in allowed else DEFAULT_TERMINAL_SHELL_MODE
 
 
+WEB_LIFECYCLE_MODE_OPTIONS = [
+    ('off', 'Off - keep pages active'),
+    ('balanced', 'Balanced - freeze hidden pages'),
+    ('aggressive', 'Aggressive - discard long-idle hidden pages'),
+]
+DEFAULT_WEB_LIFECYCLE_MODE = 'balanced'
+WEB_AGGRESSIVE_DISCARD_DELAY_MS = 5 * 60 * 1000
+
+
+def normalize_web_lifecycle_mode(value) -> str:
+    candidate = str(value or DEFAULT_WEB_LIFECYCLE_MODE).strip().lower()
+    allowed = {key for key, _label in WEB_LIFECYCLE_MODE_OPTIONS}
+    return candidate if candidate in allowed else DEFAULT_WEB_LIFECYCLE_MODE
+
+
 def legacy_profile_snapshot() -> dict:
     third_party = read_text_file(BasePath + 'third.txt', '0') == '1'
     endpoint = DEFAULT_ENDPOINT
@@ -5733,9 +5748,11 @@ def default_global_settings() -> dict:
         'embedding_profile': '',
         'webfetch_download_path': '',
         'always_on_top': True,
+        'edge_auto_hide_enabled': False,
         'start_on_login': is_start_on_login_enabled(),
         'terminal_shell_mode': DEFAULT_TERMINAL_SHELL_MODE,
         'terminal_use_bash': False,
+        'web_lifecycle_mode': DEFAULT_WEB_LIFECYCLE_MODE,
         'annotation_pen_color': '#FF3B30',
         'web_auto_send_after_inject': False,
         'webfetch_context_use_embedding': True,
@@ -5803,11 +5820,15 @@ def load_settings_store() -> dict:
                 'embedding_profile': str(store['globals'].get('embedding_profile', globals_store['embedding_profile'])).strip(),
                 'webfetch_download_path': str(store['globals'].get('webfetch_download_path', globals_store['webfetch_download_path'])).strip(),
                 'always_on_top': bool(store['globals'].get('always_on_top', globals_store['always_on_top'])),
+                'edge_auto_hide_enabled': bool(store['globals'].get('edge_auto_hide_enabled', globals_store['edge_auto_hide_enabled'])),
                 'start_on_login': bool(store['globals'].get('start_on_login', globals_store['start_on_login'])),
                 'terminal_shell_mode': normalize_terminal_shell_mode(
                     store['globals'].get('terminal_shell_mode', globals_store['terminal_shell_mode'])
                 ),
                 'terminal_use_bash': bool(store['globals'].get('terminal_use_bash', globals_store['terminal_use_bash'])),
+                'web_lifecycle_mode': normalize_web_lifecycle_mode(
+                    store['globals'].get('web_lifecycle_mode', globals_store['web_lifecycle_mode'])
+                ),
                 'annotation_pen_color': str(store['globals'].get('annotation_pen_color', globals_store['annotation_pen_color'])).strip() or '#FF3B30',
                 'web_auto_send_after_inject': bool(store['globals'].get('web_auto_send_after_inject', globals_store['web_auto_send_after_inject'])),
                 'webfetch_context_use_embedding': bool(store['globals'].get('webfetch_context_use_embedding', globals_store['webfetch_context_use_embedding'])),
@@ -6116,6 +6137,30 @@ def load_language_items() -> list[str]:
     except Exception:
         items = []
     return items or ['English', '中文', '日本語']
+
+
+_runtime_translate_target_language = ''
+
+
+def runtime_translate_target_language() -> str:
+    return _runtime_translate_target_language
+
+
+def remember_runtime_translate_target_language(language: str):
+    global _runtime_translate_target_language
+    language = str(language or '').strip()
+    if language:
+        _runtime_translate_target_language = language
+
+
+def preferred_runtime_translate_target_index(items: list[str]) -> int:
+    preferred = runtime_translate_target_language()
+    if not preferred:
+        return -1
+    try:
+        return items.index(preferred)
+    except ValueError:
+        return -1
 
 
 def build_translation_prompt(prompt_input: str, source_language: str, target_language: str) -> str:
@@ -11065,7 +11110,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         blay9.addStretch()
         widg9.setLayout(blay9)
 
-        lbl6 = QLabel('© 2023 Ryan-the-hito. All rights reserved.', self)
+        lbl6 = QLabel('© 2023 Yixiang SHEN. All rights reserved.', self)
         widg10 = self._centered_row(lbl6)
 
         main_h_box = QVBoxLayout()
@@ -11684,6 +11729,26 @@ class NavSitePill(QWidget):
                 + 6 * 2)                 # pill's own spacing
         return max(150, bar.width() - used)
 
+    def sync_active_width(self, animated: bool = False):
+        if not self._active:
+            return
+        target = self._target_pill_w()
+        if animated:
+            self._animate(target)
+            return
+        self._timer.stop()
+        self._cur_w = target
+        self._t0 = target
+        self._t1 = target
+        self._prog = 1.0
+        self.setFixedWidth(self._cur_w)
+        if self._le.isVisible():
+            self._le.setGeometry(self.CIRCLE_SIZE + 4, 2,
+                                 self._cur_w - self.CIRCLE_SIZE - 8, self.HEIGHT - 4)
+        parent = self.parentWidget()
+        if parent is not None:
+            parent.update()
+
     def _animate(self, target):
         self._t0 = self._cur_w; self._t1 = target
         self._prog = 0.0
@@ -12233,6 +12298,9 @@ _WEB_CONVERSATION_CAPTURE_JS = r"""
 })()
 """
 
+WEB_REPLY_FORWARD_SOURCE_CHAR_LIMIT = 6000
+WEB_REPLY_FORWARD_TOTAL_CHAR_LIMIT = 18000
+
 
 def load_web_conversation_bindings() -> dict:
     ensure_broccoli_data_dir()
@@ -12384,6 +12452,24 @@ class WebNavBar(QWidget):
         self._plus_btn.clicked.connect(self._on_add)
         self._hbox.addWidget(self._plus_btn)
         self._apply_theme()
+        QTimer.singleShot(0, self._sync_active_pill_width)
+        QTimer.singleShot(80, self._sync_active_pill_width)
+
+    def _sync_active_pill_width(self, animated: bool = False):
+        if 0 <= self._active < len(self._pills):
+            pill = self._pills[self._active]
+            if hasattr(pill, 'sync_active_width'):
+                pill.sync_active_width(animated=animated)
+            self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._sync_active_pill_width)
+        QTimer.singleShot(80, self._sync_active_pill_width)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_active_pill_width(animated=False)
 
     def _apply_theme(self):
         if self._theme_updating:
@@ -12440,6 +12526,7 @@ class WebNavBar(QWidget):
     def _select_pill(self, pill):
         idx = self._pills.index(pill)
         if idx == self._active:
+            self._sync_active_pill_width(animated=False)
             return
         self._pills[self._active].collapse()
         self._active = idx
@@ -12464,6 +12551,7 @@ class WebNavBar(QWidget):
         self._hbox.insertWidget(self._hbox.count() - 2, pill)  # before stretch + "+"
         self._active = new_idx
         pill.expand()
+        QTimer.singleShot(0, self._sync_active_pill_width)
 
     # ── URL 提交 ──────────────────────────────────────────────
     def _on_url_submitted(self, pill, url):
@@ -12481,6 +12569,7 @@ class WebNavBar(QWidget):
         new_active = min(self._active, len(self._pills) - 1)
         self._active = new_active
         self._pills[self._active].expand()
+        QTimer.singleShot(0, self._sync_active_pill_width)
         self.view_selected.emit(self._active)
         self.site_deleted.emit(idx)
         self.update()
@@ -12499,6 +12588,7 @@ class WebNavBar(QWidget):
         self._pills.append(pill)
         self._hbox.insertWidget(self._hbox.count() - 2, pill)
         self._active = new_idx
+        QTimer.singleShot(0, self._sync_active_pill_width)
 
     # ── 绘制：白色圆角 bar + 激活 pill 高亮 ─────────────────
     def paintEvent(self, event):
@@ -12585,6 +12675,10 @@ class WebViewPanel(QWidget):
         self._nav_anim = None
         self._prompt_dock_anim = None
         self._switch_anim = None
+        self._panel_visible = False
+        self._automation_locks = {}
+        self._hidden_since = {}
+        self._lifecycle_mode = DEFAULT_WEB_LIFECYCLE_MODE
 
         # ── 每个 site 一个独立 view，全部预加载 ──
         self._stack = QStackedWidget()
@@ -12619,6 +12713,127 @@ class WebViewPanel(QWidget):
         nwl.addWidget(self._nav, 1)
         self._nav_wrap = nav_wrap
         layout.addWidget(nav_wrap)
+        self._refresh_lifecycle_states()
+
+    @staticmethod
+    def _page_lifecycle_state(name: str):
+        try:
+            return getattr(QWebEnginePage.LifecycleState, name)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _set_view_lifecycle_state(view, state) -> bool:
+        if view is None or state is None:
+            return False
+        try:
+            page = view.page()
+            if page is None or not hasattr(page, 'setLifecycleState'):
+                return False
+            try:
+                if page.lifecycleState() == state:
+                    return True
+            except Exception:
+                pass
+            page.setLifecycleState(state)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _view_lifecycle_state(view):
+        try:
+            page = view.page()
+            if page is not None and hasattr(page, 'lifecycleState'):
+                return page.lifecycleState()
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _view_is_loading(view) -> bool:
+        try:
+            page = view.page()
+            return bool(page is not None and hasattr(page, 'isLoading') and page.isLoading())
+        except Exception:
+            return False
+
+    @classmethod
+    def _view_allows_freeze(cls, view) -> bool:
+        try:
+            page = view.page()
+            active_state = cls._page_lifecycle_state('Active')
+            if page is not None and hasattr(page, 'recommendedState') and active_state is not None:
+                return page.recommendedState() != active_state
+        except Exception:
+            pass
+        return True
+
+    def set_panel_visible(self, visible: bool):
+        self._panel_visible = bool(visible)
+        self._refresh_lifecycle_states()
+
+    def set_lifecycle_mode(self, mode: str):
+        self._lifecycle_mode = normalize_web_lifecycle_mode(mode)
+        self._hidden_since.clear()
+        self._refresh_lifecycle_states()
+
+    def hold_views_active(self, views, hold_ms: int = 90000):
+        token = object()
+        discarded_state = self._page_lifecycle_state('Discarded')
+        needs_reload_delay = False
+        for view in views or []:
+            if view is not None:
+                if discarded_state is not None and self._view_lifecycle_state(view) == discarded_state:
+                    needs_reload_delay = True
+                self._automation_locks.setdefault(view, set()).add(token)
+        self._refresh_lifecycle_states()
+
+        def release():
+            for view in list(self._automation_locks.keys()):
+                locks = self._automation_locks.get(view)
+                if locks is None:
+                    continue
+                locks.discard(token)
+                if not locks:
+                    self._automation_locks.pop(view, None)
+            self._refresh_lifecycle_states()
+
+        QTimer.singleShot(max(1000, int(hold_ms)), release)
+        return 1800 if needs_reload_delay else 0
+
+    def _refresh_lifecycle_states(self):
+        active_state = self._page_lifecycle_state('Active')
+        frozen_state = self._page_lifecycle_state('Frozen')
+        discarded_state = self._page_lifecycle_state('Discarded')
+        if active_state is None:
+            return
+        mode = normalize_web_lifecycle_mode(getattr(self, '_lifecycle_mode', DEFAULT_WEB_LIFECYCLE_MODE))
+        now_ms = int(time.monotonic() * 1000)
+        for idx, view in enumerate(self._views):
+            if view is None:
+                continue
+            locked = bool(self._automation_locks.get(view))
+            visible_active = bool(self._panel_visible and idx == self._active_idx)
+            if mode == 'off':
+                self._hidden_since.pop(view, None)
+                self._set_view_lifecycle_state(view, active_state)
+            elif visible_active or locked or self._view_is_loading(view):
+                self._hidden_since.pop(view, None)
+                self._set_view_lifecycle_state(view, active_state)
+            elif frozen_state is not None and self._view_allows_freeze(view):
+                hidden_since = self._hidden_since.setdefault(view, now_ms)
+                hidden_ms = max(0, now_ms - int(hidden_since))
+                if mode == 'aggressive' and discarded_state is not None and hidden_ms >= WEB_AGGRESSIVE_DISCARD_DELAY_MS:
+                    self._set_view_lifecycle_state(view, discarded_state)
+                else:
+                    self._set_view_lifecycle_state(view, frozen_state)
+                    if mode == 'aggressive':
+                        delay = max(1000, WEB_AGGRESSIVE_DISCARD_DELAY_MS - hidden_ms + 50)
+                        QTimer.singleShot(delay, self._refresh_lifecycle_states)
+            else:
+                self._hidden_since.pop(view, None)
+                self._set_view_lifecycle_state(view, active_state)
 
     def attach_prompt_dock(self, dock: QWidget):
         self._prompt_dock = dock
@@ -12706,6 +12921,7 @@ class WebViewPanel(QWidget):
         if 0 <= idx < len(self._views):
             old_idx = self._active_idx
             self._active_idx = idx
+            self._refresh_lifecycle_states()
             self._animate_or_set_view(old_idx, idx)
             self.view_switched.emit()
 
@@ -12780,6 +12996,7 @@ class WebViewPanel(QWidget):
             return
         if idx == self._active_idx:
             self._stack.setCurrentIndex(idx)
+            self._refresh_lifecycle_states()
             self.view_switched.emit()
             return
         if hasattr(self, '_nav') and self._nav is not None:
@@ -12827,6 +13044,7 @@ class WebViewPanel(QWidget):
             self._prompt_dock.shift_target_indices_after_insert(pill_idx)
         self._active_idx = pill_idx
         self._stack.setCurrentIndex(pill_idx)
+        self._refresh_lifecycle_states()
         self.view_switched.emit()
 
     # ── 删除站点 ─────────────────────────────────────────────
@@ -12844,6 +13062,8 @@ class WebViewPanel(QWidget):
             self._active_idx = min(self._nav._active, len(self._views) - 1)
             if self._views:
                 self._stack.setCurrentIndex(self._active_idx)
+            self._automation_locks.pop(view, None)
+            self._refresh_lifecycle_states()
             self.view_switched.emit()
 
     # ── 刷新站点 ─────────────────────────────────────────────
@@ -12944,6 +13164,7 @@ class WebViewPanel(QWidget):
             self._nav.update_active_url(url.toString())
 
     def _on_load(self, idx, ok):
+        self._refresh_lifecycle_states()
         if ok:
             # 1. JS scan of <head> link tags — works for all sites including localhost
             self._fetch_hq_icon(idx)
@@ -15345,6 +15566,8 @@ class ExternalPromptDock(QWidget):
 
         self.target_lang_combo = DropdownButton(self, always_dark=False)
         self.target_lang_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.target_lang_combo.setPlaceholderText('Target language')
+        self.target_lang_combo.currentIndexChanged.connect(self._on_translate_target_changed)
 
         self.output_lang_combo = DropdownButton(self, always_dark=False)
         self.output_lang_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -15617,7 +15840,10 @@ class ExternalPromptDock(QWidget):
     def _sync_translate_targets(self, *_):
         source = self.source_lang_combo.currentText()
         targets = [item for item in self._load_language_items() if item != source]
-        self._set_combo_items(self.target_lang_combo, targets, 0)
+        self._set_combo_items(self.target_lang_combo, targets, preferred_runtime_translate_target_index(targets))
+
+    def _on_translate_target_changed(self, *_):
+        remember_runtime_translate_target_language(self.target_lang_combo.currentText())
 
     def _refresh_output_languages(self):
         self._set_combo_items(self.output_lang_combo, self._load_language_items(), 0)
@@ -15676,10 +15902,14 @@ class ExternalPromptDock(QWidget):
         if mode_index == 1:
             return f"""Reply only the Applescript to fullfill this command. Don't reply any other explanations. Before the code starts, write "「「START」」" and write "「「END」」" after it ends. Don't reply with method that needs further information and revision. Command: {prompt_input}. """
         if mode_index == 2:
+            target_language = self.target_lang_combo.currentText().strip()
+            if not target_language:
+                return prompt_input
+            remember_runtime_translate_target_language(target_language)
             return build_translation_prompt(
                 prompt_input,
                 self.source_lang_combo.currentText(),
-                self.target_lang_combo.currentText(),
+                target_language,
             )
         if mode_index == 3:
             return f"""Revise the text in {self.output_lang_combo.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don't reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」" after it ends. Text: {prompt_input}. """
@@ -15898,7 +16128,15 @@ class TranslationPopupWindow(QWidget):
         super().__init__(None)
         self.owner = owner
         self.selected_text = str(selected_text or '').strip()
-        self.languages = load_language_items()[:4] or ['English', '中文', '日本語']
+        language_items = load_language_items()
+        preferred_target = runtime_translate_target_language()
+        self.languages = language_items[:4] or ['English', '中文', '日本語']
+        if preferred_target and preferred_target not in self.languages:
+            if preferred_target in language_items:
+                if len(self.languages) >= 4:
+                    self.languages[-1] = preferred_target
+                else:
+                    self.languages.append(preferred_target)
         while len(self.languages) < 4:
             for fallback in ['English', '中文', '日本語', '한국어']:
                 if fallback not in self.languages:
@@ -15906,7 +16144,13 @@ class TranslationPopupWindow(QWidget):
                 if len(self.languages) >= 4:
                     break
         self.source_language = detect_selected_text_language(self.selected_text, self.languages)
-        self.target_language = ''
+        self.target_language = (
+            preferred_target
+            if preferred_target
+            and preferred_target in self.languages
+            and language_alias_key(preferred_target) != language_alias_key(self.source_language)
+            else ''
+        )
         self.translation_text = ''
         self._worker_signals = None
         self._worker_thread = None
@@ -16111,6 +16355,7 @@ class TranslationPopupWindow(QWidget):
 
     def _select_target(self, language: str):
         self.target_language = str(language or '').strip()
+        remember_runtime_translate_target_language(self.target_language)
         self._refresh_labels()
 
     def _refresh_labels(self):
@@ -16239,6 +16484,7 @@ class TranslationPopupWindow(QWidget):
             self._pending_result_actions = True
             return
         self._animate_to_result_box('Translating...\n\n' + self.selected_text)
+        remember_runtime_translate_target_language(self.target_language)
         prompt = build_translation_prompt(self.selected_text, self.source_language, self.target_language)
         self._worker_signals = TranslationWorkerSignals()
         self._worker_signals.finished.connect(self.on_translation_finished, Qt.ConnectionType.QueuedConnection)
@@ -19302,6 +19548,7 @@ class BackgroundVisionToastManager(QObject):
 
 class MyWidget(QWidget):  # 主窗口
     silent_screenshot_finished = pyqtSignal(object)
+    EDGE_AUTO_HIDE_PEEK_PX = 2
 
     def __init__(self):
         super().__init__()
@@ -19336,8 +19583,175 @@ class MyWidget(QWidget):  # 主窗口
     def is_always_on_top(self) -> bool:
         return bool(getattr(self, '_always_on_top', True))
 
+    def apply_edge_auto_hide_settings(self, enabled: bool | None = None):
+        if enabled is None:
+            enabled = bool(load_settings_store().get('globals', {}).get('edge_auto_hide_enabled', False))
+        self._edge_auto_hide_enabled = bool(enabled)
+        if not self._edge_auto_hide_enabled:
+            if getattr(self, '_edge_auto_hidden_side', ''):
+                self._show_window_from_screen_edge()
+            self._edge_auto_hidden_side = ''
+            self._edge_auto_hide_suspended = False
+            self._edge_auto_showing = False
+            self._edge_auto_hidden_screen_geo = None
+        else:
+            self._schedule_edge_auto_hide_check()
+
+    def _screen_for_window_edge(self):
+        center = self.frameGeometry().center()
+        return QGuiApplication.screenAt(center) or QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+
+    def _edge_auto_hide_screen_geometry(self) -> QRect | None:
+        screen = self._screen_for_window_edge()
+        return screen.geometry() if screen is not None else None
+
+    def _is_main_window_pinned_collapsed(self) -> bool:
+        try:
+            return (
+                hasattr(self, 'qw3')
+                and not self.qw3.isVisible()
+                and self.width() <= 80
+                and self.height() <= 80
+            )
+        except Exception:
+            return False
+
+    def _schedule_edge_auto_hide_check(self):
+        if not bool(getattr(self, '_edge_auto_hide_enabled', False)):
+            return
+        if self._is_main_window_pinned_collapsed():
+            return
+        if bool(getattr(self, '_edge_auto_hide_suspended', False)):
+            return
+        if bool(getattr(self, '_edge_auto_hide_animating', False)) or bool(getattr(self, '_edge_auto_showing', False)):
+            return
+        if getattr(self, '_edge_auto_hidden_side', ''):
+            return
+        timer = getattr(self, '_edge_auto_hide_check_timer', None)
+        if timer is not None:
+            timer.start()
+
+    def _check_edge_auto_hide(self):
+        if not bool(getattr(self, '_edge_auto_hide_enabled', False)):
+            return
+        if self._is_main_window_pinned_collapsed():
+            return
+        if bool(getattr(self, '_edge_auto_hide_suspended', False)):
+            return
+        if bool(getattr(self, '_edge_auto_hide_animating', False)) or bool(getattr(self, '_edge_auto_showing', False)):
+            return
+        if getattr(self, '_edge_auto_hidden_side', ''):
+            return
+        screen_geo = self._edge_auto_hide_screen_geometry()
+        if screen_geo is None:
+            return
+        geom = self.geometry()
+        tolerance = max(1, int(getattr(self, 'EDGE_AUTO_HIDE_PEEK_PX', 2)))
+        if geom.right() >= screen_geo.right() - tolerance:
+            self._hide_window_to_screen_edge('right', screen_geo)
+        elif geom.left() <= screen_geo.left() + tolerance:
+            self._hide_window_to_screen_edge('left', screen_geo)
+
+    def _hide_window_to_screen_edge(self, side: str, screen_geo: QRect | None = None):
+        if not bool(getattr(self, '_edge_auto_hide_enabled', False)):
+            return
+        if bool(getattr(self, '_edge_auto_hide_animating', False)) or bool(getattr(self, '_edge_auto_showing', False)):
+            return
+        side = str(side or '').strip().lower()
+        if side not in {'left', 'right'}:
+            return
+        if screen_geo is None:
+            screen_geo = self._edge_auto_hide_screen_geometry()
+        if screen_geo is None:
+            return
+        frame = self.geometry()
+        peek = max(0, int(getattr(self, 'EDGE_AUTO_HIDE_PEEK_PX', 0)))
+        x = screen_geo.right() + 1 - peek if side == 'right' else screen_geo.left() - frame.width() + peek
+        target = QRect(int(x), frame.top(), frame.width(), frame.height())
+        self._edge_auto_hidden_side = side
+        self._edge_auto_hidden_screen_geo = QRect(screen_geo)
+        self._edge_auto_hide_suspended = False
+        self._edge_auto_hide_animating = True
+        self._animate_main_window_geometry(target, duration=180)
+
+    def _show_window_from_screen_edge(self):
+        if bool(getattr(self, '_edge_auto_showing', False)):
+            return
+        side = str(getattr(self, '_edge_auto_hidden_side', '') or '')
+        if side not in {'left', 'right'}:
+            return
+        saved_geo = getattr(self, '_edge_auto_hidden_screen_geo', None)
+        screen_geo = QRect(saved_geo) if isinstance(saved_geo, QRect) else None
+        if screen_geo is None:
+            screen = self._screen_for_window_edge()
+            screen_geo = screen.geometry() if screen is not None else self._edge_auto_hide_screen_geometry()
+        if screen_geo is None:
+            return
+        frame = self.geometry()
+        x = screen_geo.right() - frame.width() + 1 if side == 'right' else screen_geo.left()
+        top = max(screen_geo.top(), min(frame.top(), screen_geo.bottom() - frame.height() + 1))
+        target = QRect(int(x), int(top), frame.width(), frame.height())
+        start_x = screen_geo.right() + 1 - self.EDGE_AUTO_HIDE_PEEK_PX if side == 'right' else screen_geo.left() - frame.width() + self.EDGE_AUTO_HIDE_PEEK_PX
+        start_geometry = QRect(int(start_x), int(top), frame.width(), frame.height())
+        self._edge_auto_hidden_side = ''
+        self._edge_auto_hide_suspended = True
+        self._edge_auto_hide_animating = True
+        self._edge_auto_showing = True
+
+        try:
+            self.setUpdatesEnabled(False)
+            self.setGeometry(start_geometry)
+        finally:
+            self.setUpdatesEnabled(True)
+
+        QTimer.singleShot(
+            80,
+            lambda target_rect=QRect(target): self._animate_main_window_geometry(
+                target_rect,
+                duration=220,
+                finished_callback=self._finish_edge_auto_show,
+            ),
+        )
+
+    def _finish_edge_auto_show(self):
+        self._edge_auto_showing = False
+        self._edge_auto_hidden_screen_geo = None
+        self.raise_()
+
+    def _animate_main_window_geometry(self, target: QRect, duration: int = 220, finished_callback=None):
+        main_anim = getattr(self, '_main_window_animation', None)
+        if main_anim is not None:
+            main_anim.stop()
+        anim = getattr(self, '_edge_auto_hide_animation', None)
+        if anim is not None:
+            anim.stop()
+        anim = QPropertyAnimation(self, b'geometry', self)
+        anim.setDuration(max(0, int(duration)))
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(self.geometry())
+        anim.setEndValue(target)
+        def finish():
+            self._edge_auto_hide_animating = False
+            if callable(finished_callback):
+                finished_callback()
+        anim.finished.connect(finish)
+        self._edge_auto_hide_animation = anim
+        anim.start()
+
     def initUI(self):
         self._always_on_top = bool(load_settings_store().get('globals', {}).get('always_on_top', True))
+        self._edge_auto_hide_enabled = bool(load_settings_store().get('globals', {}).get('edge_auto_hide_enabled', False))
+        self._edge_auto_hidden_side = ''
+        self._edge_auto_hide_suspended = False
+        self._edge_auto_hide_animating = False
+        self._edge_auto_showing = False
+        self._edge_auto_hidden_screen_geo = None
+        self._edge_auto_hide_animation = None
+        self._main_window_animation = None
+        self._edge_auto_hide_check_timer = QTimer(self)
+        self._edge_auto_hide_check_timer.setSingleShot(True)
+        self._edge_auto_hide_check_timer.setInterval(140)
+        self._edge_auto_hide_check_timer.timeout.connect(self._check_edge_auto_hide)
         self._apply_window_flags()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFixedSize(540, 960)
@@ -19473,12 +19887,15 @@ class MyWidget(QWidget):  # 主窗口
 
         self.widget2 = DropdownButton(self, always_dark=False)
         self.widget2.setCurrentIndex(0)
+        self.widget2.setPlaceholderText('Target language')
         currentlang = self.widget1.currentText()
         while currentlang in langs_list:
             langs_list.remove(currentlang)
         self.widget2.addItems(langs_list)
+        self.widget2.setCurrentIndex(preferred_runtime_translate_target_index(langs_list))
         self.widget2.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.widget2.setVisible(False)
+        self.widget2.currentIndexChanged.connect(self._on_translate_target_changed)
 
         self.widget3 = DropdownButton(self, always_dark=False)
         self.widget3.setCurrentIndex(0)
@@ -20048,7 +20465,10 @@ class MyWidget(QWidget):  # 主窗口
         self._daily_memory_timer.timeout.connect(self._start_daily_memory_rollup)
         self._schedule_daily_memory_rollup()
         QTimer.singleShot(1500, self._check_daily_memory_rollup_on_startup)
+        QTimer.singleShot(0, self.apply_web_lifecycle_settings)
+        QTimer.singleShot(0, self.apply_edge_auto_hide_settings)
         QTimer.singleShot(0, self.apply_background_vision_settings)
+        app.applicationStateChanged.connect(self._on_application_state_changed)
 
     def _set_prompt_edit_read_only(self, enabled: bool):
         self.text1.setReadOnly(bool(enabled))
@@ -22199,10 +22619,12 @@ class MyWidget(QWidget):  # 主窗口
         except Exception:
             top = 58
             height = max(0, self.qw3.height() - top)
+        edge_gap = max(0, int(getattr(self, 'EDGE_AUTO_HIDE_PEEK_PX', 2)))
+        trigger_w = int(getattr(self, '_external_prompt_trigger_w', 28))
         self._external_prompt_trigger_btn.setGeometry(
-            0,
+            edge_gap,
             max(0, top),
-            int(getattr(self, '_external_prompt_trigger_w', 28)),
+            max(0, trigger_w - edge_gap),
             max(0, height),
         )
         self._external_prompt_trigger_btn.show()
@@ -22231,6 +22653,34 @@ class MyWidget(QWidget):  # 主窗口
         self.web_conversation_sync_button.setGeometry(self._web_conversation_sync_button_rect())
         self.web_conversation_sync_button.show()
         self.web_conversation_sync_button.raise_()
+
+    def _selected_non_active_web_views(self, panel, dock) -> list:
+        if panel is None or dock is None or not hasattr(panel, 'active_view'):
+            return []
+        try:
+            active_view = panel.active_view()
+        except Exception:
+            active_view = None
+        try:
+            selected = dock.selected_target_views(panel) if hasattr(dock, 'selected_target_views') else []
+        except Exception:
+            selected = []
+        return [view for view in selected if view is not None and view is not active_view]
+
+    def _show_web_conversation_button_menu(self):
+        index = self.stacked_widget.currentIndex() if hasattr(self, 'stacked_widget') else -1
+        panel, dock = self._external_prompt_panel_for_index(index)
+        if panel is None or dock is None:
+            return
+        menu = QMenu(self)
+        sync_action = menu.addAction('Save current page to API history')
+        forward_action = menu.addAction("Send selected tabs' latest replies here")
+        forward_action.setEnabled(bool(self._selected_non_active_web_views(panel, dock)))
+        chosen = menu.exec(self.web_conversation_sync_button.mapToGlobal(QPoint(0, self.web_conversation_sync_button.height() + 6)))
+        if chosen == sync_action:
+            self._sync_current_web_conversation_to_api()
+        elif chosen == forward_action:
+            self._forward_selected_web_replies_to_active(index)
 
     def _sync_current_web_conversation_to_api(self):
         index = self.stacked_widget.currentIndex() if hasattr(self, 'stacked_widget') else -1
@@ -22303,37 +22753,53 @@ class MyWidget(QWidget):  # 主窗口
     def _show_web_conversation_sync_menu(self, tab_index: int, payload):
         capture = self._normalize_web_conversation_capture(payload)
         messages = capture.get('messages', [])
-        if not messages:
-            self.web_conversation_sync_button.setToolTip('No conversation messages were detected on this page.')
-            return
         source_key = self._web_conversation_source_key(tab_index)
         bindings = load_web_conversation_bindings()
         linked_path = str(bindings.get(source_key, '') or '').strip()
         linked_exists = bool(linked_path and os.path.exists(linked_path))
         active_exists = bool(self._active_conversation_path and os.path.exists(self._active_conversation_path))
+        panel, dock = self._external_prompt_panel_for_index(tab_index)
+        forward_views = self._selected_non_active_web_views(panel, dock)
+        try:
+            selected_views = dock.selected_target_views(panel) if panel is not None and dock is not None and hasattr(dock, 'selected_target_views') else []
+        except Exception:
+            selected_views = []
+        selected_views = [view for view in selected_views if view is not None]
 
         menu = QMenu(self)
-        title_action = QAction(f"{len(messages)} messages detected", menu)
+        title_text = f"{len(messages)} messages detected" if messages else 'No current page messages detected'
+        title_action = QAction(title_text, menu)
         title_action.setEnabled(False)
         menu.addAction(title_action)
         menu.addSeparator()
 
+        forward_action = QAction("Send selected tabs' latest replies here", menu)
+        forward_action.setEnabled(bool(forward_views))
+        forward_action.triggered.connect(lambda _checked=False, tab=tab_index: self._forward_selected_web_replies_to_active(tab))
+        menu.addAction(forward_action)
+        cross_forward_action = QAction("Cross-send latest replies between selected tabs", menu)
+        cross_forward_action.setEnabled(len(selected_views) >= 2)
+        cross_forward_action.triggered.connect(lambda _checked=False, tab=tab_index: self._cross_forward_selected_web_replies(tab))
+        menu.addAction(cross_forward_action)
+        menu.addSeparator()
+
         new_action = QAction('New API history', menu)
+        new_action.setEnabled(bool(messages))
         new_action.triggered.connect(lambda _checked=False: self._save_web_conversation_new(source_key, capture))
         menu.addAction(new_action)
 
         update_action = QAction('Update linked API history', menu)
-        update_action.setEnabled(linked_exists)
+        update_action.setEnabled(bool(messages) and linked_exists)
         update_action.triggered.connect(lambda _checked=False, path=linked_path: self._save_web_conversation_update(path, source_key, capture))
         menu.addAction(update_action)
 
         append_action = QAction('Append to current API history', menu)
-        append_action.setEnabled(active_exists)
+        append_action.setEnabled(bool(messages) and active_exists)
         append_action.triggered.connect(lambda _checked=False: self._save_web_conversation_append(self._active_conversation_path, source_key, capture))
         menu.addAction(append_action)
 
         records = list_conversation_records()
-        if records:
+        if messages and records:
             choose_menu = menu.addMenu('Choose API history...')
             for record in records[:24]:
                 label = str(record.get('title', '') or os.path.basename(record.get('path', ''))).strip()
@@ -22348,6 +22814,224 @@ class MyWidget(QWidget):  # 主窗口
 
         anchor = self.web_conversation_sync_button
         menu.exec(anchor.mapToGlobal(QPoint(0, anchor.height() + 6)))
+
+    @staticmethod
+    def _web_view_label(view: QWebEngineView) -> str:
+        try:
+            host = view.url().host()
+            if host:
+                if host.endswith('claude.ai'):
+                    return 'Claude'
+                if host.endswith('chatgpt.com') or host.endswith('openai.com'):
+                    return 'ChatGPT'
+                if host.endswith('gemini.google.com'):
+                    return 'Gemini'
+                return host
+        except Exception:
+            pass
+        return 'Web'
+
+    @staticmethod
+    def _truncate_forward_text(text: str, limit: int, *, from_tail: bool = False) -> str:
+        text = str(text or '').strip()
+        limit = max(0, int(limit))
+        if limit <= 0:
+            return ''
+        if len(text) <= limit:
+            return text
+        if from_tail:
+            return '[Older content omitted; showing the latest text]\n' + text[-limit:].lstrip()
+        return text[:limit].rstrip() + '\n[truncated]'
+
+    def _forward_record_from_capture(self, capture: dict, view: QWebEngineView) -> dict | None:
+        capture = self._normalize_web_conversation_capture(capture)
+        raw_source = str(capture.get('source', '') or '').strip()
+        source = raw_source or self._web_view_label(view)
+        if source == 'Web':
+            source = self._web_view_label(view)
+        messages = [msg for msg in capture.get('messages', []) if isinstance(msg, dict)]
+        latest_assistant = ''
+        use_structured_latest_reply = raw_source and raw_source != 'Web'
+        if use_structured_latest_reply:
+            for message in reversed(messages):
+                if str(message.get('role', '')).strip().lower() == 'assistant':
+                    latest_assistant = str(message.get('content', '') or '').strip()
+                    break
+        if use_structured_latest_reply and latest_assistant:
+            return {
+                'source': source,
+                'url': str(capture.get('url', '') or '').strip(),
+                'content': self._truncate_forward_text(
+                    latest_assistant,
+                    WEB_REPLY_FORWARD_SOURCE_CHAR_LIMIT,
+                    from_tail=False,
+                ),
+                'fallback': False,
+            }
+        full_parts = []
+        for message in messages:
+            content = str(message.get('content', '') or '').strip()
+            if not content:
+                continue
+            role = str(message.get('role', '') or 'content').strip().title()
+            full_parts.append(f'{role}: {content}')
+        full_text = '\n\n'.join(full_parts).strip()
+        if not full_text:
+            return None
+        return {
+            'source': source,
+            'url': str(capture.get('url', '') or '').strip(),
+            'content': self._truncate_forward_text(
+                full_text,
+                WEB_REPLY_FORWARD_SOURCE_CHAR_LIMIT,
+                from_tail=True,
+            ),
+            'fallback': True,
+        }
+
+    def _build_forwarded_web_replies_prompt(self, records: list[dict], *, cross_send: bool = False) -> str:
+        blocks = []
+        total = 0
+        for record in records:
+            source = str(record.get('source', '') or 'Web').strip()
+            content = str(record.get('content', '') or '').strip()
+            if not content:
+                continue
+            remaining = WEB_REPLY_FORWARD_TOTAL_CHAR_LIMIT - total
+            if remaining <= 0:
+                break
+            if len(content) > remaining:
+                content = self._truncate_forward_text(content, remaining, from_tail=bool(record.get('fallback')))
+            total += len(content)
+            title = f'[{source} captured text]' if record.get('fallback') else f'[{source} latest reply]'
+            url = str(record.get('url', '') or '').strip()
+            header = title + (f'\nURL: {url}' if url else '')
+            blocks.append(f'{header}\n{content}')
+        if not blocks:
+            return ''
+        if cross_send:
+            intro = (
+                'Use the following latest replies from the other selected AI/web tabs as context. '
+                'Summarize them into your own answer, compare important differences, and continue the discussion.'
+            )
+        else:
+            intro = (
+                'Use the following text forwarded from other selected AI/web tabs as context. '
+                'Each block includes its source. Respond to the combined context.'
+            )
+        return (
+            intro + '\n\n'
+            + '\n\n---\n\n'.join(blocks)
+        )
+
+    def _forward_selected_web_replies_to_active(self, tab_index: int):
+        panel, dock = self._external_prompt_panel_for_index(int(tab_index))
+        if panel is None or dock is None:
+            return
+        try:
+            target_view = panel.active_view()
+        except Exception:
+            target_view = None
+        source_views = self._selected_non_active_web_views(panel, dock)
+        if target_view is None or not source_views:
+            return
+        activation_delay = 0
+        if hasattr(panel, 'hold_views_active'):
+            activation_delay = int(panel.hold_views_active([target_view, *source_views]) or 0)
+        self.web_conversation_sync_button.setEnabled(False)
+        state = {
+            'remaining': len(source_views),
+            'records': [],
+        }
+
+        def finish():
+            self.web_conversation_sync_button.setEnabled(True)
+            records = state.get('records', [])
+            prompt = self._build_forwarded_web_replies_prompt(records)
+            if not prompt:
+                self.web_conversation_sync_button.setToolTip('No text was detected in the selected tabs.')
+                return
+            self._inject_text_to_web_view(target_view, prompt)
+            QTimer.singleShot(850, lambda v=target_view: self._wait_then_click_web_send_button(v, timeout_ms=8000))
+
+        def after_capture(view, payload):
+            record = self._forward_record_from_capture(payload if isinstance(payload, dict) else {}, view)
+            if record is not None:
+                state['records'].append(record)
+            state['remaining'] = max(0, int(state.get('remaining', 0)) - 1)
+            if state['remaining'] <= 0:
+                finish()
+
+        def capture_one(view):
+            try:
+                view.page().runJavaScript(
+                    _WEB_CONVERSATION_CAPTURE_JS,
+                    lambda payload, v=view: after_capture(v, payload),
+                )
+            except Exception:
+                after_capture(view, {})
+
+        for offset, view in enumerate(source_views):
+            QTimer.singleShot(activation_delay + offset * 120, lambda v=view: capture_one(v))
+
+    def _cross_forward_selected_web_replies(self, tab_index: int):
+        panel, dock = self._external_prompt_panel_for_index(int(tab_index))
+        if panel is None or dock is None:
+            return
+        try:
+            selected_views = dock.selected_target_views(panel) if hasattr(dock, 'selected_target_views') else []
+        except Exception:
+            selected_views = []
+        selected_views = [view for view in selected_views if view is not None]
+        if len(selected_views) < 2:
+            return
+        activation_delay = 0
+        if hasattr(panel, 'hold_views_active'):
+            activation_delay = int(panel.hold_views_active(selected_views) or 0)
+        self.web_conversation_sync_button.setEnabled(False)
+        state = {
+            'remaining': len(selected_views),
+            'records_by_view': {},
+        }
+
+        def finish():
+            self.web_conversation_sync_button.setEnabled(True)
+            records_by_view = state.get('records_by_view', {})
+            if len(records_by_view) < 2:
+                self.web_conversation_sync_button.setToolTip('Not enough text was detected in the selected tabs.')
+                return
+            for offset, target_view in enumerate(selected_views):
+                source_records = [
+                    record
+                    for view, record in records_by_view.items()
+                    if view is not target_view and record is not None
+                ]
+                prompt = self._build_forwarded_web_replies_prompt(source_records, cross_send=True)
+                if not prompt:
+                    continue
+                delay = offset * 650
+                QTimer.singleShot(delay, lambda v=target_view, p=prompt: self._inject_text_to_web_view(v, p))
+                QTimer.singleShot(delay + 900, lambda v=target_view: self._wait_then_click_web_send_button(v, timeout_ms=8000))
+
+        def after_capture(view, payload):
+            record = self._forward_record_from_capture(payload if isinstance(payload, dict) else {}, view)
+            if record is not None:
+                state['records_by_view'][view] = record
+            state['remaining'] = max(0, int(state.get('remaining', 0)) - 1)
+            if state['remaining'] <= 0:
+                finish()
+
+        def capture_one(view):
+            try:
+                view.page().runJavaScript(
+                    _WEB_CONVERSATION_CAPTURE_JS,
+                    lambda payload, v=view: after_capture(v, payload),
+                )
+            except Exception:
+                after_capture(view, {})
+
+        for offset, view in enumerate(selected_views):
+            QTimer.singleShot(activation_delay + offset * 120, lambda v=view: capture_one(v))
 
     @staticmethod
     def _web_message_signature(message: dict) -> tuple[str, str]:
@@ -22550,6 +23234,9 @@ class MyWidget(QWidget):  # 主窗口
 
     def SendExternalPromptDockX(self, tab_index: int):
         panel, dock = self._external_prompt_panel_for_index(int(tab_index))
+        if dock is not None and dock.mode_index() == 2 and not dock.target_lang_combo.currentText().strip():
+            dock.target_lang_combo.setFocus()
+            return
         view = panel.active_view() if panel is not None else None
         selected_views = dock.selected_target_views(panel) if panel is not None and dock is not None and hasattr(dock, 'selected_target_views') else []
         if (
@@ -22586,6 +23273,9 @@ class MyWidget(QWidget):  # 主窗口
                 pass
         if not raw_question and not has_pending_attachments:
             return
+        activation_delay = 0
+        if hasattr(panel, 'hold_views_active'):
+            activation_delay = int(panel.hold_views_active([view]) or 0)
 
         skip_retrieval = bool(globals_store.get('skip_retrieval_for_blank_prompt', False)) and not raw_question and has_pending_attachments
         final_prompt, _attachment_records, direct_attachments = self._build_web_external_prompt(
@@ -22616,10 +23306,10 @@ class MyWidget(QWidget):  # 主窗口
                 ),
             )
 
-        QTimer.singleShot(0, lambda v=view, prompt=final_prompt: self._inject_text_to_web_view(v, prompt))
+        QTimer.singleShot(activation_delay, lambda v=view, prompt=final_prompt: self._inject_text_to_web_view(v, prompt))
         if upload_paths:
             QTimer.singleShot(
-                260,
+                activation_delay + 260,
                 lambda v=view, paths=list(upload_paths): self._activate_claude_composer(
                     v,
                     callback=lambda vv=v, pp=list(paths): self._inject_files_to_claude_by_drop(
@@ -22632,7 +23322,7 @@ class MyWidget(QWidget):  # 主窗口
             )
         elif image_items:
             QTimer.singleShot(
-                220,
+                activation_delay + 220,
                 lambda v=view, imgs=image_items: self._inject_images_to_web_view(
                     v,
                     imgs,
@@ -22640,7 +23330,7 @@ class MyWidget(QWidget):  # 主窗口
                 ),
             )
         else:
-            QTimer.singleShot(850, lambda v=view: wait_then_submit(v, dock))
+            QTimer.singleShot(activation_delay + 850, lambda v=view: wait_then_submit(v, dock))
         dock.clear_prompt()
 
     def SendWebX(self, tab_index: int | None = None, force_auto_send: bool = False):
@@ -22678,6 +23368,9 @@ class MyWidget(QWidget):  # 主窗口
         views = dock.selected_target_views(panel) if hasattr(dock, 'selected_target_views') else [panel.active_view()]
         if not views:
             return
+        activation_delay = 0
+        if hasattr(panel, 'hold_views_active'):
+            activation_delay = int(panel.hold_views_active(views) or 0)
         image_items = self._collect_direct_image_attachments(direct_attachments)
         upload_paths = self._collect_web_upload_paths(dock)
         force_web_auto_send_once = bool(getattr(self, '_force_web_auto_send_once', False))
@@ -22744,7 +23437,7 @@ class MyWidget(QWidget):  # 主窗口
             )
 
         for offset, view in enumerate(views):
-            delay = offset * 450
+            delay = activation_delay + offset * 450
             QTimer.singleShot(delay, lambda v=view: self._inject_text_to_web_view(v, final_prompt))
             if self._is_claude_web_view(view) and upload_paths:
                 QTimer.singleShot(
@@ -22991,35 +23684,26 @@ class MyWidget(QWidget):  # 主窗口
                     && String(node.getAttribute('aria-label') || '').trim().toLowerCase() === 'send message';
             });
             if (!btn) return null;
-            const rect = btn.getBoundingClientRect();
             btn.focus && btn.focus();
-            btn.click && btn.click();
+            btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse' }));
             btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true }));
+            btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse' }));
             btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true }));
             btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
-            return {
-                x: Math.max(8, Math.min(window.innerWidth - 8, rect.left + rect.width / 2)),
-                y: Math.max(8, Math.min(window.innerHeight - 8, rect.top + rect.height / 2))
-            };
+            return 'clicked';
         })()
         """
-
-        def after(result):
-            if isinstance(result, dict) and result.get('x') is not None and result.get('y') is not None:
-                self._send_web_view_mouse_click(view, float(result.get('x')), float(result.get('y')))
-
         try:
-            view.page().runJavaScript(js, after)
+            view.page().runJavaScript(js)
         except Exception:
             pass
 
     def _submit_claude_with_shortcut(self, view: QWebEngineView):
-        log_broccoli_claude('submit via shortcut requested')
+        log_broccoli_claude('submit via Claude send button requested')
         self._activate_claude_composer(
             view,
             callback=lambda v=view: (
-                QTimer.singleShot(120, lambda: self._send_web_view_cmd_return(v)),
-                QTimer.singleShot(900, lambda: self._click_claude_send_button_if_present(v)),
+                QTimer.singleShot(180, lambda: self._click_claude_send_button_if_present(v)),
             ),
         )
 
@@ -23700,12 +24384,34 @@ class MyWidget(QWidget):  # 主窗口
 
         paste_next(0)
 
+    def _refresh_web_lifecycle_visibility(self, current_index: int | None = None):
+        if current_index is None:
+            try:
+                current_index = self.stacked_widget.currentIndex()
+            except Exception:
+                current_index = -1
+        for tab_index, attr in ((0, 'ai_web_panel'), (2, 'localhost_panel')):
+            panel = getattr(self, attr, None)
+            if panel is not None and hasattr(panel, 'set_panel_visible'):
+                panel.set_panel_visible(int(current_index) == tab_index)
+
+    def apply_web_lifecycle_settings(self, mode: str | None = None):
+        if mode is None:
+            mode = load_settings_store().get('globals', {}).get('web_lifecycle_mode', DEFAULT_WEB_LIFECYCLE_MODE)
+        mode = normalize_web_lifecycle_mode(mode)
+        for attr in ('ai_web_panel', 'localhost_panel'):
+            panel = getattr(self, attr, None)
+            if panel is not None and hasattr(panel, 'set_lifecycle_mode'):
+                panel.set_lifecycle_mode(mode)
+        self._refresh_web_lifecycle_visibility()
+
     def _on_tab_changed(self, index):
         """Tab 切换时更新 DrawingLayer 可见性和 qw3 背景色。"""
         self._install_selection_context_menus()
         is_assistant = (index == 1)
         is_terminal = (index == 3)
         is_external_prompt_tab = index in (0, 2)
+        self._refresh_web_lifecycle_visibility(index)
         self.pill_nav.set_theme('dark' if (index == 3 or is_dark_theme(app)) else 'light')
         self.settings_panel.set_force_dark(index == 3)
         self.outputs_panel.set_force_dark(index == 3)
@@ -23874,11 +24580,6 @@ class MyWidget(QWidget):  # 主窗口
 
     def _refresh_web_surfaces_for_theme(self):
         self._refresh_assistant_render_for_theme()
-        for panel in (self.ai_web_panel, self.localhost_panel):
-            try:
-                panel.reload_all_views()
-            except Exception:
-                pass
         QTimer.singleShot(0, self._refresh_current_tab_background)
         QTimer.singleShot(250, self._refresh_current_tab_background)
 
@@ -25768,10 +26469,11 @@ class MyWidget(QWidget):  # 主窗口
         if not hasattr(self, '_history_scrim'):
             return
         qw3_pos = self.qw3.pos()
+        edge_gap = max(0, int(getattr(self, 'EDGE_AUTO_HIDE_PEEK_PX', 2)))
         self._history_trigger_btn.setGeometry(
-            qw3_pos.x(),
+            qw3_pos.x() + edge_gap,
             qw3_pos.y() + 18,
-            24,
+            max(0, 24 - edge_gap),
             max(0, self.qw3.height() - 36),
         )
         self._history_trigger_btn.raise_()
@@ -25785,10 +26487,11 @@ class MyWidget(QWidget):  # 主窗口
         if not hasattr(self, '_links_scrim'):
             return
         qw3_pos = self.qw3.pos()
+        edge_gap = max(0, int(getattr(self, 'EDGE_AUTO_HIDE_PEEK_PX', 2)))
         self._links_trigger_btn.setGeometry(
             qw3_pos.x() + self.qw3.width() - 24,
             qw3_pos.y() + 18,
-            24,
+            max(0, 24 - edge_gap),
             max(0, self.qw3.height() - 36),
         )
         self._links_trigger_btn.raise_()
@@ -25847,10 +26550,12 @@ class MyWidget(QWidget):  # 主窗口
     def _update_terminal_history_overlay_geometry(self):
         if not hasattr(self, '_terminal_history_scrim'):
             return
+        edge_gap = max(0, int(getattr(self, 'EDGE_AUTO_HIDE_PEEK_PX', 2)))
+        width = int(getattr(self, '_terminal_side_trigger_w', 28))
         self._terminal_history_trigger_btn.setGeometry(
-            0,
+            edge_gap,
             18,
-            int(getattr(self, '_terminal_side_trigger_w', 28)),
+            max(0, width - edge_gap),
             max(0, self.qw3.height() - 36),
         )
         self._terminal_history_trigger_btn.raise_()
@@ -25863,11 +26568,12 @@ class MyWidget(QWidget):  # 主窗口
     def _update_terminal_favorites_overlay_geometry(self):
         if not hasattr(self, '_terminal_favorites_scrim'):
             return
+        edge_gap = max(0, int(getattr(self, 'EDGE_AUTO_HIDE_PEEK_PX', 2)))
         width = int(getattr(self, '_terminal_side_trigger_w', 28))
         self._terminal_favorites_trigger_btn.setGeometry(
             max(0, self.qw3.width() - width),
             18,
-            width,
+            max(0, width - edge_gap),
             max(0, self.qw3.height() - 36),
         )
         self._terminal_favorites_trigger_btn.raise_()
@@ -26410,18 +27116,26 @@ class MyWidget(QWidget):  # 主窗口
     #     painter.drawRoundedRect(rect, radius, radius)
 
     def move_window(self, width, height):
+        edge_anim = getattr(self, '_edge_auto_hide_animation', None)
+        if edge_anim is not None:
+            edge_anim.stop()
         animation = QPropertyAnimation(self, b"geometry", self)
         animation.setDuration(250)
         new_pos = QRect(width, height, self.width(), self.height())
         animation.setEndValue(new_pos)
+        self._main_window_animation = animation
         animation.start()
         self.i += 1
 
     def move_window2(self, width, height):
+        edge_anim = getattr(self, '_edge_auto_hide_animation', None)
+        if edge_anim is not None:
+            edge_anim.stop()
         animation = QPropertyAnimation(self, b"geometry", self)
         animation.setDuration(400)
         new_pos = QRect(width, height, self.width(), self.height())
         animation.setEndValue(new_pos)
+        self._main_window_animation = animation
         animation.start()
 
     def assigntoall(self):
@@ -26448,7 +27162,12 @@ end run'''"""
             QTimer.singleShot(delay, self._relayout_background_vision_toasts)
 
     def mousePressEvent(self, event):
+        if getattr(self, '_edge_auto_hidden_side', ''):
+            self._show_window_from_screen_edge()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
+            self._edge_auto_hide_suspended = False
             self.dragPosition = event.globalPosition().toPoint() - self.pos()
 
     def mouseMoveEvent(self, event):
@@ -26457,9 +27176,45 @@ end run'''"""
         if event.buttons() == Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self.dragPosition)
 
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragPosition = None
+            self._schedule_edge_auto_hide_check()
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event):
+        if getattr(self, '_edge_auto_hidden_side', ''):
+            self._show_window_from_screen_edge()
+        super().enterEvent(event)
+
+    def focusInEvent(self, event):
+        if getattr(self, '_edge_auto_hidden_side', ''):
+            self._show_window_from_screen_edge()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        self._edge_auto_hide_on_deactivate()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and not self.isActiveWindow():
+            self._edge_auto_hide_on_deactivate()
+
+    def _on_application_state_changed(self, state):
+        if state != Qt.ApplicationState.ApplicationActive:
+            self._edge_auto_hide_on_deactivate()
+
+    def _edge_auto_hide_on_deactivate(self):
+        if bool(getattr(self, '_edge_auto_hide_enabled', False)):
+            self._edge_auto_hide_suspended = False
+            self._schedule_edge_auto_hide_check()
+
     def moveEvent(self, event):
         super().moveEvent(event)
         self._relayout_background_vision_toasts()
+        if not bool(getattr(self, '_edge_auto_hide_animating', False)):
+            self._schedule_edge_auto_hide_check()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -26775,7 +27530,9 @@ end run'''"""
         if mode_index == 1:
             prompt = f"""Reply only the Applescript to fullfill this command. Don't reply any other explanations. Before the code starts, write "「「START」」" and write "「「END」」" after it ends. Don't reply with method that needs further information and revision. Command: {prompt_input}. """
         if mode_index == 2:
-            prompt = build_translation_prompt(prompt_input, self.widget1.currentText(), self.widget2.currentText())
+            target_language = self.widget2.currentText().strip()
+            remember_runtime_translate_target_language(target_language)
+            prompt = build_translation_prompt(prompt_input, self.widget1.currentText(), target_language)
         if mode_index == 3:
             prompt = f"""Revise the text in {self.widget4.currentText()} to remove grammar mistakes and make it more clear, concise, and coherent. Don't reply any other explanations. Before the text starts, write "「「START」」" and write "「「END」」" after it ends. Text: {prompt_input}. """
         if mode_index == 4:
@@ -27693,10 +28450,14 @@ end run'''"""
             self._append_question_to_branch_state(raw_question, max(0, len(new_messages) - 2))
             return
 
-        self.render_stream_preview(build_chat_preview(history_messages, raw_question))
-
         timeout = load_saved_timeout()
         mode_index = self.widget0.currentIndex()
+        if mode_index == 2 and not self.widget2.currentText().strip():
+            self._set_prompt_edit_read_only(False)
+            self._restore_send_button()
+            self.widget2.setFocus()
+            return
+        self.render_stream_preview(build_chat_preview(history_messages, raw_question))
         if mode_index == 0:
             self.start_async_preflight_request(
                 {
@@ -27847,8 +28608,11 @@ end run'''"""
             self.widget5.setVisible(False)
             self.btn_sub5.setVisible(False)
             # renew 1
+            self.widget1.blockSignals(True)
             self.widget1.clear()
             self.widget1.addItems(langs_list)
+            self.widget1.blockSignals(False)
+            self.TranslateX()
         if i == 3:
             self.widget1.setVisible(False)
             self.widget2.setVisible(False)
@@ -27931,6 +28695,7 @@ end run'''"""
         tarname3 = "lang.txt"
         fulldir3 = os.path.join(fulldir1, tarname3)
         currentlang = self.widget1.currentText()
+        self.widget2.blockSignals(True)
         self.widget2.clear()
         langs = codecs.open(fulldir3, 'r', encoding='utf-8').read()
         if langs != '':
@@ -27940,13 +28705,17 @@ end run'''"""
             while currentlang in langs_list:
                 langs_list.remove(currentlang)
             self.widget2.addItems(langs_list)
-            self.widget2.setCurrentIndex(0)
+            self.widget2.setCurrentIndex(preferred_runtime_translate_target_index(langs_list))
         if langs == '':
             langs_list = ['English', '中文', '日本語']
             while currentlang in langs_list:
                 langs_list.remove(currentlang)
             self.widget2.addItems(langs_list)
-            self.widget2.setCurrentIndex(0)
+            self.widget2.setCurrentIndex(preferred_runtime_translate_target_index(langs_list))
+        self.widget2.blockSignals(False)
+
+    def _on_translate_target_changed(self, *_):
+        remember_runtime_translate_target_language(self.widget2.currentText())
 
     def CustomChange(self, i):
         prompt_items = load_custom_prompt_items()
@@ -29644,6 +30413,7 @@ class SettingsPanel(QWidget):  # Customization settings
         globals_store = self.settings_store['globals']
         self._set_languages(globals_store.get('languages', ''))
         self.checkBox_top.setChecked(bool(globals_store.get('always_on_top', True)))
+        self.edge_auto_hide_checkbox.setChecked(bool(globals_store.get('edge_auto_hide_enabled', False)))
         self.start_on_login_checkbox.setChecked(is_start_on_login_enabled())
         self.checkBox_display_history.setChecked(bool(globals_store.get('prefer_displayed_history_context', False)))
         self.allow_blank_prompt_checkbox.setChecked(bool(globals_store.get('allow_blank_prompt_with_attachments', False)))
@@ -29656,6 +30426,9 @@ class SettingsPanel(QWidget):  # Customization settings
         shell_index = self.terminal_shell_mode_combo.findData(terminal_shell_mode)
         self.terminal_shell_mode_combo.setCurrentIndex(shell_index if shell_index >= 0 else 0)
         self.terminal_use_bash_checkbox.setChecked(bool(globals_store.get('terminal_use_bash', False)))
+        web_lifecycle_mode = normalize_web_lifecycle_mode(globals_store.get('web_lifecycle_mode', DEFAULT_WEB_LIFECYCLE_MODE))
+        lifecycle_index = self.web_lifecycle_mode_combo.findData(web_lifecycle_mode)
+        self.web_lifecycle_mode_combo.setCurrentIndex(lifecycle_index if lifecycle_index >= 0 else 1)
         self.annotation_pen_color_input.setText(str(globals_store.get('annotation_pen_color', '#FF3B30') or '#FF3B30'))
         self.web_auto_send_checkbox.setChecked(bool(globals_store.get('web_auto_send_after_inject', False)))
         self.webfetch_context_embedding_checkbox.setChecked(bool(globals_store.get('webfetch_context_use_embedding', True)))
@@ -29790,6 +30563,7 @@ class SettingsPanel(QWidget):  # Customization settings
             'skills': serialize_skill_records(self._current_skill_records(), validate=True),
             'languages': self._current_languages(),
             'always_on_top': self.checkBox_top.isChecked(),
+            'edge_auto_hide_enabled': self.edge_auto_hide_checkbox.isChecked(),
             'start_on_login': self.start_on_login_checkbox.isChecked(),
             'prefer_displayed_history_context': self.checkBox_display_history.isChecked(),
             'display_history_context_max_chars': normalize_display_history_context_max_chars(self.display_history_limit_input.text()),
@@ -29801,6 +30575,7 @@ class SettingsPanel(QWidget):  # Customization settings
             'clear_attachments_after_send': self.clear_attachments_after_send_checkbox.isChecked(),
             'terminal_shell_mode': normalize_terminal_shell_mode(self.terminal_shell_mode_combo.currentData()),
             'terminal_use_bash': self.terminal_use_bash_checkbox.isChecked(),
+            'web_lifecycle_mode': normalize_web_lifecycle_mode(self.web_lifecycle_mode_combo.currentData()),
             'annotation_pen_color': self.annotation_pen_color_input.text().strip() or '#FF3B30',
             'web_auto_send_after_inject': self.web_auto_send_checkbox.isChecked(),
             'webfetch_context_use_embedding': self.webfetch_context_embedding_checkbox.isChecked(),
@@ -29928,8 +30703,12 @@ class SettingsPanel(QWidget):  # Customization settings
             self.hotkey_manager.reload_shortcuts()
         if hasattr(window, 'set_always_on_top'):
             window.set_always_on_top(globals_store.get('always_on_top', True))
+        if hasattr(window, 'apply_edge_auto_hide_settings'):
+            window.apply_edge_auto_hide_settings(globals_store.get('edge_auto_hide_enabled', False))
         if hasattr(window, 'apply_webfetch_watch_settings'):
             window.apply_webfetch_watch_settings(globals_store.get('webfetch_download_path', ''))
+        if hasattr(window, 'apply_web_lifecycle_settings'):
+            window.apply_web_lifecycle_settings(globals_store.get('web_lifecycle_mode', DEFAULT_WEB_LIFECYCLE_MODE))
         if hasattr(window, 'terminal_widget'):
             window.terminal_widget.reload_shell_preferences(notify=True)
         if hasattr(window, 'apply_background_vision_settings'):
@@ -31023,6 +31802,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self.display_history_limit_input.setPlaceholderText(str(DISPLAY_HISTORY_CONTEXT_MAX_CHARS))
         self.display_history_limit_input.setFixedHeight(22)
         self.checkBox_top = QCheckBox('Keep the main window always on top', self)
+        self.edge_auto_hide_checkbox = QCheckBox('Auto-hide main window at screen edges', self)
         self.start_on_login_checkbox = QCheckBox('Start Broccoli on login', self)
         self.terminal_shell_mode_combo = DropdownButton(self, always_dark=False, compact_light=True)
         self.terminal_shell_mode_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -31030,6 +31810,11 @@ class SettingsPanel(QWidget):  # Customization settings
         for _value, _label in TERMINAL_SHELL_MODE_OPTIONS:
             self.terminal_shell_mode_combo.addItem(_label, _value)
         self.terminal_use_bash_checkbox = QCheckBox('Use bash instead', self)
+        self.web_lifecycle_mode_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.web_lifecycle_mode_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.web_lifecycle_mode_combo.setMinimumWidth(220)
+        for _value, _label in WEB_LIFECYCLE_MODE_OPTIONS:
+            self.web_lifecycle_mode_combo.addItem(_label, _value)
         self.web_auto_send_checkbox = QCheckBox('Auto click Send after filling Web / Localhost prompts', self)
         self.webfetch_context_embedding_checkbox = QCheckBox('Use embedding for WebFetch page content', self)
         self.generated_output_context_embedding_checkbox = QCheckBox('Use embedding for Generated outputs used as context', self)
@@ -31382,7 +32167,9 @@ class SettingsPanel(QWidget):  # Customization settings
         form_layout.addRow('', self.skip_blank_retrieval_checkbox)
         form_layout.addRow('', self.clear_attachments_after_send_checkbox)
         form_layout.addRow('', self.checkBox_top)
+        form_layout.addRow('', self.edge_auto_hide_checkbox)
         form_layout.addRow('', self.start_on_login_checkbox)
+        form_layout.addRow('Web / Localhost energy mode', self.web_lifecycle_mode_combo)
 
         shortcut_row_ui = QWidget()
         shortcut_row_ui_layout = QHBoxLayout()
@@ -31846,9 +32633,11 @@ class SettingsPanel(QWidget):  # Customization settings
         self.skip_blank_retrieval_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.clear_attachments_after_send_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.checkBox_top.toggled.connect(self._mark_dirty_if_needed)
+        self.edge_auto_hide_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.start_on_login_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.terminal_shell_mode_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
         self.terminal_use_bash_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.web_lifecycle_mode_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
         self.web_auto_send_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.webfetch_context_embedding_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.generated_output_context_embedding_checkbox.toggled.connect(self._mark_dirty_if_needed)
@@ -31880,6 +32669,7 @@ class SettingsPanel(QWidget):  # Customization settings
                 'skills': serialize_skill_records(self._current_skill_records(), validate=False),
                 'languages': self._current_languages(),
                 'always_on_top': self.checkBox_top.isChecked(),
+                'edge_auto_hide_enabled': self.edge_auto_hide_checkbox.isChecked(),
                 'prefer_displayed_history_context': self.checkBox_display_history.isChecked(),
                 'display_history_context_max_chars': normalize_display_history_context_max_chars(self.display_history_limit_input.text()),
                 'allow_blank_prompt_with_attachments': self.allow_blank_prompt_checkbox.isChecked(),
@@ -31890,6 +32680,7 @@ class SettingsPanel(QWidget):  # Customization settings
                 'clear_attachments_after_send': self.clear_attachments_after_send_checkbox.isChecked(),
                 'terminal_shell_mode': normalize_terminal_shell_mode(self.terminal_shell_mode_combo.currentData()),
                 'terminal_use_bash': self.terminal_use_bash_checkbox.isChecked(),
+                'web_lifecycle_mode': normalize_web_lifecycle_mode(self.web_lifecycle_mode_combo.currentData()),
                 'web_auto_send_after_inject': self.web_auto_send_checkbox.isChecked(),
                 'webfetch_context_use_embedding': self.webfetch_context_embedding_checkbox.isChecked(),
                 'generated_output_context_use_embedding': self.generated_output_context_embedding_checkbox.isChecked(),
