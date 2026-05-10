@@ -153,7 +153,7 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.5'
+VERSION = '2.0.6'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
 BUNDLED_RESOURCES_DIR = _resolve_bundled_resources_dir()
@@ -1120,6 +1120,22 @@ def is_dark_theme(app_obj) -> bool:
         return app_obj.palette().window().color().lightness() < 128
     except Exception:
         return False
+
+
+def get_accent_color_hex() -> str:
+    try:
+        if NSColor is None:
+            return '#0A84FF'
+        accent = NSColor.controlAccentColor()
+        rgb = accent.colorUsingColorSpaceName_('NSCalibratedRGBColorSpace')
+        if rgb is not None:
+            r = int(rgb.redComponent() * 255)
+            g = int(rgb.greenComponent() * 255)
+            b = int(rgb.blueComponent() * 255)
+            return f'#{r:02X}{g:02X}{b:02X}'
+    except Exception:
+        pass
+    return '#0A84FF'
 
 
 def set_light_palette(app_obj):
@@ -5887,6 +5903,7 @@ def default_global_settings() -> dict:
         'embedding_profile': '',
         'webfetch_download_path': '',
         'always_on_top': True,
+        'show_on_all_spaces': False,
         'edge_auto_hide_enabled': False,
         'start_on_login': is_start_on_login_enabled(),
         'terminal_shell_mode': DEFAULT_TERMINAL_SHELL_MODE,
@@ -5960,6 +5977,7 @@ def load_settings_store() -> dict:
                 'embedding_profile': str(store['globals'].get('embedding_profile', globals_store['embedding_profile'])).strip(),
                 'webfetch_download_path': str(store['globals'].get('webfetch_download_path', globals_store['webfetch_download_path'])).strip(),
                 'always_on_top': bool(store['globals'].get('always_on_top', globals_store['always_on_top'])),
+                'show_on_all_spaces': bool(store['globals'].get('show_on_all_spaces', globals_store['show_on_all_spaces'])),
                 'edge_auto_hide_enabled': bool(store['globals'].get('edge_auto_hide_enabled', globals_store['edge_auto_hide_enabled'])),
                 'start_on_login': bool(store['globals'].get('start_on_login', globals_store['start_on_login'])),
                 'terminal_shell_mode': normalize_terminal_shell_mode(
@@ -12059,7 +12077,9 @@ menu.addAction(action3)
 
 menu.addSeparator()
 
-action7 = QAction("🚀 Assign to all spaces")
+action7 = QAction("🪟 Show on all Spaces")
+action7.setCheckable(True)
+action7.setChecked(bool(load_settings_store().get('globals', {}).get('show_on_all_spaces', False)))
 menu.addAction(action7)
 
 action8 = QAction("👀 Show/Hide dock icon")
@@ -12076,10 +12096,8 @@ try:
 except Exception:
     showhide = '1'
 if showhide == '0':
-    action7.setVisible(False)
     action8.setChecked(False)
 if showhide == '1':
-    action7.setVisible(True)
     action8.setChecked(True)
 
 action4 = QAction("⚙️ Settings")
@@ -12781,6 +12799,66 @@ class PillNavBar(QWidget):
             painter.drawRoundedRect(self._pill_rect, pill_rr, pill_rr)
 
         painter.end()
+
+
+class MainWindowChromeButton(QPushButton):
+    """Round side button for the main pin strip."""
+    def __init__(self, text='', parent=None, diameter: int = 36):
+        super().__init__('', parent)
+        self._force_dark = False
+        self._diameter = max(10, int(diameter))
+        self.setFixedSize(self._diameter, self._diameter)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._apply_theme()
+
+    def set_diameter(self, diameter: int):
+        self._diameter = max(10, int(diameter))
+        self.setFixedSize(self._diameter, self._diameter)
+        self._apply_theme()
+
+    def set_force_dark(self, force_dark: bool):
+        self._force_dark = bool(force_dark)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        accent = QColor(get_accent_color_hex())
+        if not accent.isValid():
+            accent = QColor('#0A84FF')
+        bg = accent.name()
+        hover = accent.darker(112).name()
+        pressed = accent.darker(128).name()
+        checked_bg = accent.darker(145).name()
+        checked_hover = accent.darker(158).name()
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background: {bg};
+                color: transparent;
+                border: 1px outset grey;
+                border-radius: {self._diameter // 2}px;
+                font-size: {max(8, min(15, self._diameter - 2))}px;
+                font-weight: 600;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                background: {hover};
+            }}
+            QPushButton:pressed {{
+                background: {pressed};
+            }}
+            QPushButton:checked {{
+                background: {checked_bg};
+                color: white;
+            }}
+            QPushButton:checked:hover {{
+                background: {checked_hover};
+            }}
+        """)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._apply_theme()
 
 
 class NavSitePill(QWidget):
@@ -21329,6 +21407,7 @@ class MyWidget(QWidget):  # 主窗口
         self._apply_window_flags()
         if was_visible:
             self.show()
+            self._apply_mac_space_behavior()
             self.raise_()
             if self._always_on_top:
                 self.activateWindow()
@@ -21336,6 +21415,81 @@ class MyWidget(QWidget):  # 主窗口
 
     def is_always_on_top(self) -> bool:
         return bool(getattr(self, '_always_on_top', True))
+
+    @staticmethod
+    def _mac_space_behavior_bits() -> int:
+        if AppKit is None:
+            return 0
+        can_join_all_spaces = int(getattr(AppKit, 'NSWindowCollectionBehaviorCanJoinAllSpaces', 1 << 0))
+        fullscreen_auxiliary = int(getattr(AppKit, 'NSWindowCollectionBehaviorFullScreenAuxiliary', 1 << 8))
+        return can_join_all_spaces | fullscreen_auxiliary
+
+    @staticmethod
+    def _mac_move_to_active_space_bit() -> int:
+        if AppKit is None:
+            return 0
+        return int(getattr(AppKit, 'NSWindowCollectionBehaviorMoveToActiveSpace', 1 << 1))
+
+    def _native_ns_window(self):
+        if sys.platform != 'darwin' or objc is None:
+            return None
+        try:
+            native_view = objc.objc_object(c_void_p=int(self.winId()))
+            if hasattr(native_view, 'window'):
+                return native_view.window()
+        except Exception:
+            return None
+        return None
+
+    def _apply_mac_space_behavior(self, enabled: bool | None = None) -> bool:
+        if enabled is None:
+            enabled = bool(getattr(self, '_show_on_all_spaces', False))
+        bits = self._mac_space_behavior_bits()
+        if not bits:
+            return False
+        ns_window = self._native_ns_window()
+        if ns_window is None:
+            return False
+        try:
+            behavior = int(ns_window.collectionBehavior())
+            behavior &= ~self._mac_move_to_active_space_bit()
+            if enabled:
+                behavior |= bits
+            else:
+                behavior &= ~bits
+            ns_window.setCollectionBehavior_(behavior)
+            return True
+        except Exception:
+            return False
+
+    def apply_show_on_all_spaces_settings(self, enabled: bool | None = None):
+        if enabled is None:
+            enabled = bool(load_settings_store().get('globals', {}).get('show_on_all_spaces', False))
+        self._show_on_all_spaces = bool(enabled)
+        self._apply_mac_space_behavior(self._show_on_all_spaces)
+
+    def sync_show_on_all_spaces_action(self, enabled: bool):
+        action = globals().get('action7')
+        if action is not None:
+            with QSignalBlocker(action):
+                action.setChecked(bool(enabled))
+
+    def toggle_show_on_all_spaces(self, checked: bool):
+        enabled = bool(checked)
+        store = load_settings_store()
+        store.setdefault('globals', default_global_settings())
+        store['globals']['show_on_all_spaces'] = enabled
+        save_settings_store(store)
+        settings_panel = getattr(self, 'settings_panel', None)
+        if settings_panel is not None and hasattr(settings_panel, 'settings_store'):
+            settings_panel.settings_store.setdefault('globals', default_global_settings())
+            settings_panel.settings_store['globals']['show_on_all_spaces'] = enabled
+        self.apply_show_on_all_spaces_settings(enabled)
+        self.sync_show_on_all_spaces_action(enabled)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._apply_mac_space_behavior()
 
     def apply_edge_auto_hide_settings(self, enabled: bool | None = None):
         if enabled is None:
@@ -21349,7 +21503,8 @@ class MyWidget(QWidget):  # 主窗口
             self._edge_auto_showing = False
             self._edge_auto_hidden_screen_geo = None
         else:
-            self._schedule_edge_auto_hide_check()
+            if not bool(getattr(self, '_window_position_pinned', False)):
+                self._schedule_edge_auto_hide_check()
 
     def _screen_for_window_edge(self):
         center = self.frameGeometry().center()
@@ -21373,6 +21528,8 @@ class MyWidget(QWidget):  # 主窗口
     def _schedule_edge_auto_hide_check(self):
         if not bool(getattr(self, '_edge_auto_hide_enabled', False)):
             return
+        if bool(getattr(self, '_window_position_pinned', False)):
+            return
         if self._is_main_window_pinned_collapsed():
             return
         if bool(getattr(self, '_edge_auto_hide_suspended', False)):
@@ -21387,6 +21544,8 @@ class MyWidget(QWidget):  # 主窗口
 
     def _check_edge_auto_hide(self):
         if not bool(getattr(self, '_edge_auto_hide_enabled', False)):
+            return
+        if bool(getattr(self, '_window_position_pinned', False)):
             return
         if self._is_main_window_pinned_collapsed():
             return
@@ -21408,6 +21567,8 @@ class MyWidget(QWidget):  # 主窗口
 
     def _hide_window_to_screen_edge(self, side: str, screen_geo: QRect | None = None):
         if not bool(getattr(self, '_edge_auto_hide_enabled', False)):
+            return
+        if bool(getattr(self, '_window_position_pinned', False)):
             return
         if bool(getattr(self, '_edge_auto_hide_animating', False)) or bool(getattr(self, '_edge_auto_showing', False)):
             return
@@ -21494,6 +21655,7 @@ class MyWidget(QWidget):  # 主窗口
 
     def initUI(self):
         self._always_on_top = bool(load_settings_store().get('globals', {}).get('always_on_top', True))
+        self._show_on_all_spaces = bool(load_settings_store().get('globals', {}).get('show_on_all_spaces', False))
         self._edge_auto_hide_enabled = bool(load_settings_store().get('globals', {}).get('edge_auto_hide_enabled', False))
         self._edge_auto_hidden_side = ''
         self._edge_auto_hide_suspended = False
@@ -21502,11 +21664,13 @@ class MyWidget(QWidget):  # 主窗口
         self._edge_auto_hidden_screen_geo = None
         self._edge_auto_hide_animation = None
         self._main_window_animation = None
+        self._window_position_pinned = False
         self._edge_auto_hide_check_timer = QTimer(self)
         self._edge_auto_hide_check_timer.setSingleShot(True)
         self._edge_auto_hide_check_timer.setInterval(140)
         self._edge_auto_hide_check_timer.timeout.connect(self._check_edge_auto_hide)
         self._apply_window_flags()
+        QTimer.singleShot(0, self._apply_mac_space_behavior)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFixedSize(540, 960)
         self.setAcceptDrops(True)   # window-level drag catch (bypasses QWebEngineView/Chromium)
@@ -21559,7 +21723,23 @@ class MyWidget(QWidget):  # 主窗口
         self.btn_00 = QPushButton('', self)
         self.btn_00.clicked.connect(self.pin_a_tab)
         self.btn_00.setFixedHeight(10)
-        self.btn_00.setFixedWidth(540)
+        self.btn_00.setMinimumWidth(0)
+        self.btn_00.setMaximumWidth(16777215)
+        self.window_position_pin_button = MainWindowChromeButton('', self, diameter=12)
+        self.window_position_pin_button.setCheckable(True)
+        self.window_position_pin_button.setToolTip('Pin window position')
+        self.window_position_pin_button.clicked.connect(self._toggle_window_position_pin)
+        self.window_close_button = MainWindowChromeButton('', self, diameter=12)
+        self.window_close_button.setToolTip('Close main window')
+        self.window_close_button.clicked.connect(self.close_main_window_to_tray)
+        self.pin_tab_row = QWidget(self)
+        self.pin_tab_row.setFixedHeight(12)
+        pin_tab_layout = QHBoxLayout(self.pin_tab_row)
+        pin_tab_layout.setContentsMargins(0, 0, 0, 0)
+        pin_tab_layout.setSpacing(2)
+        pin_tab_layout.addWidget(self.window_position_pin_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        pin_tab_layout.addWidget(self.btn_00, 1)
+        pin_tab_layout.addWidget(self.window_close_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.i = 1
 
         self.real1 = QTextEdit(self)
@@ -21921,7 +22101,7 @@ class MyWidget(QWidget):  # 主窗口
         vbox3 = QVBoxLayout()
         vbox3.setContentsMargins(0, 0, 0, 0)
         vbox3.setSpacing(6)
-        vbox3.addWidget(self.btn_00)
+        vbox3.addWidget(self.pin_tab_row)
         vbox3.addWidget(self.qw3)
         self.setLayout(vbox3)
         self._background_vision_toast_host = BackgroundVisionToastHost(self)
@@ -26561,6 +26741,7 @@ class MyWidget(QWidget):  # 主窗口
         is_external_prompt_tab = index in (0, 2)
         self._refresh_web_lifecycle_visibility(index)
         self.pill_nav.set_theme('dark' if (index == 3 or is_dark_theme(app)) else 'light')
+        self._set_top_chrome_button_theme(index == 3 or is_dark_theme(app))
         self.settings_panel.set_force_dark(index == 3)
         self.outputs_panel.set_force_dark(index == 3)
         if not is_assistant:
@@ -26734,6 +26915,7 @@ class MyWidget(QWidget):  # 主窗口
     def apply_theme(self, dark_mode: bool):
         current_index = self.stacked_widget.currentIndex()
         self.pill_nav.set_theme('dark' if (current_index == 3 or dark_mode) else 'light')
+        self._set_top_chrome_button_theme(current_index == 3 or dark_mode)
         self._apply_assistant_surfaces_theme(dark_mode)
         self._refresh_web_surfaces_for_theme()
         _apply_window_palette(self, dark_mode)
@@ -29495,6 +29677,72 @@ class MyWidget(QWidget):  # 主窗口
         self._main_window_animation = animation
         animation.start()
 
+    def _set_window_position_pin_state(self, enabled: bool):
+        enabled = bool(enabled)
+        self._window_position_pinned = enabled
+        btn = getattr(self, 'window_position_pin_button', None)
+        if btn is not None:
+            with QSignalBlocker(btn):
+                btn.setChecked(enabled)
+            btn.setToolTip('Unpin window position' if enabled else 'Pin window position')
+        if enabled:
+            edge_anim = getattr(self, '_edge_auto_hide_animation', None)
+            if edge_anim is not None:
+                edge_anim.stop()
+            if getattr(self, '_edge_auto_hidden_side', ''):
+                self._show_window_from_screen_edge()
+            self._edge_auto_hide_suspended = True
+        else:
+            self._edge_auto_hide_suspended = False
+            self._schedule_edge_auto_hide_check()
+
+    def _toggle_window_position_pin(self, checked: bool):
+        self._set_window_position_pin_state(bool(checked))
+
+    def _set_top_chrome_button_theme(self, force_dark: bool):
+        for btn in (
+            getattr(self, 'window_position_pin_button', None),
+            getattr(self, 'window_close_button', None),
+        ):
+            if btn is not None and hasattr(btn, 'set_force_dark'):
+                btn.set_force_dark(force_dark)
+        if hasattr(self, 'btn_00') and getattr(self, 'i', 1) % 2 == 1:
+            accent = get_accent_color_hex()
+            self.btn_00.setStyleSheet(f'''
+                        border: 1px outset grey;
+                        background-color: {accent};
+                        border-radius: 4px;
+                        padding: 1px;
+                        color: #FFFFFF''')
+
+    def close_main_window_to_tray(self):
+        edge_anim = getattr(self, '_edge_auto_hide_animation', None)
+        if edge_anim is not None:
+            edge_anim.stop()
+        main_anim = getattr(self, '_main_window_animation', None)
+        if main_anim is not None:
+            main_anim.stop()
+        self.dragPosition = None
+        self._edge_auto_hidden_side = ''
+        self._edge_auto_hidden_screen_geo = None
+        self._edge_auto_hide_animating = False
+        self._edge_auto_showing = False
+        self._edge_auto_hide_suspended = False
+        self._set_window_position_pin_state(False)
+        timer = getattr(self, '_edge_auto_hide_check_timer', None)
+        if timer is not None:
+            timer.stop()
+        self.i = 1
+        try:
+            btna4.setChecked(False)
+        except Exception:
+            pass
+        self.hide()
+
+    def show_main_window_from_tray(self):
+        self.i = 1
+        self.pin_a_tab()
+
     def assigntoall(self):
         cmd = """osascript -e '''
 on run
@@ -29523,11 +29771,17 @@ end run'''"""
             self._show_window_from_screen_edge()
             event.accept()
             return
+        if bool(getattr(self, '_window_position_pinned', False)):
+            self.dragPosition = None
+            super().mousePressEvent(event)
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self._edge_auto_hide_suspended = False
             self.dragPosition = event.globalPosition().toPoint() - self.pos()
 
     def mouseMoveEvent(self, event):
+        if bool(getattr(self, '_window_position_pinned', False)):
+            return
         if self.dragPosition is None:
             return
         if event.buttons() == Qt.MouseButton.LeftButton:
@@ -29563,6 +29817,8 @@ end run'''"""
             self._edge_auto_hide_on_deactivate()
 
     def _edge_auto_hide_on_deactivate(self):
+        if bool(getattr(self, '_window_position_pinned', False)):
+            return
         if bool(getattr(self, '_edge_auto_hide_enabled', False)):
             self._edge_auto_hide_suspended = False
             self._schedule_edge_auto_hide_check()
@@ -29570,7 +29826,10 @@ end run'''"""
     def moveEvent(self, event):
         super().moveEvent(event)
         self._relayout_background_vision_toasts()
-        if not bool(getattr(self, '_edge_auto_hide_animating', False)):
+        if (
+            not bool(getattr(self, '_edge_auto_hide_animating', False))
+            and not bool(getattr(self, '_window_position_pinned', False))
+        ):
             self._schedule_edge_auto_hide_check()
 
     def resizeEvent(self, event):
@@ -31445,14 +31704,22 @@ end run'''"""
         x_center = 0
         y_center = 0
         if self.i % 2 == 1:
+            accent = get_accent_color_hex()
             btna4.setChecked(True)
             self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+            self.window_position_pin_button.show()
+            self.window_close_button.show()
+            self.pin_tab_row.setFixedHeight(12)
+            self.pin_tab_row.setMaximumWidth(16777215)
+            self.window_position_pin_button.set_diameter(12)
+            self.window_close_button.set_diameter(12)
             self.btn_00.setText('')
             self.btn_00.setFixedHeight(10)
-            self.btn_00.setFixedWidth(540)
-            self.btn_00.setStyleSheet('''
+            self.btn_00.setMinimumWidth(0)
+            self.btn_00.setMaximumWidth(16777215)
+            self.btn_00.setStyleSheet(f'''
                         border: 1px outset grey;
-                        background-color: #0085FF;
+                        background-color: {accent};
                         border-radius: 4px;
                         padding: 1px;
                         color: #FFFFFF''')
@@ -31463,6 +31730,11 @@ end run'''"""
         if self.i % 2 == 0:
             btna4.setChecked(False)
             self.drawing_layer.setVisible(False)
+            self.window_position_pin_button.hide()
+            self.window_close_button.hide()
+            self.pin_tab_row.setFixedSize(50, 50)
+            self.window_position_pin_button.set_diameter(12)
+            self.window_close_button.set_diameter(12)
             self.btn_00.setText('🥦')
             self.btn_00.setFixedSize(50, 50)
             self.btn_00.setStyleSheet('''
@@ -31473,7 +31745,7 @@ end run'''"""
                         color: #000000''')
             self.qw3.setVisible(False)
             self.setFixedSize(50, 50)
-            x_center = int(SCREEN_WEIGHT - 50)
+            x_center = int(SCREEN_WEIGHT - self.width())
             y_center = int(SCREEN_HEIGHT - 50)
 
         self.move_window(x_center, y_center)
@@ -31482,7 +31754,6 @@ end run'''"""
 
     def showhidedock(self):
         visible = action8.isChecked()
-        action7.setVisible(visible)
         write_text_file(SHOWHIDE_PATH, '1' if visible else '0')
         set_dock_icon_visible(visible, activate=visible)
 
@@ -33567,6 +33838,7 @@ class SettingsPanel(QWidget):  # Customization settings
             'skills': serialize_skill_records(self._current_skill_records(), validate=True),
             'languages': self._current_languages(),
             'always_on_top': self.checkBox_top.isChecked(),
+            'show_on_all_spaces': bool(self.settings_store.get('globals', {}).get('show_on_all_spaces', False)),
             'edge_auto_hide_enabled': self.edge_auto_hide_checkbox.isChecked(),
             'start_on_login': self.start_on_login_checkbox.isChecked(),
             'prefer_displayed_history_context': self.checkBox_display_history.isChecked(),
@@ -35260,16 +35532,26 @@ class SettingsPanel(QWidget):  # Customization settings
         form_layout.addRow('Model', self.model_input)
         form_layout.addRow('Timeout (sec)', self.timeout_input)
         form_layout.addRow('Displayed history max chars', self.display_history_limit_input)
-        form_layout.addRow('', self.checkBox0)
-        form_layout.addRow('', self.checkBox2)
-        form_layout.addRow('', self.checkBox3)
-        form_layout.addRow('', self.checkBox_display_history)
-        form_layout.addRow('', self.allow_blank_prompt_checkbox)
-        form_layout.addRow('', self.skip_blank_retrieval_checkbox)
-        form_layout.addRow('', self.clear_attachments_after_send_checkbox)
-        form_layout.addRow('', self.checkBox_top)
-        form_layout.addRow('', self.edge_auto_hide_checkbox)
-        form_layout.addRow('', self.start_on_login_checkbox)
+
+        general_checkbox_block = QWidget(self)
+        general_checkbox_layout = QVBoxLayout(general_checkbox_block)
+        general_checkbox_layout.setContentsMargins(0, 4, 0, 4)
+        general_checkbox_layout.setSpacing(12)
+        for checkbox in (
+            self.checkBox0,
+            self.checkBox2,
+            self.checkBox3,
+            self.checkBox_display_history,
+            self.allow_blank_prompt_checkbox,
+            self.skip_blank_retrieval_checkbox,
+            self.clear_attachments_after_send_checkbox,
+            self.checkBox_top,
+            self.edge_auto_hide_checkbox,
+            self.start_on_login_checkbox,
+        ):
+            checkbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            general_checkbox_layout.addWidget(checkbox)
+        form_layout.addRow(general_checkbox_block)
         form_layout.addRow('Web / Localhost energy mode', self.web_lifecycle_mode_combo)
 
         shortcut_row_ui = QWidget()
@@ -35841,6 +36123,7 @@ class SettingsPanel(QWidget):  # Customization settings
                 'skills': serialize_skill_records(self._current_skill_records(), validate=False),
                 'languages': self._current_languages(),
                 'always_on_top': self.checkBox_top.isChecked(),
+                'show_on_all_spaces': bool(self.settings_store.get('globals', {}).get('show_on_all_spaces', False)),
                 'edge_auto_hide_enabled': self.edge_auto_hide_checkbox.isChecked(),
                 'prefer_displayed_history_context': self.checkBox_display_history.isChecked(),
                 'display_history_context_max_chars': normalize_display_history_context_max_chars(self.display_history_limit_input.text()),
@@ -36240,11 +36523,12 @@ if __name__ == '__main__':
     w3.setAutoFillBackground(True)
     action1.triggered.connect(w1.activate)
     action2.triggered.connect(w2.activate)
-    action3.triggered.connect(w3.pin_a_tab)
+    action3.triggered.connect(w3.show_main_window_from_tray)
     action4.triggered.connect(w3.show_settings_panel)
-    action7.triggered.connect(w3.assigntoall)
+    action7.triggered.connect(w3.toggle_show_on_all_spaces)
     action8.triggered.connect(w3.showhidedock)
     action10.triggered.connect(w3.toggle_start_on_login)
+    w3.apply_show_on_all_spaces_settings(action7.isChecked())
     set_dock_icon_visible(action8.isChecked())
     btna4.triggered.connect(w3.pin_a_tab)
     hotkey_manager.ui_hotkey_pressed.connect(w3.pin_a_tab)
