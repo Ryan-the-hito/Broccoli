@@ -52,6 +52,7 @@ import signal
 import base64
 import mimetypes
 import json
+import hashlib
 import plistlib
 import copy
 import shutil
@@ -71,11 +72,12 @@ import urllib3
 import logging
 import threading
 import queue
+import asyncio
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ctypes import c_void_p
 from io import BytesIO
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 try:
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
@@ -151,7 +153,7 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.4'
+VERSION = '2.0.5'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
 BUNDLED_RESOURCES_DIR = _resolve_bundled_resources_dir()
@@ -183,6 +185,7 @@ DEFAULT_ENDPOINT = 'https://api.openai.com'
 DEFAULT_MODEL = 'gpt-3.5-turbo'
 CHAT_HISTORY_PATH = os.path.join(BROCCOLI_APP_DATA_DIR, 'output_messages.json')
 CONVERSATIONS_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'Conversations')
+STRUCTURED_MESSAGE_PARTS_DIRNAME = 'MessageParts'
 WEB_CONVERSATION_BINDINGS_PATH = os.path.join(BROCCOLI_APP_DATA_DIR, 'web_conversation_bindings.json')
 POPCLIP_TRANSLATE_SOURCE = 'PopClip Translate'
 WEBFETCH_INBOX_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'WebFetchInbox')
@@ -214,6 +217,42 @@ DEFAULT_BACKGROUND_VISION_MAX_WORKERS = 1
 DEFAULT_BACKGROUND_VISION_MAX_HISTORY_MESSAGES = 8
 DEFAULT_BACKGROUND_VISION_MAX_RECORDS = 120
 DEFAULT_BACKGROUND_VISION_CONTEXT_MAX_CHARS = 6000
+DEFAULT_BROWSER_USE_ENABLED = True
+DEFAULT_BROWSER_USE_MAX_STEPS = 30
+DEFAULT_BROWSER_USE_USE_VISION = 'auto'
+DEFAULT_BROWSER_USE_CHROME_MODE = 'launch_system_chrome'
+DEFAULT_BROWSER_USE_CDP_URL = 'http://localhost:9222'
+DEFAULT_BROWSER_USE_CHROME_EXECUTABLE = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+DEFAULT_BROWSER_USE_USER_DATA_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'BrowserUseChromeProfile')
+DEFAULT_BROWSER_USE_CLOSE_WINDOW_AFTER_TASK = False
+DEFAULT_BROWSER_USE_LLM = 'openai'
+BROWSER_USE_LLM_OPTIONS = [
+    ('ChatOpenAI', 'openai'),
+    ('ChatAnthropic', 'anthropic'),
+    ('ChatGoogle', 'google'),
+]
+BROWSER_USE_CHROME_MODE_OPTIONS = [
+    ('Connect existing Chrome', 'connect_existing'),
+    ('Launch system Chrome', 'launch_system_chrome'),
+]
+BROWSER_USE_VISION_OPTIONS = [
+    ('Auto', 'auto'),
+    ('On', 'on'),
+    ('Off', 'off'),
+]
+BROWSER_USE_SLASH_COMMANDS = (
+    ('/browser use', 'Run a browser automation task'),
+)
+SPECIALIZED_SLASH_COMMANDS = (
+    ('/task reasoning', 'task_reasoning', 'Run a task reasoning step'),
+    ('/web search', 'web_search', 'Run a web search step'),
+    ('/text to speech', 'text_to_speech', 'Run a text-to-speech step'),
+    ('/speech to text', 'speech_to_text', 'Run a speech-to-text step'),
+    ('/image generation', 'image_generation', 'Run an image generation step'),
+    ('/video generation', 'video_generation', 'Run a video generation step'),
+    ('/video to text', 'video_to_text', 'Run a video-to-text step'),
+    ('/browser use', 'browser_use', 'Run a browser automation step'),
+)
 MCP_HTTP_PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26')
 MCP_HTTP_DISCOVERY_TIMEOUT = 15
 MCP_HTTP_CONTEXT_MAX_TOOL_CALLS = 3
@@ -245,6 +284,7 @@ SPECIALIZED_CAPABILITIES = [
     ('video_generation', 'Video generation'),
     ('video_to_text', 'Video to text'),
 ]
+BROWSER_USE_CAPABILITY = 'browser_use'
 SPECIALIZED_EXECUTION_OPTIONS = {
     'task_reasoning': [
         ('OpenAI Chat Completions SDK', 'openai_chat_completions'),
@@ -287,6 +327,7 @@ CONTINUATION_TAIL_CHARS = 2200
 CONTINUATION_MAX_PASSES = 6
 SPECIALIZED_STEP_CONTEXT_MAX_CHARS = 6000
 SPECIALIZED_DYNAMIC_STEP_MAX_ADDITIONS = 3
+SPECIALIZED_STEP_RETRIEVAL_CONTEXT_MAX_CHARS = 12000
 SPECIALIZED_PROGRESS_SNIPPET_CHARS = 1200
 SPECIALIZED_SKILL_CAPABILITY = 'skill'
 SKILL_BODY_MAX_CHARS = 20000
@@ -297,6 +338,7 @@ CODE_EXECUTION_MAX_CODE_CHARS = 12000
 CODE_EXECUTION_MAX_OUTPUT_CHARS = 12000
 CODE_EXECUTION_IGNORE_LANGUAGES = {'text', 'plain', 'markdown', 'md', 'json', 'yaml', 'yml', 'toml', 'html', 'xml', 'css', 'csv'}
 BROCCOLI_CLAUDE_DEBUG = False
+ANTHROPIC_COMPAT_DEFAULT_MAX_TOKENS = 128000
 EMBEDDING_CAPABILITY_CACHE = {}
 WEBFETCH_STRICT_RE = re.compile(r'^Broccoli-WebFetch_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}_\d+pages\.json$')
 WEBFETCH_LOOSE_RE = re.compile(r'^Broccoli-WebFetch_.*\.json$')
@@ -595,6 +637,79 @@ def normalize_background_vision_profile_names(raw) -> list[str]:
         if value and value not in result:
             result.append(value)
     return result
+
+
+def normalize_browser_use_llm(value) -> str:
+    llm = str(value or '').strip()
+    if llm == 'browser_use':
+        return 'openai'
+    allowed = {item[1] for item in BROWSER_USE_LLM_OPTIONS}
+    return llm if llm in allowed else DEFAULT_BROWSER_USE_LLM
+
+
+def normalize_browser_use_chrome_mode(value) -> str:
+    mode = str(value or '').strip()
+    allowed = {item[1] for item in BROWSER_USE_CHROME_MODE_OPTIONS}
+    return mode if mode in allowed else DEFAULT_BROWSER_USE_CHROME_MODE
+
+
+def normalize_browser_use_vision(value) -> str:
+    mode = str(value or '').strip().lower()
+    return mode if mode in {'auto', 'on', 'off'} else DEFAULT_BROWSER_USE_USE_VISION
+
+
+def default_browser_use_settings() -> dict:
+    return {
+        'browser_use_enabled': DEFAULT_BROWSER_USE_ENABLED,
+        'browser_use_profile': '',
+        'browser_use_llm': DEFAULT_BROWSER_USE_LLM,
+        'browser_use_max_steps': DEFAULT_BROWSER_USE_MAX_STEPS,
+        'browser_use_use_vision': DEFAULT_BROWSER_USE_USE_VISION,
+        'browser_use_chrome_mode': DEFAULT_BROWSER_USE_CHROME_MODE,
+        'browser_use_cdp_url': DEFAULT_BROWSER_USE_CDP_URL,
+        'browser_use_chrome_executable': DEFAULT_BROWSER_USE_CHROME_EXECUTABLE,
+        'browser_use_user_data_dir': DEFAULT_BROWSER_USE_USER_DATA_DIR,
+        'browser_use_open_new_window': True,
+        'browser_use_close_window_after_task': DEFAULT_BROWSER_USE_CLOSE_WINDOW_AFTER_TASK,
+    }
+
+
+def normalize_browser_use_settings(raw: dict | None) -> dict:
+    defaults = default_browser_use_settings()
+    source = raw if isinstance(raw, dict) else {}
+    settings = dict(defaults)
+    settings.update({
+        'browser_use_enabled': bool(source.get('browser_use_enabled', defaults['browser_use_enabled'])),
+        'browser_use_profile': str(source.get('browser_use_profile', defaults['browser_use_profile']) or '').strip(),
+        'browser_use_llm': normalize_browser_use_llm(
+            source.get('browser_use_llm', source.get('browser_use_sdk', defaults['browser_use_llm']))
+        ),
+        'browser_use_max_steps': _coerce_int(
+            source.get('browser_use_max_steps', defaults['browser_use_max_steps']),
+            DEFAULT_BROWSER_USE_MAX_STEPS,
+            1,
+            200,
+        ),
+        'browser_use_use_vision': normalize_browser_use_vision(
+            source.get('browser_use_use_vision', defaults['browser_use_use_vision'])
+        ),
+        'browser_use_chrome_mode': normalize_browser_use_chrome_mode(
+            source.get('browser_use_chrome_mode', defaults['browser_use_chrome_mode'])
+        ),
+        'browser_use_cdp_url': str(source.get('browser_use_cdp_url', defaults['browser_use_cdp_url']) or '').strip()
+                               or DEFAULT_BROWSER_USE_CDP_URL,
+        'browser_use_chrome_executable': str(
+            source.get('browser_use_chrome_executable', defaults['browser_use_chrome_executable']) or ''
+        ).strip() or DEFAULT_BROWSER_USE_CHROME_EXECUTABLE,
+        'browser_use_user_data_dir': str(
+            source.get('browser_use_user_data_dir', defaults['browser_use_user_data_dir']) or ''
+        ).strip() or DEFAULT_BROWSER_USE_USER_DATA_DIR,
+        'browser_use_open_new_window': bool(source.get('browser_use_open_new_window', defaults['browser_use_open_new_window'])),
+        'browser_use_close_window_after_task': bool(
+            source.get('browser_use_close_window_after_task', defaults['browser_use_close_window_after_task'])
+        ),
+    })
+    return settings
 
 
 def default_background_vision_settings() -> dict:
@@ -3010,6 +3125,28 @@ class TargetSelectorButton(QPushButton):
         self._normalize_selection()
         self._update_text()
 
+    def shift_target_indices_after_move(self, old_index: int, new_index: int):
+        old_index = int(old_index)
+        new_index = int(new_index)
+        if self._target_mode == 'custom':
+            shifted = set()
+            for idx in self._custom_indices:
+                if idx == old_index:
+                    shifted.add(new_index)
+                elif old_index < idx <= new_index:
+                    shifted.add(idx - 1)
+                elif new_index <= idx < old_index:
+                    shifted.add(idx + 1)
+                else:
+                    shifted.add(idx)
+            self._custom_indices = shifted
+        self._normalize_selection()
+        self._update_text()
+
+    def target_mode(self) -> str:
+        self._normalize_selection()
+        return self._target_mode
+
     def popup_rows(self):
         self._normalize_selection()
         rows = [
@@ -5047,7 +5184,9 @@ def run_mcp_retrieval_planner(source_name: str,
         attempted_signatures,
     )
     client = create_openai_client(api_key, profile_runtime_base_url(profile), timeout)
-    response = client.chat.completions.create(
+    response = create_chat_completion(
+        client,
+        endpoint=profile_runtime_base_url(profile),
         model=model,
         messages=messages,
         stream=False,
@@ -5778,6 +5917,7 @@ def default_global_settings() -> dict:
         'specialized_profiles': default_specialized_profiles(),
         'specialized_execution_modes': default_specialized_execution_modes(),
         'userscripts': [],
+        **default_browser_use_settings(),
         **default_background_vision_settings(),
     }
 
@@ -5871,6 +6011,7 @@ def load_settings_store() -> dict:
         )
         raw_userscripts = store['globals'].get('userscripts', globals_store['userscripts'])
         globals_store['userscripts'] = normalize_userscript_records(raw_userscripts)
+        globals_store.update(normalize_browser_use_settings(store['globals']))
         if 'external_context_sources' in store['globals']:
             globals_store['external_context_sources'] = normalize_external_context_sources(
                 store['globals'].get('external_context_sources', [])
@@ -6264,6 +6405,89 @@ def get_profile_from_store_by_name(store: dict, profile_name: str) -> dict | Non
     return None
 
 
+def browser_use_effective_profile(store: dict) -> dict | None:
+    globals_store = store.get('globals', {}) if isinstance(store, dict) else {}
+    profile_name = str(globals_store.get('browser_use_profile', '') or '').strip()
+    if profile_name:
+        profile = get_profile_from_store_by_name(store, profile_name)
+        if profile is not None:
+            return profile
+    return load_active_settings_profile()
+
+
+def browser_use_chrome_executable_exists(path: str) -> bool:
+    return bool(str(path or '').strip()) and os.path.exists(str(path).strip())
+
+
+def browser_use_cdp_available(cdp_url: str, timeout: float = 1.2) -> bool:
+    url = str(cdp_url or '').strip().rstrip('/')
+    if not url:
+        return False
+    try:
+        response = requests.get(url + '/json/version', timeout=timeout)
+        return response.status_code < 400
+    except Exception:
+        return False
+
+
+def browser_use_cdp_launch_port(cdp_url: str) -> str:
+    parsed = urlparse(str(cdp_url or DEFAULT_BROWSER_USE_CDP_URL).strip())
+    if parsed.port:
+        return str(parsed.port)
+    return '9222'
+
+
+def launch_browser_use_chrome(chrome_path: str, cdp_url: str, user_data_dir: str, wait_seconds: float = 4.0) -> bool:
+    chrome_path = str(chrome_path or '').strip() or DEFAULT_BROWSER_USE_CHROME_EXECUTABLE
+    cdp_url = str(cdp_url or '').strip() or DEFAULT_BROWSER_USE_CDP_URL
+    user_data_dir = str(user_data_dir or '').strip() or DEFAULT_BROWSER_USE_USER_DATA_DIR
+    if not browser_use_chrome_executable_exists(chrome_path):
+        return False
+    port = browser_use_cdp_launch_port(cdp_url)
+    os.makedirs(user_data_dir, exist_ok=True)
+    chrome_args = [
+        f'--remote-debugging-port={port}',
+        '--remote-allow-origins=*',
+        f'--user-data-dir={user_data_dir}',
+        '--new-window',
+        'about:blank',
+    ]
+    try:
+        if sys.platform == 'darwin' and chrome_path.endswith('/Contents/MacOS/Google Chrome'):
+            command = ['/usr/bin/open', '-na', 'Google Chrome', '--args', *chrome_args]
+        else:
+            command = [chrome_path, *chrome_args]
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        return False
+    deadline = time.time() + max(0.5, float(wait_seconds or 0))
+    while time.time() < deadline:
+        if browser_use_cdp_available(cdp_url, timeout=0.5):
+            return True
+        time.sleep(0.25)
+    return browser_use_cdp_available(cdp_url, timeout=0.8)
+
+
+def parse_browser_use_slash_command(text: str) -> tuple[bool, str]:
+    forced, capability, task = parse_specialized_slash_command(text)
+    if forced and capability == BROWSER_USE_CAPABILITY:
+        return True, task
+    return False, str(text or '').strip()
+
+
+def parse_specialized_slash_command(text: str) -> tuple[bool, str, str]:
+    raw = str(text or '')
+    stripped = raw.lstrip()
+    lowered = stripped.lower()
+    for command, capability, _description in sorted(SPECIALIZED_SLASH_COMMANDS, key=lambda item: len(item[0]), reverse=True):
+        command_l = command.lower()
+        if lowered == command_l:
+            return True, capability, ''
+        if lowered.startswith(command_l + ' '):
+            return True, capability, stripped[len(command):].strip()
+    return False, '', raw.strip()
+
+
 def load_embedding_settings_profile() -> dict | None:
     store = load_settings_store()
     profile_name = str(store.get('globals', {}).get('embedding_profile', '')).strip()
@@ -6649,6 +6873,8 @@ def skill_step_label(step: dict) -> str:
     if str(step.get('capability', '') or '').strip() == SPECIALIZED_SKILL_CAPABILITY:
         skill_name = str(step.get('skill_name', '') or '').strip()
         return f'skill:{skill_name or "unnamed"}'
+    if str(step.get('capability', '') or '').strip() == BROWSER_USE_CAPABILITY:
+        return 'browser_use'
     return str(step.get('capability', '') or '').strip()
 
 
@@ -7002,6 +7228,86 @@ def render_message_plaintext(message: dict) -> str:
     return content
 
 
+def chat_message_render_hash(message: dict) -> str:
+    try:
+        payload = {
+            'role': str(message.get('role', '') or ''),
+            'content': str(message.get('content', '') or ''),
+            'timestamp': str(message.get('timestamp', '') or ''),
+            'source': str(message.get('source', '') or ''),
+            'display_prefix_html': str(message.get('display_prefix_html', '') or ''),
+            'attachments': message.get('attachments') or [],
+        }
+        return str(hash(json.dumps(payload, ensure_ascii=False, sort_keys=True)))
+    except Exception:
+        return str(hash(str(message)))
+
+
+def chat_message_render_hashes(messages: list[dict]) -> list[str]:
+    return [chat_message_render_hash(message) for message in (messages or [])]
+
+
+def conversation_messages_signature(messages: list[dict]) -> str:
+    try:
+        normalized = []
+        for item in messages or []:
+            message = normalize_chat_history_message(item)
+            if message:
+                normalized.append(message)
+        return hashlib.sha256(json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+    except Exception:
+        return hashlib.sha256(str(messages or []).encode('utf-8', errors='ignore')).hexdigest()
+
+
+def parse_legacy_chat_history_markdown(markdown_text: str) -> list[dict]:
+    text = str(markdown_text or '').replace('\r\n', '\n').replace('\r', '\n')
+    if not text.strip():
+        return []
+    heading_re = re.compile(r'^\s*#{1,6}\s*([QA])(?:\s*[·:\-]\s*(.*?))?\s*$', re.IGNORECASE)
+    messages = []
+    current = None
+    body_lines = []
+
+    def flush_current():
+        nonlocal current, body_lines
+        if current is None:
+            return
+        content = '\n'.join(body_lines).strip('\n')
+        message = {
+            'role': current['role'],
+            'content': content,
+        }
+        if current.get('timestamp'):
+            message['timestamp'] = current['timestamp']
+        normalized = normalize_chat_history_message(message)
+        if normalized:
+            messages.append(normalized)
+        current = None
+        body_lines = []
+
+    for line in text.split('\n'):
+        match = heading_re.match(line)
+        if match:
+            flush_current()
+            role = 'user' if match.group(1).upper() == 'Q' else 'assistant'
+            timestamp = str(match.group(2) or '').strip()
+            current = {'role': role, 'timestamp': timestamp}
+            continue
+        if current is not None:
+            body_lines.append(line)
+    flush_current()
+    if messages:
+        return messages
+    return [
+        {
+            'role': 'assistant',
+            'content': text.strip(),
+            'timestamp': current_chat_timestamp(),
+            'source': 'legacy',
+        }
+    ]
+
+
 def normalize_memory_item_record(item) -> dict | None:
     if isinstance(item, dict):
         text = str(item.get('text', '')).strip()
@@ -7125,36 +7431,244 @@ def render_chat_history_markdown(messages: list[dict]) -> str:
     return '\n\n'.join(block for block in blocks if block).strip()
 
 
+def render_chat_message_display_markup(message: dict, index: int, *, include_separator: bool) -> tuple[str, dict[str, str]]:
+    blocks = []
+    display_prefix_map = {}
+    if include_separator and message['role'] == 'user':
+        blocks.append('<div class="chat-separator"></div>')
+    blocks.append(f'<div id="msg-{index}" class="chat-anchor"></div>')
+    label = 'Q' if message['role'] == 'user' else 'A'
+    label_class = 'q' if message['role'] == 'user' else 'a'
+    timestamp = message.get('timestamp', '')
+    source = str(message.get('source', '') or '').strip()
+    meta_parts = []
+    if timestamp:
+        meta_parts.append(f'<span class="qa-time">{html.escape(timestamp)}</span>')
+    if source:
+        meta_parts.append(f'<span class="qa-source">{html.escape(source)}</span>')
+    if meta_parts:
+        blocks.append(
+            f'<div class="qa-meta-row"><span class="qa-label qa-label-{label_class}">{label}</span>'
+            f'{"".join(meta_parts)}</div>'
+        )
+    else:
+        blocks.append(f'<span class="qa-label qa-label-{label_class}">{label}</span>')
+    display_prefix_html = str(message.get('display_prefix_html', '') or '').strip()
+    placeholder = ''
+    if display_prefix_html and message['role'] == 'assistant':
+        placeholder = f'@@BROCCOLI_DISPLAY_PREFIX_{index}@@'
+        display_prefix_map[placeholder] = display_prefix_html
+    blocks.append(render_message_display_markup(message, placeholder))
+    return '\n\n'.join(block for block in blocks if block).strip(), display_prefix_map
+
+
 def render_chat_history_display_markup(messages: list[dict]) -> tuple[str, dict[str, str]]:
     blocks = []
     display_prefix_map = {}
     for index, message in enumerate(messages):
-        if index > 0 and message['role'] == 'user':
-            blocks.append('<div class="chat-separator"></div>')
-        blocks.append(f'<div id="msg-{index}" class="chat-anchor"></div>')
-        label = 'Q' if message['role'] == 'user' else 'A'
-        label_class = 'q' if message['role'] == 'user' else 'a'
-        timestamp = message.get('timestamp', '')
-        source = str(message.get('source', '') or '').strip()
-        meta_parts = []
-        if timestamp:
-            meta_parts.append(f'<span class="qa-time">{html.escape(timestamp)}</span>')
-        if source:
-            meta_parts.append(f'<span class="qa-source">{html.escape(source)}</span>')
-        if meta_parts:
-            blocks.append(
-                f'<div class="qa-meta-row"><span class="qa-label qa-label-{label_class}">{label}</span>'
-                f'{"".join(meta_parts)}</div>'
-            )
-        else:
-            blocks.append(f'<span class="qa-label qa-label-{label_class}">{label}</span>')
-        display_prefix_html = str(message.get('display_prefix_html', '') or '').strip()
-        placeholder = ''
-        if display_prefix_html and message['role'] == 'assistant':
-            placeholder = f'@@BROCCOLI_DISPLAY_PREFIX_{index}@@'
-            display_prefix_map[placeholder] = display_prefix_html
-        blocks.append(render_message_display_markup(message, placeholder))
+        block, prefix_map = render_chat_message_display_markup(
+            message,
+            index,
+            include_separator=(index > 0),
+        )
+        if block:
+            blocks.append(block)
+        display_prefix_map.update(prefix_map)
     return '\n\n'.join(block for block in blocks if block).strip(), display_prefix_map
+
+
+def render_chat_messages_display_fragment(messages: list[dict], start_index: int) -> tuple[str, dict[str, str]]:
+    blocks = []
+    display_prefix_map = {}
+    for offset, message in enumerate(messages or []):
+        index = int(start_index) + offset
+        block, prefix_map = render_chat_message_display_markup(
+            message,
+            index,
+            include_separator=(index > 0),
+        )
+        if block:
+            blocks.append(block)
+        display_prefix_map.update(prefix_map)
+    return '\n\n'.join(block for block in blocks if block).strip(), display_prefix_map
+
+
+def render_markdown_display_fragment_to_html(markdown_text: str, display_prefix_map: dict[str, str] | None = None) -> str:
+    fragment = render_markdown_fragment(markdown_text)
+    for placeholder, prefix_html in (display_prefix_map or {}).items():
+        fragment = fragment.replace(f'<p>{placeholder}</p>', prefix_html)
+        fragment = fragment.replace(placeholder, prefix_html)
+    return fragment
+
+
+def render_structured_transfer_editor_html(messages: list[dict], dark: bool) -> str:
+    normal_display_css = render_chat_display_document_css(dark)
+    body_bg = '#2D2D2D' if dark else '#FFFFFF'
+    body_fg = '#F2F2F7' if dark else '#20242B'
+    muted = '#A7AEB8' if dark else '#7A8391'
+    panel_bg = '#343436' if dark else '#F7F8FA'
+    panel_border = '#4A4B4F' if dark else '#E2E5EA'
+    editor_bg = '#2A2A2C' if dark else '#FFFFFF'
+    q_bg = '#2E5C91' if dark else '#D9EAF8'
+    q_fg = '#FFFFFF' if dark else '#184B7A'
+    a_bg = '#4B5F3E' if dark else '#DDE8D6'
+    a_fg = '#FFFFFF' if dark else '#355728'
+    sections = []
+    for index, message in enumerate(messages):
+        role = str(message.get('role', '') or '').strip().lower()
+        label = 'Q' if role == 'user' else 'A'
+        label_class = 'q' if role == 'user' else 'a'
+        timestamp = str(message.get('timestamp', '') or '').strip()
+        source = str(message.get('source', '') or '').strip()
+        meta = html.escape(format_message_label(role, timestamp), quote=False)
+        if source:
+            meta += f'<span class="source">{html.escape(source)}</span>'
+        content = html.escape(str(message.get('content', '') or ''), quote=False)
+        attachments = attachment_plaintext_block(message)
+        attachment_hint = ''
+        if attachments:
+            attachment_hint = (
+                '<div class="attachment-note">'
+                + html.escape(attachments, quote=False)
+                + '</div>'
+            )
+        sections.append(
+            f'''
+            <section class="message-card" data-message-index="{index}" data-message-role="{html.escape(role, quote=True)}">
+                <div id="msg-{index}" class="chat-anchor"></div>
+                <div class="message-meta">
+                    <span class="role-pill role-{label_class}">{label}</span>
+                    <span class="meta-text">{meta}</span>
+                </div>
+                <div class="message-editor"
+                     contenteditable="plaintext-only"
+                     spellcheck="false"
+                     data-edit-content="1"
+                     data-message-index="{index}">{content}</div>
+                {attachment_hint}
+            </section>
+            '''
+        )
+    return f"""
+    <html>
+    <head>
+    <meta content="text/html; charset=utf-8" http-equiv="content-type" />
+    <style id="broccoli-normal-display-css">
+        {normal_display_css}
+        .chat-display-message {{
+            display: block;
+            margin: 0;
+        }}
+    </style>
+    <style>
+        html, body {{
+            margin: 0;
+            background: {body_bg};
+            color: {body_fg};
+            font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif;
+        }}
+        body {{
+            padding: 18px 18px 28px 18px;
+            box-sizing: border-box;
+        }}
+        .message-card {{
+            margin: 0 0 18px 0;
+            padding: 13px 14px 14px 14px;
+            border: 1px solid {panel_border};
+            border-radius: 12px;
+            background: {panel_bg};
+        }}
+        .chat-anchor {{
+            position: relative;
+            top: -12px;
+            height: 0;
+        }}
+        .message-meta {{
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            margin: 0 0 10px 0;
+        }}
+        .role-pill {{
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+        }}
+        .role-q {{
+            background: {q_bg};
+            color: {q_fg};
+        }}
+        .role-a {{
+            background: {a_bg};
+            color: {a_fg};
+        }}
+        .meta-text {{
+            color: {muted};
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        .source {{
+            margin-left: 8px;
+            opacity: 0.85;
+        }}
+        .message-editor {{
+            min-height: 34px;
+            padding: 10px 11px;
+            border: 1px solid {panel_border};
+            border-radius: 8px;
+            background: {editor_bg};
+            color: {body_fg};
+            outline: none;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.56;
+            font-size: 14px;
+        }}
+        .message-editor:focus {{
+            border-color: {q_bg};
+            box-shadow: 0 0 0 2px rgba(46, 92, 145, 0.22);
+        }}
+        .attachment-note {{
+            margin-top: 10px;
+            color: {muted};
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.45;
+        }}
+    </style>
+    </head>
+    <body>
+        {''.join(sections)}
+        <script>
+        window.__broccoliStructuredTransferDirty = false;
+        document.addEventListener('input', function(event) {{
+            if (event.target && event.target.closest('[data-edit-content="1"]')) {{
+                window.__broccoliStructuredTransferDirty = true;
+            }}
+        }});
+        window.broccoliCollectStructuredMessages = function(clearDirty) {{
+            const items = Array.from(document.querySelectorAll('[data-edit-content="1"]'));
+            const messages = items.map((el) => {{
+                let text = el.innerText || '';
+                text = text.replace(/\\u00a0/g, ' ');
+                text = text.replace(/\\n$/, '');
+                return {{
+                    index: Number(el.getAttribute('data-message-index')),
+                    content: text
+                }};
+            }});
+            const dirty = !!window.__broccoliStructuredTransferDirty;
+            if (clearDirty) window.__broccoliStructuredTransferDirty = false;
+            return {{ dirty, messages }};
+        }};
+        </script>
+    </body>
+    </html>
+    """
 
 
 def render_chat_history_plaintext(messages: list[dict]) -> str:
@@ -8018,6 +8532,107 @@ def create_openai_client(api_key: str, endpoint: str, timeout: int):
     return OpenAI(api_key=api_key, base_url=endpoint, timeout=timeout)
 
 
+def _merge_leading_system_messages_into_user(messages: list[dict]) -> list[dict]:
+    cloned = copy.deepcopy(messages)
+    system_parts = []
+    index = 0
+    while index < len(cloned) and str(cloned[index].get('role', '')).strip().lower() == 'system':
+        content = str(cloned[index].get('content', '') or '').strip()
+        if content:
+            system_parts.append(content)
+        index += 1
+    if not system_parts:
+        return cloned
+
+    remaining = cloned[index:]
+    system_text = '\n\n'.join(system_parts).strip()
+    prefix = 'System instructions:\n' + system_text
+    for item in remaining:
+        if str(item.get('role', '')).strip().lower() == 'user':
+            user_content = item.get('content', '')
+            if isinstance(user_content, list):
+                item['content'] = [{'type': 'text', 'text': prefix + '\n\nUser message:'}] + user_content
+            else:
+                item['content'] = (prefix + '\n\nUser message:\n' + str(user_content or '')).strip()
+            return remaining
+    return [{'role': 'user', 'content': prefix}] + remaining
+
+
+def _should_retry_without_system_role(exc: Exception, messages: list[dict]) -> bool:
+    if not messages:
+        return False
+    first_role = str(messages[0].get('role', '') if isinstance(messages[0], dict) else '').strip().lower()
+    if first_role != 'system':
+        return False
+    text = str(exc)
+    return (
+        'messages.0.role' in text
+        and ('Invalid input' in text or 'invalid_request_error' in text or 'invalid' in text.lower())
+    )
+
+
+def _should_retry_with_default_max_tokens(exc: Exception, kwargs: dict) -> bool:
+    if 'max_tokens' in kwargs or 'max_completion_tokens' in kwargs:
+        return False
+    text = str(exc)
+    return (
+        'max_tokens' in text
+        and 'Invalid input' in text
+        and ('undefined' in text or 'expected number' in text)
+    )
+
+
+def _default_max_tokens_for_chat_completion(model: str) -> int:
+    model_name = str(model or '').strip().lower()
+    if 'claude-3-haiku' in model_name and '3-5' not in model_name:
+        return 4096
+    return ANTHROPIC_COMPAT_DEFAULT_MAX_TOKENS
+
+
+def create_chat_completion(client, *, endpoint: str = '', messages: list[dict], **kwargs):
+    current_messages = messages
+    current_kwargs = dict(kwargs)
+    retried_without_system_role = False
+    retried_with_default_max_tokens = False
+
+    for _ in range(3):
+        try:
+            return client.chat.completions.create(messages=current_messages, **current_kwargs)
+        except Exception as exc:
+            # Workaround for proxies that translate OpenAI chat-completions payloads
+            # into Anthropic native Messages requests without hoisting system messages.
+            # Native Anthropic Messages accepts top-level system text, not a
+            # {"role": "system"} item inside messages.
+            if not retried_without_system_role and _should_retry_without_system_role(exc, current_messages):
+                current_messages = _merge_leading_system_messages_into_user(current_messages)
+                retried_without_system_role = True
+                log_broccoli_claude(
+                    'Retrying chat completion without system role in messages for endpoint: '
+                    + str(endpoint or '')
+                )
+                continue
+
+            # Workaround for proxies that require Anthropic native max_tokens but
+            # receive an OpenAI-style request where max_tokens is optional. 8192 is
+            # large enough for normal Broccoli answers while staying below current
+            # Claude 3.5+ output caps and avoiding the rate-limit cost of 32K/64K.
+            if not retried_with_default_max_tokens and _should_retry_with_default_max_tokens(exc, current_kwargs):
+                current_kwargs = dict(current_kwargs)
+                current_kwargs['max_tokens'] = _default_max_tokens_for_chat_completion(
+                    current_kwargs.get('model', '')
+                )
+                retried_with_default_max_tokens = True
+                log_broccoli_claude(
+                    'Retrying chat completion with default max_tokens='
+                    + str(current_kwargs['max_tokens'])
+                    + ' for endpoint: '
+                    + str(endpoint or '')
+                )
+                continue
+            raise
+
+    return client.chat.completions.create(messages=current_messages, **current_kwargs)
+
 def capture_all_screens_png_bytes() -> bytes:
     try:
         import Quartz as _Quartz
@@ -8279,7 +8894,9 @@ class BackgroundVisionWorker(QThread):
                     {'type': 'image_url', 'image_url': {'url': data_url}},
                 ],
             })
-            response = client.chat.completions.create(
+            response = create_chat_completion(
+                client,
+                endpoint=endpoint,
                 model=model,
                 messages=messages,
                 stream=False,
@@ -8385,6 +9002,7 @@ def summarize_attachment_types(attachment_records: list[dict]) -> str:
 
 
 def build_planner_messages(user_text: str, attachment_summary: str, skill_catalog: str = '') -> list[dict]:
+    slash_forced, slash_capability, slash_task = parse_specialized_slash_command(user_text)
     skill_rules = ''
     if str(skill_catalog or '').strip():
         skill_rules = (
@@ -8413,17 +9031,22 @@ def build_planner_messages(user_text: str, attachment_summary: str, skill_catalo
                 '- image_generation\n'
                 '- video_generation\n'
                 '- video_to_text\n'
+                '- browser_use\n'
                 '- skill\n'
                 + skill_rules
                 + '\n'
                 'Step design rules:\n'
                 '- Do not include embedding. Retrieval is handled separately by the system.\n'
+                '- Use browser_use when the request requires a real browser session, logged-in pages, clicking, forms, dynamic pages, or an explicit /browser use slash binding.\n'
+                '- If the latest request begins with a specialized slash command, include at least one step with the bound capability. The bound step goal must be the task text after the slash, and later steps or the final answer may summarize/analyze its result.\n'
                 '- If no specialized capability is needed, return an empty "steps" list.\n'
                 '- Use the fewest steps that fully satisfy the request. Do not add steps that do not materially improve the final answer.\n'
                 '- When two sequences both satisfy the request, prefer the one with fewer steps and higher relevance to the user\'s core intent.\n'
                 '- Order steps so information-gathering steps (web_search, task_reasoning for research) come before synthesis or generation steps.\n'
                 '- For deterministic counting, calculation, parsing, validation, or exact verification, include a task_reasoning step unless a more specific skill step handles it.\n'
                 f'- Code execution runners: {code_runner_catalog_text()}\n'
+                '- For each step, set context_policy to "fresh" when that step should retrieve memory/history/MCP/attachments using its own narrower query, "none" when no extra retrieval is useful, or "auto" when unsure.\n'
+                '- Use context_query only when you can write a better retrieval query than the step goal. Make it concise and specific to that step, not a copy of the full user request.\n'
                 '- Return JSON only.\n\n'
                 'Goal field rules (critical):\n'
                 '- Write "goal" as a single precise instruction to the specialist: what to do, what input to use, what output is expected.\n'
@@ -8440,7 +9063,7 @@ def build_planner_messages(user_text: str, attachment_summary: str, skill_catalo
                 'Output format:\n'
                 '{\n'
                 '  "steps": [\n'
-                '    {"capability": "...", "skill_name": "only for skill steps", "goal": "...", "depends_on_previous": true, "extract": "..."}\n'
+                '    {"capability": "...", "skill_name": "only for skill steps", "goal": "...", "depends_on_previous": true, "extract": "...", "context_policy": "auto|fresh|none", "context_query": "optional focused retrieval query"}\n'
                 '  ],\n'
                 '  "finalize_with_default_chat": true,\n'
                 '  "finalize_focus": "...",\n'
@@ -8452,10 +9075,23 @@ def build_planner_messages(user_text: str, attachment_summary: str, skill_catalo
             'role': 'user',
             'content': (
                 'Latest user request:\n' + str(user_text or '').strip() +
+                (
+                    '\n\nSpecialized slash binding:\n'
+                    f'The user explicitly required capability "{slash_capability}" for this task:\n'
+                    + slash_task
+                    if slash_forced and slash_capability and slash_task else ''
+                ) +
                 '\n\nAttachment summary:\n' + str(attachment_summary or 'No attachments.')
             ),
         },
     ]
+
+
+def normalize_specialized_step_context_policy(value) -> str:
+    policy = str(value or '').strip().lower()
+    if policy in {'none', 'auto', 'fresh'}:
+        return policy
+    return 'auto'
 
 
 def normalize_planner_plan(plan: dict | None, available_skill_names: set[str] | None = None) -> dict:
@@ -8467,7 +9103,7 @@ def normalize_planner_plan(plan: dict | None, available_skill_names: set[str] | 
     }
     if not isinstance(plan, dict):
         return normalized
-    allowed = {key for key, _label in SPECIALIZED_CAPABILITIES} | {SPECIALIZED_SKILL_CAPABILITY}
+    allowed = {key for key, _label in SPECIALIZED_CAPABILITIES} | {BROWSER_USE_CAPABILITY, SPECIALIZED_SKILL_CAPABILITY}
     normalized_skill_names = None
     if available_skill_names is not None:
         normalized_skill_names = {str(name or '').strip().lower() for name in available_skill_names if str(name or '').strip()}
@@ -8494,6 +9130,8 @@ def normalize_planner_plan(plan: dict | None, available_skill_names: set[str] | 
                 'goal': goal,
                 'depends_on_previous': bool(step.get('depends_on_previous', False)),
                 'extract': str(step.get('extract', '')).strip(),
+                'context_policy': normalize_specialized_step_context_policy(step.get('context_policy', 'auto')),
+                'context_query': str(step.get('context_query', '') or '').strip(),
             }
             if skill_name:
                 normalized_step['skill_name'] = skill_name
@@ -8507,7 +9145,7 @@ def normalize_planner_plan(plan: dict | None, available_skill_names: set[str] | 
 def normalize_dynamic_specialized_step(step: dict | None, available_skill_names: set[str] | None = None) -> dict | None:
     if not isinstance(step, dict):
         return None
-    allowed = {key for key, _label in SPECIALIZED_CAPABILITIES} | {SPECIALIZED_SKILL_CAPABILITY}
+    allowed = {key for key, _label in SPECIALIZED_CAPABILITIES} | {BROWSER_USE_CAPABILITY, SPECIALIZED_SKILL_CAPABILITY}
     normalized_skill_names = None
     if available_skill_names is not None:
         normalized_skill_names = {str(name or '').strip().lower() for name in available_skill_names if str(name or '').strip()}
@@ -8520,6 +9158,8 @@ def normalize_dynamic_specialized_step(step: dict | None, available_skill_names:
         'goal': goal,
         'depends_on_previous': bool(step.get('depends_on_previous', False)),
         'extract': str(step.get('extract', '') or '').strip(),
+        'context_policy': normalize_specialized_step_context_policy(step.get('context_policy', 'auto')),
+        'context_query': str(step.get('context_query', '') or '').strip(),
         'dynamic': True,
     }
     if capability == SPECIALIZED_SKILL_CAPABILITY:
@@ -8884,6 +9524,11 @@ def render_markdown_document_to_html(mdstr: str, dark: bool, display_prefix_html
     )
 
 
+def render_chat_display_document_css(dark: bool) -> str:
+    html_doc = render_markdown_document_to_html('', dark)
+    return '\n'.join(re.findall(r'<style>\s*(.*?)\s*</style>', html_doc, re.DOTALL))
+
+
 def build_pipeline_display_prefix(plan: dict, step_results: list[dict]) -> str:
     if not step_results:
         return ''
@@ -9006,7 +9651,7 @@ def build_specialized_step_review_messages(capability: str,
                                            skill_catalog: str = '') -> list[dict]:
     downstream_need = downstream_extract.strip() or final_focus.strip() or 'the final user-facing answer'
     artifact_text = '\n'.join(f'- {path}' for path in artifact_paths if path)
-    available = [key for key, _label in SPECIALIZED_CAPABILITIES]
+    available = [key for key, _label in SPECIALIZED_CAPABILITIES] + [BROWSER_USE_CAPABILITY]
     if str(skill_catalog or '').strip():
         available.append(SPECIALIZED_SKILL_CAPABILITY)
     available_capabilities = ', '.join(available)
@@ -9040,7 +9685,7 @@ def build_specialized_step_review_messages(capability: str,
                 '- Use next_action="retry_step" only when the same kind of step should be retried with a clearer goal.\n'
                 '- If code execution was skipped because a language is unsupported, retry or insert a step that rewrites equivalent code in the first supported executable language.\n'
                 '- Use next_action="stop" only when continuing would be misleading or impossible.\n'
-                '- If next_action is insert_step or retry_step, provide new_step with capability, goal, depends_on_previous, and extract.\n'
+                '- If next_action is insert_step or retry_step, provide new_step with capability, goal, depends_on_previous, extract, context_policy, and optional context_query.\n'
                 '- If new_step capability is "skill", also provide skill_name exactly as listed.\n'
                 '- The new_step goal must be concrete and self-contained. Do not add broad exploratory steps.\n\n'
                 'Output format:\n'
@@ -9071,6 +9716,8 @@ def build_specialized_step_review_messages(capability: str,
 def specialized_capability_label(capability: str) -> str:
     if capability == SPECIALIZED_SKILL_CAPABILITY:
         return 'Skill'
+    if capability == BROWSER_USE_CAPABILITY:
+        return 'Browser Use'
     for key, label in SPECIALIZED_CAPABILITIES:
         if key == capability:
             return label
@@ -9082,7 +9729,8 @@ def build_skill_step_messages(skill: dict,
                               question_text: str,
                               shared_context: str,
                               previous_results: list[dict],
-                              downstream_extract: str = '') -> list[dict]:
+                              downstream_extract: str = '',
+                              step_context: str = '') -> list[dict]:
     skill_name = sanitize_skill_name(skill.get('name', ''), 'Skill')
     skill_description = str(skill.get('description', '') or '').strip()
     skill_body = str(skill.get('raw_text', '') or '').strip()
@@ -9118,7 +9766,9 @@ def build_skill_step_messages(skill: dict,
         'Current skill-step goal:\n' + str(goal or '').strip(),
     ]
     if shared_context.strip():
-        user_parts.append('Retrieved context:\n' + shared_context.strip())
+        user_parts.append('Global retrieved context:\n' + shared_context.strip())
+    if step_context.strip():
+        user_parts.append('Step-specific retrieved context:\n' + step_context.strip())
     if previous_sections:
         user_parts.append('Previous step output:\n' + '\n\n'.join(previous_sections))
     user_parts.append('Return only the skill-step result.')
@@ -9133,7 +9783,8 @@ def build_specialized_step_messages(capability: str,
                                     question_text: str,
                                     shared_context: str,
                                     previous_results: list[dict],
-                                    downstream_extract: str = '') -> list[dict]:
+                                    downstream_extract: str = '',
+                                    step_context: str = '') -> list[dict]:
     capability_prompts = {
         'task_reasoning': 'You are the task-reasoning specialist. Produce the strongest structured intermediate result for downstream use.',
         'web_search': 'You are the web-search specialist. If your model/service has search or current-knowledge capabilities, use them and return concise factual findings with useful URLs when available.',
@@ -9166,7 +9817,9 @@ def build_specialized_step_messages(capability: str,
     if goal.strip():
         user_parts.append('Current step goal:\n' + goal.strip())
     if shared_context.strip():
-        user_parts.append('Retrieved context:\n' + shared_context.strip())
+        user_parts.append('Global retrieved context:\n' + shared_context.strip())
+    if step_context.strip():
+        user_parts.append('Step-specific retrieved context:\n' + step_context.strip())
     if previous_sections:
         user_parts.append('Previous step output:\n' + '\n\n'.join(previous_sections))
     user_parts.append('Return only the result of this step.')
@@ -9223,7 +9876,9 @@ def translate_query_to_english_keywords(query: str) -> str:
     translated = ''
     try:
         client = create_openai_client(api_key, endpoint, timeout)
-        response = client.chat.completions.create(
+        response = create_chat_completion(
+            client,
+            endpoint=endpoint,
             model=model,
             messages=messages,
             stream=False,
@@ -9329,7 +9984,9 @@ def update_conversation_running_summary(record: dict,
               'Return the updated memory summary only.'
         },
     ]
-    response = client.chat.completions.create(
+    response = create_chat_completion(
+        client,
+        endpoint=endpoint,
         model=model,
         messages=summary_messages,
         stream=False,
@@ -9372,6 +10029,103 @@ def ensure_conversation_retrieval_embeddings(record: dict,
 
     record['retrieval']['chunks'] = merged_chunks
     return record
+
+
+def refresh_conversation_runtime_data_for_path(conversation_path: str,
+                                               api_key: str,
+                                               endpoint: str,
+                                               model: str,
+                                               timeout: int) -> dict:
+    path = str(conversation_path or '').strip()
+    if not path:
+        return {'updated': False, 'stale': False, 'path': '', 'reason': 'empty_path'}
+    record = load_conversation_record(path)
+    if record is None:
+        return {'updated': False, 'stale': False, 'path': path, 'reason': 'missing_record'}
+
+    start_signature = conversation_messages_signature(record.get('messages', []))
+    mutated = False
+    turns = record.get('display', {}).get('turns', [])
+    try:
+        summarized_count = max(0, int(record.get('memory', {}).get('last_summarized_turn_count', 0) or 0))
+    except (TypeError, ValueError):
+        summarized_count = 0
+    if summarized_count < len(turns):
+        try:
+            record = update_conversation_running_summary(record, api_key, endpoint, model, timeout)
+            mutated = True
+        except Exception:
+            pass
+
+    fresh_chunks = build_retrieval_chunks(record.get('messages', []))
+    current_chunks = record.get('retrieval', {}).get('chunks', [])
+    needs_retrieval_refresh = len(fresh_chunks) != len(current_chunks)
+    if not needs_retrieval_refresh:
+        for fresh_chunk, current_chunk in zip(fresh_chunks, current_chunks):
+            if fresh_chunk.get('id') != current_chunk.get('id') or fresh_chunk.get('text') != current_chunk.get('text'):
+                needs_retrieval_refresh = True
+                break
+            if not current_chunk.get('embedding'):
+                needs_retrieval_refresh = True
+                break
+    if needs_retrieval_refresh:
+        record['retrieval']['chunks'] = fresh_chunks
+        mutated = True
+
+    embedding_config = load_embedding_runtime_config()
+    embedding_ok = False
+    if embedding_config is not None:
+        embedding_ok, _ = probe_embedding_capability(embedding_config['profile'])
+    if embedding_ok and embedding_config is not None:
+        embedding_chunks = record.get('retrieval', {}).get('chunks', [])
+        if any(not chunk.get('embedding') for chunk in embedding_chunks):
+            try:
+                record = ensure_conversation_retrieval_embeddings(
+                    record,
+                    embedding_config['api_key'],
+                    embedding_config['endpoint'],
+                    embedding_config['timeout'],
+                    embedding_config['model'],
+                )
+                mutated = True
+            except Exception:
+                pass
+
+    if not mutated:
+        return {'updated': False, 'stale': False, 'path': path, 'reason': 'unchanged'}
+
+    latest = load_conversation_record(path)
+    if latest is None:
+        return {'updated': False, 'stale': True, 'path': path, 'reason': 'missing_latest_record'}
+    if conversation_messages_signature(latest.get('messages', [])) != start_signature:
+        return {'updated': False, 'stale': True, 'path': path, 'reason': 'messages_changed'}
+
+    latest_memory = latest.get('memory', {}) if isinstance(latest.get('memory'), dict) else {}
+    refreshed_memory = record.get('memory', {}) if isinstance(record.get('memory'), dict) else {}
+    try:
+        latest_count = int(latest_memory.get('last_summarized_turn_count', 0) or 0)
+        refreshed_count = int(refreshed_memory.get('last_summarized_turn_count', 0) or 0)
+    except (TypeError, ValueError):
+        latest_count = 0
+        refreshed_count = 0
+    latest['memory'] = refreshed_memory if refreshed_count >= latest_count else latest_memory
+
+    latest_embedding_by_key = {
+        (chunk.get('id'), chunk.get('text')): chunk.get('embedding')
+        for chunk in latest.get('retrieval', {}).get('chunks', [])
+        if chunk.get('embedding')
+    }
+    refreshed_chunks = []
+    for chunk in record.get('retrieval', {}).get('chunks', []):
+        merged_chunk = dict(chunk)
+        if not merged_chunk.get('embedding'):
+            existing_embedding = latest_embedding_by_key.get((merged_chunk.get('id'), merged_chunk.get('text')))
+            if existing_embedding:
+                merged_chunk['embedding'] = list(existing_embedding)
+        refreshed_chunks.append(merged_chunk)
+    latest['retrieval'] = {'chunks': refreshed_chunks}
+    saved = write_conversation_record(path, latest)
+    return {'updated': True, 'stale': False, 'path': saved.get('path', path), 'reason': 'saved'}
 
 
 def retrieve_conversation_chunks(record: dict,
@@ -10020,6 +10774,13 @@ class AsyncPreflightThread(threading.Thread):
                         plan,
                         question_text,
                         shared_context,
+                        history_messages,
+                        retrieval_documents,
+                        api_key,
+                        endpoint,
+                        model,
+                        timeout,
+                        selected_message_indices,
                         attachment_records,
                         progress_callback=progress,
                     )
@@ -10065,7 +10826,9 @@ class AsyncChatThread(threading.Thread):
         chunks = []
         finish_reason = ''
         citation_urls = []
-        response_stream = client.chat.completions.create(
+        response_stream = create_chat_completion(
+            client,
+            endpoint=self.config.get('endpoint', ''),
             model=self.config['model'],
             messages=messages,
             stream=True,
@@ -10115,7 +10878,9 @@ class AsyncChatThread(threading.Thread):
             },
         ]
         try:
-            response = client.chat.completions.create(
+            response = create_chat_completion(
+                client,
+                endpoint=self.config.get('endpoint', ''),
                 model=self.config['model'],
                 messages=messages,
                 stream=False,
@@ -10182,7 +10947,9 @@ class AsyncChatThread(threading.Thread):
         finish_reason = ''
         for round_index in range(MCP_TOOL_RUNTIME_MAX_ROUNDS):
             self.signals.status.emit(f'Asking model to choose MCP tools, round {round_index + 1}')
-            response = client.chat.completions.create(
+            response = create_chat_completion(
+                client,
+                endpoint=self.config.get('endpoint', ''),
                 model=self.config['model'],
                 messages=current_messages,
                 tools=tool_defs,
@@ -10247,7 +11014,9 @@ class AsyncChatThread(threading.Thread):
                     }
                 )
         self.signals.status.emit('Finishing answer from MCP tool results')
-        response = client.chat.completions.create(
+        response = create_chat_completion(
+            client,
+            endpoint=self.config.get('endpoint', ''),
             model=self.config['model'],
             messages=current_messages + [
                 {
@@ -10375,7 +11144,9 @@ class AsyncChatThread(threading.Thread):
                     )
                 return
 
-            response = client.chat.completions.create(
+            response = create_chat_completion(
+                client,
+                endpoint=self.config.get('endpoint', ''),
                 model=self.config['model'],
                 messages=messages,
                 stream=False,
@@ -10397,6 +11168,238 @@ class AsyncChatThread(threading.Thread):
         except Exception as exc:
             self.signals.failed.emit(str(exc))
 
+
+class BrowserUseSignals(QObject):
+    status = pyqtSignal(str)
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+
+class BrowserUseThread(threading.Thread):
+    def __init__(self, config: dict, signals: BrowserUseSignals | None = None):
+        super().__init__(daemon=True)
+        self.config = config
+        self.signals = signals
+        self._stop_event = threading.Event()
+        self._process = None
+
+    def request_stop(self):
+        self._stop_event.set()
+        try:
+            if self._process is not None and self._process.poll() is None:
+                self._process.terminate()
+        except Exception:
+            pass
+
+    def _worker_code(self) -> str:
+        return r'''
+import asyncio
+import json
+import os
+import sys
+import traceback
+
+RESULT_PREFIX = '__BROCCOLI_BROWSER_USE_RESULT__'
+
+
+def _vision_value(mode):
+    mode = str(mode or 'auto').lower()
+    if mode == 'on':
+        return True
+    if mode == 'off':
+        return False
+    return 'auto'
+
+
+async def _close_browser(browser):
+    if browser is None:
+        return
+    for method_name in ('stop', 'close'):
+        method = getattr(browser, method_name, None)
+        if method is None:
+            continue
+        try:
+            result = method()
+            if hasattr(result, '__await__'):
+                await result
+            return
+        except Exception:
+            continue
+
+
+async def main():
+    cfg = json.load(sys.stdin)
+    try:
+        import browser_use.browser.profile as browser_profile
+        browser_profile.get_display_size = lambda: browser_profile.ViewportSize(width=1440, height=900)
+        from browser_use import Agent, Browser, ChatAnthropic, ChatGoogle, ChatOpenAI
+    except Exception as exc:
+        raise RuntimeError('Browser Use is not installed or cannot be imported: ' + str(exc)) from exc
+
+    llm_wrapper = str(cfg.get('llm_wrapper') or 'openai').strip().lower()
+    model = str(cfg.get('model') or '').strip()
+    api_key = str(cfg.get('api_key') or '').strip()
+    endpoint = str(cfg.get('endpoint') or '').strip()
+    timeout = int(cfg.get('timeout') or 60)
+    if llm_wrapper == 'anthropic':
+        kwargs = {
+            'model': model,
+            'api_key': api_key,
+            'timeout': timeout,
+            'max_tokens': 8192,
+            'temperature': None,
+        }
+        if endpoint:
+            kwargs['base_url'] = endpoint
+        llm = ChatAnthropic(**kwargs)
+    elif llm_wrapper == 'google':
+        llm = ChatGoogle(
+            model=model,
+            api_key=api_key,
+            temperature=None,
+            max_output_tokens=8096,
+        )
+    else:
+        llm = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=endpoint,
+            timeout=timeout,
+            temperature=None,
+            frequency_penalty=None,
+        )
+    browser_kwargs = {'headless': False}
+    if str(cfg.get('chrome_mode') or '') == 'connect_existing':
+        browser_kwargs['cdp_url'] = str(cfg.get('cdp_url') or '').strip()
+    else:
+        browser_kwargs['executable_path'] = str(cfg.get('chrome_executable') or '').strip()
+        browser_kwargs['user_data_dir'] = str(cfg.get('user_data_dir') or '').strip()
+        browser_kwargs['keep_alive'] = not bool(cfg.get('close_window_after_task', False))
+        browser_kwargs['ignore_default_args'] = ['--extensions-on-chrome-urls']
+    browser = None
+    try:
+        browser = Browser(**browser_kwargs)
+        task = str(cfg.get('task') or '').strip()
+        if cfg.get('open_new_window', True):
+            task = (
+                'Start this automation in a new browser tab or window. '
+                'Do not reuse unrelated existing tabs unless the user explicitly asks for it. '
+            ) + task
+        else:
+            task = (
+                'Use the currently active tab/page in the existing Browser Use Chrome window as the starting point. '
+                'Do not open a new tab or navigate away unless the user explicitly asks for it. '
+            ) + task
+        agent = Agent(
+            task=task,
+            llm=llm,
+            browser=browser,
+            use_vision=_vision_value(cfg.get('use_vision')),
+            directly_open_url=bool(cfg.get('open_new_window', True)),
+        )
+        history = await agent.run(max_steps=int(cfg.get('max_steps') or 30))
+        final_result = ''
+        method = getattr(history, 'final_result', None)
+        if callable(method):
+            try:
+                final_result = str(method() or '').strip()
+            except Exception:
+                final_result = ''
+        urls = []
+        action_names = []
+        errors = []
+        for attr_name, target in (('urls', urls), ('action_names', action_names), ('errors', errors)):
+            method = getattr(history, attr_name, None)
+            if callable(method):
+                try:
+                    values = method() or []
+                    if isinstance(values, (list, tuple)):
+                        target.extend(str(item) for item in values if str(item).strip())
+                except Exception:
+                    pass
+        answer_parts = [final_result or 'Browser Use task completed.']
+        if urls:
+            answer_parts.append('Visited URLs:\n' + '\n'.join(f'- {url}' for url in urls[-10:]))
+        if action_names:
+            answer_parts.append('Actions:\n' + ', '.join(action_names[-20:]))
+        if errors:
+            answer_parts.append('Errors:\n' + '\n'.join(f'- {err}' for err in errors[-5:]))
+        print(RESULT_PREFIX + json.dumps({
+            'ok': True,
+            'answer': '\n\n'.join(answer_parts).strip(),
+            'metadata': {
+                'urls': urls,
+                'action_names': action_names,
+                'errors': errors,
+                'model': str(cfg.get('model') or ''),
+                'max_steps': int(cfg.get('max_steps') or 30),
+            },
+        }, ensure_ascii=False), flush=True)
+    finally:
+        if cfg.get('close_window_after_task', False):
+            await _close_browser(browser)
+
+
+try:
+    asyncio.run(main())
+except Exception as exc:
+    print(RESULT_PREFIX + json.dumps({
+        'ok': False,
+        'error': str(exc),
+        'traceback': traceback.format_exc(),
+    }, ensure_ascii=False), flush=True)
+    sys.exit(1)
+'''
+
+    def run_blocking(self) -> dict:
+        task = str(self.config.get('task', '') or '').strip()
+        if not task:
+            raise RuntimeError('Browser Use task is empty.')
+        if self._stop_event.is_set():
+            return {'cancelled': True, 'answer': 'Browser Use task was stopped before it started.'}
+        env = os.environ.copy()
+        env.setdefault('BROWSER_USE_CONFIG_DIR', os.path.join(BROCCOLI_APP_DATA_DIR, 'BrowserUseConfig'))
+        os.makedirs(env['BROWSER_USE_CONFIG_DIR'], exist_ok=True)
+        self._process = subprocess.Popen(
+            [sys.executable, '-X', 'faulthandler', '-c', self._worker_code()],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        stdout, stderr = self._process.communicate(json.dumps(self.config, ensure_ascii=False))
+        if self._stop_event.is_set():
+            return {'cancelled': True, 'answer': 'Browser Use task was stopped.'}
+        result = None
+        prefix = '__BROCCOLI_BROWSER_USE_RESULT__'
+        for line in reversed((stdout or '').splitlines()):
+            if line.startswith(prefix):
+                try:
+                    result = json.loads(line[len(prefix):])
+                except Exception:
+                    result = None
+                break
+        if isinstance(result, dict) and result.get('ok'):
+            return result
+        if isinstance(result, dict):
+            error = str(result.get('error', '') or 'Browser Use failed.')
+            trace = str(result.get('traceback', '') or '').strip()
+            raise RuntimeError(error + (('\n\n' + trace) if trace else ''))
+        detail = str(stderr or stdout or '').strip()
+        code = self._process.returncode
+        raise RuntimeError(detail or f'Browser Use worker exited with code {code}.')
+
+    def run(self):
+        try:
+            if self.signals is not None:
+                self.signals.status.emit('Starting Browser Use worker')
+            result = self.run_blocking()
+            if self.signals is not None:
+                self.signals.finished.emit(result)
+        except Exception as exc:
+            if self.signals is not None:
+                self.signals.failed.emit(str(exc))
 
 class AsyncRenderSignals(QObject):
     finished = pyqtSignal(object)
@@ -10428,6 +11431,7 @@ class AsyncRenderThread(threading.Thread):
                 {
                     'request_id': int(self.config.get('request_id', 0) or 0),
                     'html': html_text,
+                    'message_hashes': chat_message_render_hashes(history_messages),
                 }
             )
         except Exception as exc:
@@ -10438,6 +11442,38 @@ class AsyncRenderThread(threading.Thread):
                     'markdown_text': str(self.config.get('markdown_text', '') or ''),
                     'display_prefix_html': str(self.config.get('display_prefix_html', '') or ''),
                     'history_messages': history_messages,
+                }
+            )
+
+
+class ConversationRuntimeRefreshSignals(QObject):
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(object)
+
+
+class ConversationRuntimeRefreshThread(threading.Thread):
+    def __init__(self, config: dict, signals: ConversationRuntimeRefreshSignals):
+        super().__init__(daemon=True)
+        self.config = config
+        self.signals = signals
+
+    def run(self):
+        try:
+            result = refresh_conversation_runtime_data_for_path(
+                str(self.config.get('conversation_path', '') or ''),
+                str(self.config.get('api_key', '') or ''),
+                str(self.config.get('endpoint', '') or ''),
+                str(self.config.get('model', '') or ''),
+                int(self.config.get('timeout', 60) or 60),
+            )
+            result['request_id'] = int(self.config.get('request_id', 0) or 0)
+            self.signals.finished.emit(result)
+        except Exception as exc:
+            self.signals.failed.emit(
+                {
+                    'request_id': int(self.config.get('request_id', 0) or 0),
+                    'conversation_path': str(self.config.get('conversation_path', '') or ''),
+                    'error': str(exc),
                 }
             )
 
@@ -10622,6 +11658,121 @@ class AsyncShareImageThread(threading.Thread):
             self.signals.finished.emit({'request_id': self.request_id, 'image': image})
         except Exception:
             self.signals.finished.emit({'request_id': self.request_id, 'image': self.image})
+
+
+class AsyncTaskCapsuleSignals(QObject):
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+
+class AsyncTaskCapsuleThread(threading.Thread):
+    def __init__(self, config: dict, signals: AsyncTaskCapsuleSignals):
+        super().__init__(daemon=True)
+        self.config = dict(config or {})
+        self.signals = signals
+
+    @staticmethod
+    def _strip_yaml_fence(text: str) -> str:
+        text = str(text or '').strip()
+        match = re.match(r'^```(?:yaml|yml)?\s*(.*?)\s*```$', text, flags=re.IGNORECASE | re.DOTALL)
+        return match.group(1).strip() if match else text
+
+    def run(self):
+        try:
+            api_key = str(self.config.get('api_key', '') or '').strip()
+            endpoint = str(self.config.get('endpoint', '') or '').strip()
+            model = str(self.config.get('model', '') or '').strip()
+            timeout = int(self.config.get('timeout', 60) or 60)
+            markdown_text = str(self.config.get('markdown_text', '') or '').strip()
+            capsule_id = str(self.config.get('capsule_id', '') or '').strip()
+            source_meta = self.config.get('source_meta') if isinstance(self.config.get('source_meta'), dict) else {}
+            source_lines = []
+            if source_meta:
+                for key in ('source', 'title', 'url'):
+                    value = str(source_meta.get(key, '') or '').strip()
+                    if value:
+                        source_lines.append(f'{key}: {value}')
+            source_block = ('Source metadata:\n' + '\n'.join(source_lines) + '\n\n') if source_lines else ''
+            if not api_key or not endpoint or not model:
+                raise RuntimeError('No active API profile is configured.')
+            if not markdown_text:
+                raise RuntimeError('There is no conversation content to summarize.')
+
+            system_prompt = (
+                'You convert a chat conversation into a reusable Task Capsule. '
+                'Remove noise, rejected plans, emotional tone, and intermediate attempts. '
+                'Preserve final decisions, constraints, accepted requirements, unresolved questions, '
+                'handoff notes, and verification criteria. Return only YAML matching the requested schema.'
+            )
+            user_prompt = f"""
+Create a Task Capsule from the conversation below.
+
+Compression rules:
+1. Delete rejected intermediate plans and keep only the final accepted direction.
+2. Fold repeated user clarifications into constraints.
+3. Put examples, source material, files, URLs, and prior outputs under inputs.
+4. Drop user emotion unless it represents a concrete preference.
+5. Do not copy full assistant answers into handoff; summarize what was done and what remains.
+6. Separate actions from acceptance criteria.
+7. Make every field self-contained enough that another AI can execute without reading the original conversation.
+
+Return this exact YAML shape:
+task_capsule:
+  id: {capsule_id}
+  goal: <one-sentence final deliverable or final state>
+  intent: <why this task exists now and decision background>
+  inputs:
+    - type: text | file | url | prior_output
+      ref: <content summary or pointer>
+  constraints:
+    hard: [<must not violate>]
+    soft: [<preference>]
+  actions:
+    - step: <imperative action>
+      expected_output: <output for this step>
+  acceptance:
+    must: [<hard verification criteria>]
+    should: [<soft verification criteria>]
+  handoff:
+    from_model: {model}
+    confidence: <0.0-1.0 estimate>
+    open_questions: [<unresolved questions>]
+    next_role: executor | reviewer | rewriter
+
+{source_block}
+Conversation markdown:
+{markdown_text}
+""".strip()
+            client = create_openai_client(api_key, endpoint, timeout)
+            response = create_chat_completion(
+                client,
+                endpoint=endpoint,
+                model=model,
+                messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': user_prompt},
+                ],
+                stream=False,
+            )
+            content = ''
+            try:
+                content = response.choices[0].message.content or ''
+            except Exception:
+                content = str(response or '')
+            content = self._strip_yaml_fence(content)
+            if not content.strip():
+                raise RuntimeError('Task Capsule generation returned empty output.')
+            self.signals.finished.emit(
+                {
+                    'title': 'Task Capsule',
+                    'text': content.strip(),
+                    'capsule_id': capsule_id,
+                    'dialog_title': str(self.config.get('dialog_title', '') or 'Task Capsule'),
+                    'dialog_subtitle': str(self.config.get('dialog_subtitle', '') or ''),
+                }
+            )
+        except Exception as exc:
+            self.signals.failed.emit(str(exc))
 
 
 class NativeHotkeyTapThread(threading.Thread):
@@ -11646,7 +12797,11 @@ class NavSitePill(QWidget):
     back_requested    = pyqtSignal()
     forward_requested = pyqtSignal()
     home_requested    = pyqtSignal()      # navigate back to this pill's root URL
+    move_left_requested = pyqtSignal()
+    move_right_requested = pyqtSignal()
     url_submitted     = pyqtSignal(str)   # 编辑完成后提交 url
+    hover_entered     = pyqtSignal()
+    hover_left        = pyqtSignal()
 
     CIRCLE_SIZE = 34
     HEIGHT      = 34
@@ -11709,12 +12864,20 @@ class NavSitePill(QWidget):
     # ── 动画 ────────────────────────────────────────────────
     def expand(self):
         self._active = True
-        self._animate(self._target_pill_w())
+        bar = self.parentWidget()
+        if bar is not None and hasattr(bar, '_relayout_pills'):
+            bar._relayout_pills(animated=True)
+        else:
+            self._animate(self._target_pill_w())
 
     def collapse(self):
         self._active = False
         self._le.setVisible(False)
-        self._animate(self.CIRCLE_SIZE)
+        bar = self.parentWidget()
+        if bar is not None and hasattr(bar, '_relayout_pills'):
+            bar._relayout_pills(animated=True)
+        else:
+            self._animate(self.CIRCLE_SIZE)
 
     def _target_pill_w(self):
         """激活 pill 宽度：尽量撑满 bar 内的剩余空间。"""
@@ -11732,7 +12895,15 @@ class NavSitePill(QWidget):
     def sync_active_width(self, animated: bool = False):
         if not self._active:
             return
+        bar = self.parentWidget()
+        if bar is not None and hasattr(bar, '_relayout_pills'):
+            bar._relayout_pills(animated=animated)
+            return
         target = self._target_pill_w()
+        self.set_target_width(target, animated=animated)
+
+    def set_target_width(self, target: int, animated: bool = False):
+        target = max(self.CIRCLE_SIZE, int(target or self.CIRCLE_SIZE))
         if animated:
             self._animate(target)
             return
@@ -11750,6 +12921,7 @@ class NavSitePill(QWidget):
             parent.update()
 
     def _animate(self, target):
+        target = max(self.CIRCLE_SIZE, int(target or self.CIRCLE_SIZE))
         self._t0 = self._cur_w; self._t1 = target
         self._prog = 0.0
         self._timer.start()
@@ -11758,10 +12930,10 @@ class NavSitePill(QWidget):
         self._prog = min(1.0, self._prog + 0.08)
         t = 1.0 - (1.0 - self._prog) ** 3
         self._cur_w = int(self._t0 + (self._t1 - self._t0) * t)
-        self.setFixedWidth(self._cur_w)
+        self.setFixedWidth(max(self.CIRCLE_SIZE, self._cur_w))
         if self._le.isVisible():
-            self._le.setGeometry(self.CIRCLE_SIZE + 4, 2,
-                                 self._cur_w - self.CIRCLE_SIZE - 8, self.HEIGHT - 4)
+            edit_w = max(0, self._cur_w - self.CIRCLE_SIZE - 8)
+            self._le.setGeometry(self.CIRCLE_SIZE + 4, 2, edit_w, self.HEIGHT - 4)
         p = self.parentWidget()
         if p:
             p.update()   # 让 WebNavBar 重绘高亮
@@ -11773,8 +12945,8 @@ class NavSitePill(QWidget):
         if not self._active:
             return
         self._le.setText(self._url)
-        self._le.setGeometry(self.CIRCLE_SIZE + 4, 2,
-                             self._cur_w - self.CIRCLE_SIZE - 8, self.HEIGHT - 4)
+        edit_w = max(0, self._cur_w - self.CIRCLE_SIZE - 8)
+        self._le.setGeometry(self.CIRCLE_SIZE + 4, 2, edit_w, self.HEIGHT - 4)
         self._le.setVisible(True)
         self._le.selectAll()
         self._le.setFocus()
@@ -11810,11 +12982,22 @@ class NavSitePill(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._active:
             self.enter_edit_mode()
 
+    def enterEvent(self, event):
+        self.hover_entered.emit()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hover_left.emit()
+        super().leaveEvent(event)
+
     def contextMenuEvent(self, event):
         from PyQt6.QtWidgets import QMenu
         menu = QMenu(self)
         back_act    = menu.addAction('← Back')
         fwd_act     = menu.addAction('→ Forward')
+        menu.addSeparator()
+        move_left_act = menu.addAction('Move Left')
+        move_right_act = menu.addAction('Move Right')
         menu.addSeparator()
         home_act    = menu.addAction('Home')
         ref_act     = menu.addAction('Refresh')
@@ -11825,6 +13008,10 @@ class NavSitePill(QWidget):
             self.back_requested.emit()
         elif act == fwd_act:
             self.forward_requested.emit()
+        elif act == move_left_act:
+            self.move_left_requested.emit()
+        elif act == move_right_act:
+            self.move_right_requested.emit()
         elif act == home_act:
             self.home_requested.emit()
         elif act == ref_act:
@@ -11839,12 +13026,20 @@ class NavSitePill(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         dark = is_dark_theme(app)
+        bar = self.parentWidget()
+        expanded_by_bar = False
+        if bar is not None and hasattr(bar, '_expanded_index') and hasattr(bar, '_pills'):
+            try:
+                expanded_by_bar = 0 <= bar._expanded_index < len(bar._pills) and bar._pills[bar._expanded_index] is self
+            except Exception:
+                expanded_by_bar = False
+        expanded = self._active or expanded_by_bar
 
         icon_size = 20
         icon_y    = (self.HEIGHT - icon_size) // 2
 
         if self._icon and not self._icon.isNull():
-            if self._active and self._cur_w > self.CIRCLE_SIZE + 4:
+            if expanded and self._cur_w > self.CIRCLE_SIZE + 4:
                 icon_x = (self.CIRCLE_SIZE - icon_size) // 2
             else:
                 icon_x = (self._cur_w - icon_size) // 2
@@ -11867,7 +13062,7 @@ class NavSitePill(QWidget):
                              Qt.AlignmentFlag.AlignCenter,
                              self._label[0].upper() if self._label else '+')
 
-        if self._active and self._cur_w > self.CIRCLE_SIZE + 20:
+        if expanded and self._cur_w > self.CIRCLE_SIZE + 20:
             fade_range = max(1, self._cur_w - self.CIRCLE_SIZE - 20)
             alpha = min(255, int(fade_range / 60 * 255))
             tc = QColor('#F2F2F7' if dark else '#333333'); tc.setAlpha(alpha)
@@ -11875,9 +13070,18 @@ class NavSitePill(QWidget):
             f2 = painter.font(); f2.setPixelSize(12); f2.setBold(False)
             painter.setFont(f2)
             text_x = self.CIRCLE_SIZE + 4
-            painter.drawText(QRect(text_x, 0, self._cur_w - text_x - 6, self.HEIGHT),
+            text_w = max(0, self._cur_w - text_x - 6)
+            if text_w <= 0:
+                painter.end()
+                return
+            elided = painter.fontMetrics().elidedText(
+                self._label,
+                Qt.TextElideMode.ElideMiddle,
+                text_w,
+            )
+            painter.drawText(QRect(text_x, 0, text_w, self.HEIGHT),
                              Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                             self._label)
+                             elided)
         painter.end()
 
 
@@ -12413,6 +13617,7 @@ class WebNavBar(QWidget):
     site_back_requested   = pyqtSignal(int)        # navigate back
     site_forward_requested = pyqtSignal(int)       # navigate forward
     site_home_requested   = pyqtSignal(int)        # navigate to root URL
+    site_move_requested   = pyqtSignal(int, int)   # (from_idx, to_idx)
     PLUS_ICON_PATH = resource_path('plus2.png')
 
     def __init__(self, sites, parent=None):
@@ -12420,9 +13625,22 @@ class WebNavBar(QWidget):
         self._theme_updating = False
         self._sites  = list(sites)
         self._active = 0
+        self._hovered = -1
+        self._hover_candidate = -1
         self._pills  = []
         self._bar_bg = QColor('#FFFFFF')
         self._active_bg = QColor('#DEDEDE')
+        self._layout_margin = 3
+        self._layout_spacing = 4
+        self._expanded_index = 0
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(180)
+        self._hover_timer.timeout.connect(self._commit_hover_candidate)
+        self._hover_clear_timer = QTimer(self)
+        self._hover_clear_timer.setSingleShot(True)
+        self._hover_clear_timer.setInterval(120)
+        self._hover_clear_timer.timeout.connect(self._clear_hover_if_pointer_left)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -12432,44 +13650,110 @@ class WebNavBar(QWidget):
         shadow.setColor(QColor(0, 0, 0, 40))
         self.setGraphicsEffect(shadow)
 
-        self._hbox = QHBoxLayout(self)
-        self._hbox.setContentsMargins(3, 0, 3, 0)
-        self._hbox.setSpacing(4)
-
         for i, site in enumerate(self._sites):
-            pill = NavSitePill(url=site['url'], label=site.get('label', ''), active=(i == 0))
+            pill = NavSitePill(url=site['url'], label=site.get('label', ''), active=(i == 0), parent=self)
             self._connect_pill(pill, i)
             self._pills.append(pill)
-            self._hbox.addWidget(pill)
 
-        self._hbox.addStretch()   # 把 "+" 推到右侧
-
-        self._plus_btn = QPushButton('')
+        self._plus_btn = QPushButton('', self)
         self._plus_btn.setFixedSize(34, 34)
         if os.path.exists(self.PLUS_ICON_PATH):
             self._plus_btn.setIcon(QIcon(self.PLUS_ICON_PATH))
             self._plus_btn.setIconSize(QSize(16, 16))
         self._plus_btn.clicked.connect(self._on_add)
-        self._hbox.addWidget(self._plus_btn)
         self._apply_theme()
-        QTimer.singleShot(0, self._sync_active_pill_width)
-        QTimer.singleShot(80, self._sync_active_pill_width)
+        QTimer.singleShot(0, lambda: self._relayout_pills(animated=False))
+        QTimer.singleShot(80, lambda: self._relayout_pills(animated=False))
 
     def _sync_active_pill_width(self, animated: bool = False):
-        if 0 <= self._active < len(self._pills):
-            pill = self._pills[self._active]
-            if hasattr(pill, 'sync_active_width'):
-                pill.sync_active_width(animated=animated)
+        self._relayout_pills(animated=animated)
+
+    def _valid_url_area_width(self) -> int:
+        plus_w = self._plus_btn.width() if hasattr(self, '_plus_btn') else NavSitePill.CIRCLE_SIZE
+        return max(0, self.width() - self._layout_margin * 2 - plus_w - self._layout_spacing)
+
+    def _expanded_pill_index(self, overlap_mode: bool) -> int:
+        if 0 <= self._hovered < len(self._pills):
+            return self._hovered
+        if overlap_mode:
+            return -1
+        return self._active if 0 <= self._active < len(self._pills) else -1
+
+    def _relayout_pills(self, animated: bool = False):
+        if not hasattr(self, '_plus_btn'):
+            return
+        margin = self._layout_margin
+        spacing = self._layout_spacing
+        circle = NavSitePill.CIRCLE_SIZE
+        y = max(0, (self.height() - circle) // 2)
+        plus_x = max(margin, self.width() - margin - self._plus_btn.width())
+        self._plus_btn.setGeometry(plus_x, y, self._plus_btn.width(), self._plus_btn.height())
+
+        url_left = margin
+        url_right = max(url_left, plus_x - spacing)
+        available = max(0, url_right - url_left)
+        count = len(self._pills)
+        if count <= 0:
+            self._plus_btn.raise_()
             self.update()
+            return
+
+        min_total = count * circle + max(0, count - 1) * spacing
+        overlap_mode = min_total > available
+        expanded_index = self._expanded_pill_index(overlap_mode)
+        self._expanded_index = expanded_index
+
+        widths = [circle for _ in self._pills]
+        positions = []
+        if overlap_mode:
+            if count == 1:
+                step = 0
+            else:
+                step = max(0, (available - circle) / max(1, count - 1))
+            if expanded_index >= 0:
+                expanded_w = min(max(circle, int(available * 0.62)), max(circle, available), 260)
+                widths[expanded_index] = expanded_w
+            for index in range(count):
+                base_x = int(round(url_left + index * step))
+                width = widths[index]
+                if width > circle:
+                    base_x = min(max(url_left, base_x), max(url_left, url_right - width))
+                positions.append(base_x)
+        else:
+            expanded_w = circle
+            if expanded_index >= 0:
+                inactive_total = max(0, count - 1) * (circle + spacing)
+                expanded_w = max(circle, available - inactive_total)
+                widths[expanded_index] = expanded_w
+            x = url_left
+            for index, width in enumerate(widths):
+                positions.append(x)
+                x += width + spacing
+
+        for index, pill in enumerate(self._pills):
+            pill._active = (index == self._active)
+            target_w = max(circle, int(widths[index]))
+            pill.set_target_width(target_w, animated=animated)
+            pill.move(int(positions[index]), y)
+            pill.show()
+
+        for pill in self._pills:
+            pill.raise_()
+        if not overlap_mode and 0 <= self._active < len(self._pills):
+            self._pills[self._active].raise_()
+        if 0 <= self._hovered < len(self._pills):
+            self._pills[self._hovered].raise_()
+        self._plus_btn.raise_()
+        self.update()
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(0, self._sync_active_pill_width)
-        QTimer.singleShot(80, self._sync_active_pill_width)
+        QTimer.singleShot(0, lambda: self._relayout_pills(animated=False))
+        QTimer.singleShot(80, lambda: self._relayout_pills(animated=False))
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._sync_active_pill_width(animated=False)
+        self._relayout_pills(animated=False)
 
     def _apply_theme(self):
         if self._theme_updating:
@@ -12520,17 +13804,97 @@ class WebNavBar(QWidget):
         pill.back_requested.connect(lambda p=pill: self.site_back_requested.emit(self._pills.index(p)))
         pill.forward_requested.connect(lambda p=pill: self.site_forward_requested.emit(self._pills.index(p)))
         pill.home_requested.connect(lambda p=pill: self.site_home_requested.emit(self._pills.index(p)))
+        pill.move_left_requested.connect(lambda p=pill: self._move_pill(p, -1))
+        pill.move_right_requested.connect(lambda p=pill: self._move_pill(p, 1))
         pill.url_submitted.connect(lambda url, p=pill: self._on_url_submitted(p, url))
+        pill.hover_entered.connect(lambda p=pill: self._on_pill_hovered(p))
+        pill.hover_left.connect(lambda p=pill: self._on_pill_unhovered(p))
+
+    def _move_pill(self, pill, delta: int):
+        if pill not in self._pills:
+            return
+        old_idx = self._pills.index(pill)
+        new_idx = old_idx + int(delta)
+        if not (0 <= new_idx < len(self._pills)):
+            return
+        self._pills.pop(old_idx)
+        self._pills.insert(new_idx, pill)
+        if self._active == old_idx:
+            self._active = new_idx
+        elif old_idx < self._active <= new_idx:
+            self._active -= 1
+        elif new_idx <= self._active < old_idx:
+            self._active += 1
+        if self._hovered == old_idx:
+            self._hovered = new_idx
+        elif old_idx < self._hovered <= new_idx:
+            self._hovered -= 1
+        elif new_idx <= self._hovered < old_idx:
+            self._hovered += 1
+        for index, item in enumerate(self._pills):
+            item._active = (index == self._active)
+        self._relayout_pills(animated=True)
+        self.site_move_requested.emit(old_idx, new_idx)
+
+    def _on_pill_hovered(self, pill):
+        if pill not in self._pills:
+            return
+        self._hover_candidate = self._pills.index(pill)
+        self._hover_clear_timer.stop()
+        self._hover_timer.start()
+
+    def _on_pill_unhovered(self, pill):
+        if pill not in self._pills:
+            return
+        idx = self._pills.index(pill)
+        if self._hover_candidate == idx:
+            self._hover_candidate = -1
+            self._hover_timer.stop()
+        if self._hovered == idx:
+            self._hover_clear_timer.start()
+
+    def _pointer_inside_pill(self, pill, pad: int = 8) -> bool:
+        try:
+            local = pill.mapFromGlobal(QCursor.pos())
+            return pill.rect().adjusted(-pad, -pad, pad, pad).contains(local)
+        except Exception:
+            return False
+
+    def _commit_hover_candidate(self):
+        idx = self._hover_candidate
+        if not (0 <= idx < len(self._pills)):
+            return
+        pill = self._pills[idx]
+        if not self._pointer_inside_pill(pill, pad=10):
+            return
+        if self._hovered == idx:
+            return
+        self._hovered = idx
+        self._relayout_pills(animated=True)
+
+    def _clear_hover_if_pointer_left(self):
+        idx = self._hovered
+        if not (0 <= idx < len(self._pills)):
+            self._hovered = -1
+            return
+        if self._pointer_inside_pill(self._pills[idx], pad=12):
+            return
+        self._hovered = -1
+        self._relayout_pills(animated=True)
 
     # ── 选中 ─────────────────────────────────────────────────
     def _select_pill(self, pill):
         idx = self._pills.index(pill)
         if idx == self._active:
-            self._sync_active_pill_width(animated=False)
+            self._relayout_pills(animated=False)
             return
-        self._pills[self._active].collapse()
+        if 0 <= self._active < len(self._pills):
+            self._pills[self._active]._active = False
+            self._pills[self._active]._le.setVisible(False)
         self._active = idx
-        self._pills[idx].expand()
+        self._pills[idx]._active = True
+        self._hovered = -1
+        self._relayout_pills(animated=True)
         self.view_selected.emit(idx)
 
     def _select(self, idx):
@@ -12543,15 +13907,18 @@ class WebNavBar(QWidget):
 
     # ── "+" 新增（直接出现可输入的 pill）────────────────────
     def _on_add(self):
-        self._pills[self._active].collapse()
+        if 0 <= self._active < len(self._pills):
+            self._pills[self._active]._active = False
+            self._pills[self._active]._le.setVisible(False)
         new_idx = len(self._pills)
-        pill = NavSitePill(url='', label='', active=True, edit_on_show=True)
+        pill = NavSitePill(url='', label='', active=True, edit_on_show=True, parent=self)
         self._connect_pill(pill, new_idx)
         self._pills.append(pill)
-        self._hbox.insertWidget(self._hbox.count() - 2, pill)  # before stretch + "+"
         self._active = new_idx
-        pill.expand()
-        QTimer.singleShot(0, self._sync_active_pill_width)
+        self._hovered = -1
+        pill.show()
+        self._relayout_pills(animated=True)
+        QTimer.singleShot(80, pill.enter_edit_mode)
 
     # ── URL 提交 ──────────────────────────────────────────────
     def _on_url_submitted(self, pill, url):
@@ -12563,13 +13930,14 @@ class WebNavBar(QWidget):
         if len(self._pills) <= 1:
             return
         idx = self._pills.index(pill)
-        self._hbox.removeWidget(pill)
         pill.deleteLater()
         self._pills.pop(idx)
         new_active = min(self._active, len(self._pills) - 1)
         self._active = new_active
-        self._pills[self._active].expand()
-        QTimer.singleShot(0, self._sync_active_pill_width)
+        self._hovered = -1
+        for index, item in enumerate(self._pills):
+            item._active = (index == self._active)
+        self._relayout_pills(animated=True)
         self.view_selected.emit(self._active)
         self.site_deleted.emit(idx)
         self.update()
@@ -12581,14 +13949,17 @@ class WebNavBar(QWidget):
 
     # ── 外部：新增已确认的 pill（无 edit_on_show，URL 已知）─
     def add_pill(self, url, label=''):
-        self._pills[self._active].collapse()
+        if 0 <= self._active < len(self._pills):
+            self._pills[self._active]._active = False
+            self._pills[self._active]._le.setVisible(False)
         new_idx = len(self._pills)
-        pill = NavSitePill(url=url, label=label or NavSitePill._domain(url), active=True)
+        pill = NavSitePill(url=url, label=label or NavSitePill._domain(url), active=True, parent=self)
         self._connect_pill(pill, new_idx)
         self._pills.append(pill)
-        self._hbox.insertWidget(self._hbox.count() - 2, pill)
         self._active = new_idx
-        QTimer.singleShot(0, self._sync_active_pill_width)
+        self._hovered = -1
+        pill.show()
+        self._relayout_pills(animated=True)
 
     # ── 绘制：白色圆角 bar + 激活 pill 高亮 ─────────────────
     def paintEvent(self, event):
@@ -12601,9 +13972,11 @@ class WebNavBar(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(0, 0, self.width(), self.height(), r, r)
 
-        # 激活 pill 高亮（深色圆角矩形，覆盖激活 pill 的几何范围）
-        if 0 <= self._active < len(self._pills):
-            p = self._pills[self._active]
+        # Expanded URL pill highlight. In compact overlap mode this may be the
+        # hovered URL pill; the fixed "+" button is never part of this geometry.
+        highlight_index = self._expanded_index if 0 <= self._expanded_index < len(self._pills) else self._active
+        if 0 <= highlight_index < len(self._pills):
+            p = self._pills[highlight_index]
             rect = p.geometry()
             if rect.isValid() and rect.width() > NavSitePill.CIRCLE_SIZE:
                 pr = rect.height() / 2.0
@@ -12679,6 +14052,8 @@ class WebViewPanel(QWidget):
         self._automation_locks = {}
         self._hidden_since = {}
         self._lifecycle_mode = DEFAULT_WEB_LIFECYCLE_MODE
+        self._keep_active_mode = 'active'
+        self._keep_active_indices = set()
 
         # ── 每个 site 一个独立 view，全部预加载 ──
         self._stack = QStackedWidget()
@@ -12705,6 +14080,7 @@ class WebViewPanel(QWidget):
         self._nav.site_back_requested.connect(self._on_site_back)
         self._nav.site_forward_requested.connect(self._on_site_forward)
         self._nav.site_home_requested.connect(self._on_site_home)
+        self._nav.site_move_requested.connect(self._on_site_moved)
 
         nav_wrap = QWidget()
         nwl = QHBoxLayout(nav_wrap)
@@ -12778,6 +14154,26 @@ class WebViewPanel(QWidget):
         self._hidden_since.clear()
         self._refresh_lifecycle_states()
 
+    def set_keep_active_targets(self, mode: str = 'active', indices=None):
+        mode = mode if mode in ('active', 'all', 'custom') else 'active'
+        self._keep_active_mode = mode
+        if mode == 'custom':
+            count = len(self._views)
+            normalized_indices = set()
+            for idx in indices or []:
+                try:
+                    idx = int(idx)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= idx < count and self._views[idx] is not None:
+                    normalized_indices.add(idx)
+            self._keep_active_indices = normalized_indices
+            if not self._keep_active_indices:
+                self._keep_active_mode = 'active'
+        else:
+            self._keep_active_indices.clear()
+        self._refresh_lifecycle_states()
+
     def hold_views_active(self, views, hold_ms: int = 90000):
         token = object()
         discarded_state = self._page_lifecycle_state('Discarded')
@@ -12808,27 +14204,33 @@ class WebViewPanel(QWidget):
         discarded_state = self._page_lifecycle_state('Discarded')
         if active_state is None:
             return
-        mode = normalize_web_lifecycle_mode(getattr(self, '_lifecycle_mode', DEFAULT_WEB_LIFECYCLE_MODE))
+        lifecycle_mode = normalize_web_lifecycle_mode(getattr(self, '_lifecycle_mode', DEFAULT_WEB_LIFECYCLE_MODE))
+        keep_mode = getattr(self, '_keep_active_mode', 'active')
+        keep_indices = set(getattr(self, '_keep_active_indices', set()) or set())
         now_ms = int(time.monotonic() * 1000)
         for idx, view in enumerate(self._views):
             if view is None:
                 continue
             locked = bool(self._automation_locks.get(view))
-            visible_active = bool(self._panel_visible and idx == self._active_idx)
-            if mode == 'off':
+            target_active = (
+                keep_mode == 'all'
+                or (keep_mode == 'custom' and idx in keep_indices)
+                or (keep_mode not in ('all', 'custom') and idx == self._active_idx)
+            )
+            if lifecycle_mode == 'off':
                 self._hidden_since.pop(view, None)
                 self._set_view_lifecycle_state(view, active_state)
-            elif visible_active or locked or self._view_is_loading(view):
+            elif target_active or locked or self._view_is_loading(view):
                 self._hidden_since.pop(view, None)
                 self._set_view_lifecycle_state(view, active_state)
             elif frozen_state is not None and self._view_allows_freeze(view):
                 hidden_since = self._hidden_since.setdefault(view, now_ms)
                 hidden_ms = max(0, now_ms - int(hidden_since))
-                if mode == 'aggressive' and discarded_state is not None and hidden_ms >= WEB_AGGRESSIVE_DISCARD_DELAY_MS:
+                if lifecycle_mode == 'aggressive' and discarded_state is not None and hidden_ms >= WEB_AGGRESSIVE_DISCARD_DELAY_MS:
                     self._set_view_lifecycle_state(view, discarded_state)
                 else:
                     self._set_view_lifecycle_state(view, frozen_state)
-                    if mode == 'aggressive':
+                    if lifecycle_mode == 'aggressive':
                         delay = max(1000, WEB_AGGRESSIVE_DISCARD_DELAY_MS - hidden_ms + 50)
                         QTimer.singleShot(delay, self._refresh_lifecycle_states)
             else:
@@ -13096,6 +14498,32 @@ class WebViewPanel(QWidget):
                 self._views[idx].load(QUrl(self._sites[idx]['url']))
         except Exception:
             pass
+
+    def _on_site_moved(self, old_idx: int, new_idx: int):
+        try:
+            old_idx = int(old_idx)
+            new_idx = int(new_idx)
+        except (TypeError, ValueError):
+            return
+        if old_idx == new_idx:
+            return
+        if not (0 <= old_idx < len(self._sites) and 0 <= new_idx < len(self._sites)):
+            return
+        if not (0 <= old_idx < len(self._views) and 0 <= new_idx < len(self._views)):
+            return
+        site = self._sites.pop(old_idx)
+        self._sites.insert(new_idx, site)
+        view = self._views.pop(old_idx)
+        self._views.insert(new_idx, view)
+        self._stack.removeWidget(view)
+        self._stack.insertWidget(new_idx, view)
+        if self._prompt_dock is not None and hasattr(self._prompt_dock, 'shift_target_indices_after_move'):
+            self._prompt_dock.shift_target_indices_after_move(old_idx, new_idx)
+        self._active_idx = new_idx if self._active_idx == old_idx else self._nav._active
+        self._stack.setCurrentIndex(self._active_idx)
+        self._save_sites()
+        self._refresh_lifecycle_states()
+        self.view_switched.emit()
 
     # ── 信号回调 ──────────────────────────────────────────────
     def _on_icon(self, idx, icon):
@@ -14598,6 +16026,108 @@ class AssistantPromptPopup(QFrame):
             self._apply_theme()
 
 
+class SlashCommandPopup(QFrame):
+    selected = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._theme_updating = False
+        self.setObjectName('SlashCommandPopup')
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.hide()
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setXOffset(0)
+        shadow.setYOffset(4)
+        shadow.setColor(QColor(0, 0, 0, 36))
+        self.setGraphicsEffect(shadow)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(0)
+        self.list_widget = QListWidget(self)
+        self.list_widget.setFrameShape(QFrame.Shape.NoFrame)
+        self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list_widget.itemClicked.connect(self._emit_item)
+        layout.addWidget(self.list_widget)
+        self._apply_theme()
+        self.refresh_items('')
+
+    def refresh_items(self, query: str):
+        query = str(query or '').strip().lower()
+        self.list_widget.clear()
+        for command, _capability, description in SPECIALIZED_SLASH_COMMANDS:
+            if query and not command.lower().startswith(query):
+                continue
+            item = QListWidgetItem(f'{command}    {description}')
+            item.setData(Qt.ItemDataRole.UserRole, command + ' ')
+            self.list_widget.addItem(item)
+        if self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(0)
+        self.setFixedHeight(8 * 2 + max(1, self.list_widget.count()) * 30)
+
+    def _emit_item(self, item: QListWidgetItem):
+        if item is None:
+            return
+        self.selected.emit(str(item.data(Qt.ItemDataRole.UserRole) or ''))
+
+    def current_command(self) -> str:
+        item = self.list_widget.currentItem()
+        return str(item.data(Qt.ItemDataRole.UserRole) or '') if item is not None else ''
+
+    def show_for_anchor(self, anchor_widget: QWidget, query: str = ''):
+        self.refresh_items(query)
+        if self.list_widget.count() <= 0:
+            self.hide()
+            return
+        win = self.window()
+        anchor_rect = QRect(anchor_widget.mapTo(win, QPoint(0, 0)), anchor_widget.size())
+        width = min(max(320, anchor_rect.width()), max(320, win.width() - 20))
+        x = max(10, min(anchor_rect.x(), win.width() - width - 10))
+        y = max(10, anchor_rect.y() - self.height() - 8)
+        self.setGeometry(QRect(x, y, width, self.height()))
+        self.show()
+        self.raise_()
+
+    def _apply_theme(self):
+        if self._theme_updating:
+            return
+        self._theme_updating = True
+        dark = is_dark_theme(app)
+        try:
+            self.setStyleSheet(
+                f"QFrame#SlashCommandPopup {{ background: {'#2D2D2D' if dark else '#FFFFFF'}; border-radius: 14px; }}"
+            )
+            self.list_widget.setStyleSheet(f"""
+                QListWidget {{
+                    border: none;
+                    background: transparent;
+                    color: {'#F2F2F7' if dark else '#20242B'};
+                    font-size: 12px;
+                    outline: none;
+                }}
+                QListWidget::item {{
+                    min-height: 28px;
+                    padding: 4px 8px;
+                    border-radius: 8px;
+                }}
+                QListWidget::item:selected {{
+                    background: {'#3A3A3C' if dark else '#EEF5FF'};
+                    color: {'#FFFFFF' if dark else '#0A4E9B'};
+                }}
+            """)
+        finally:
+            self._theme_updating = False
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if self._theme_updating:
+            return
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._apply_theme()
+
+
 class AssistantCircleButton(QPushButton):
     """Round icon button for assistant-style bottom bars."""
     def __init__(self, text, parent=None, always_dark=False):
@@ -15578,6 +17108,7 @@ class ExternalPromptDock(QWidget):
 
         self.target_selector = TargetSelectorButton(self, always_dark=False)
         self.target_selector.setFixedWidth(120)
+        self.target_selector.targetChanged.connect(self._apply_target_lifecycle_policy)
         self.target_combo = self.target_selector
         self.prev_tab_button = ExternalTabSwitchButton(-1, self)
         self.next_tab_button = ExternalTabSwitchButton(1, self)
@@ -15789,6 +17320,7 @@ class ExternalPromptDock(QWidget):
         self.target_selector.set_panel(panel)
         self.prev_tab_button.set_panel(panel)
         self.next_tab_button.set_panel(panel)
+        self._apply_target_lifecycle_policy()
         try:
             panel.view_switched.connect(self.refresh_tab_switch_buttons)
         except Exception:
@@ -15796,11 +17328,26 @@ class ExternalPromptDock(QWidget):
 
     def shift_target_indices_after_insert(self, index: int):
         self.target_selector.shift_target_indices_after_insert(index)
+        self._apply_target_lifecycle_policy()
         self.refresh_tab_switch_buttons()
 
     def shift_target_indices_after_delete(self, index: int):
         self.target_selector.shift_target_indices_after_delete(index)
+        self._apply_target_lifecycle_policy()
         self.refresh_tab_switch_buttons()
+
+    def shift_target_indices_after_move(self, old_index: int, new_index: int):
+        self.target_selector.shift_target_indices_after_move(old_index, new_index)
+        self._apply_target_lifecycle_policy()
+        self.refresh_tab_switch_buttons()
+
+    def _apply_target_lifecycle_policy(self):
+        panel = getattr(self, '_target_panel', None)
+        if panel is None or not hasattr(panel, 'set_keep_active_targets'):
+            return
+        mode = self.target_selector.target_mode()
+        indices = self.target_selector.selected_target_indices(panel) if mode == 'custom' else []
+        panel.set_keep_active_targets(mode, indices)
 
     def refresh_tab_switch_buttons(self):
         self.prev_tab_button.refresh()
@@ -16098,7 +17645,9 @@ class TranslationWorkerThread(threading.Thread):
                 base_url=self.config['endpoint'],
                 timeout=int(self.config.get('timeout', 60) or 60),
             )
-            response = client.chat.completions.create(
+            response = create_chat_completion(
+                client,
+                endpoint=self.config.get('endpoint', ''),
                 model=self.config['model'],
                 messages=[
                     {
@@ -18950,6 +20499,211 @@ class OutputsPanel(QWidget):
             signal.emit(output)
 
 
+class ShareTextDialog(QDialog):
+    apply_requested = pyqtSignal(object)
+
+    def __init__(self, title: str, text: str, owner=None, parent=None, subtitle: str = ''):
+        super().__init__(parent)
+        self.owner = owner
+        self._theme_updating = False
+        self._panel_margin = 14
+        self._panel_radius = 26
+        self.setWindowTitle(str(title or 'Share Text'))
+        self.setModal(False)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.resize(680, 620)
+        self.setMinimumSize(420, 420)
+
+        self.title_lbl = QLabel(str(title or 'Share Text'), self)
+        self.subtitle_lbl = QLabel(str(subtitle or 'Edit before copying or sending.'), self)
+        self.text_edit = QPlainTextEdit(self)
+        self.text_edit.setPlainText(str(text or ''))
+        self.text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+
+        self.destination_combo = DropdownButton(self, compact_light=True)
+        self.destination_combo.setFixedWidth(180)
+        self.destination_combo.addItem('API', 1)
+        self.destination_combo.addItem('Web', 0)
+        self.destination_combo.addItem('Localhost', 2)
+        self.destination_combo.addItem('Terminal', 3)
+        self.destination_combo.currentIndexChanged.connect(self._refresh_target_controls)
+
+        self.mode_combo = DropdownButton(self, compact_light=True)
+        self.mode_combo.setFixedWidth(180)
+        self.mode_combo.addItem('Replace', 'replace')
+        self.mode_combo.addItem('Append', 'append')
+
+        self.api_new_checkbox = QCheckBox('Start new API conversation first', self)
+        self.url_label = QLabel('URL', self)
+        self.url_combo = DropdownButton(self, compact_light=True)
+        self.url_combo.setMinimumWidth(300)
+
+        target_form = QFormLayout()
+        target_form.setContentsMargins(0, 0, 0, 0)
+        target_form.setSpacing(8)
+        target_form.addRow('Destination', self.destination_combo)
+        target_form.addRow('Mode', self.mode_combo)
+        target_form.addRow('', self.api_new_checkbox)
+        target_form.addRow(self.url_label, self.url_combo)
+
+        self.copy_button = MacNormalButton('Copy Text', self)
+        self.apply_button = MacNormalButton('Apply', self)
+        self.close_button = MacNormalButton('Close', self)
+        for button in (self.copy_button, self.apply_button, self.close_button):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedWidth(max(90, button.sizeHint().width()))
+        self.copy_button.clicked.connect(self._copy_text)
+        self.apply_button.clicked.connect(self._emit_apply)
+        self.close_button.clicked.connect(self.close)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(10)
+        button_row.addStretch()
+        button_row.addWidget(self.copy_button)
+        button_row.addWidget(self.apply_button)
+        button_row.addWidget(self.close_button)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(36, 34, 36, 34)
+        layout.setSpacing(12)
+        layout.addWidget(self.title_lbl)
+        layout.addWidget(self.subtitle_lbl)
+        layout.addWidget(self.text_edit, 1)
+        layout.addLayout(target_form)
+        layout.addLayout(button_row)
+
+        self._refresh_target_controls()
+        self._apply_theme()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        dark = is_dark_theme(app)
+        panel_rect = QRectF(
+            self._panel_margin,
+            self._panel_margin,
+            self.width() - self._panel_margin * 2,
+            self.height() - self._panel_margin * 2,
+        )
+        bg_path = QPainterPath()
+        bg_path.addRoundedRect(panel_rect, self._panel_radius, self._panel_radius)
+        painter.fillPath(bg_path, QColor('#2D2D2D' if dark else '#FFFFFF'))
+        painter.setPen(QPen(QColor('#3A3A3A' if dark else '#ECECEC'), 1))
+        painter.drawPath(bg_path)
+        painter.end()
+
+    def text(self) -> str:
+        return self.text_edit.toPlainText()
+
+    def fit_to_parent(self, margin: int = 28):
+        parent = self.parentWidget()
+        if isinstance(parent, QWidget):
+            base = parent.rect()
+            max_w = max(420, base.width() - int(margin) * 2)
+            max_h = max(420, base.height() - int(margin) * 2)
+        else:
+            screen = QApplication.primaryScreen()
+            available = screen.availableGeometry() if screen is not None else QRect(0, 0, 900, 700)
+            max_w = max(420, available.width() - int(margin) * 2)
+            max_h = max(420, available.height() - int(margin) * 2)
+        width = min(680, max_w)
+        height = min(620, max_h)
+        self.resize(width, height)
+
+    def _copy_text(self):
+        QApplication.clipboard().setText(self.text())
+        show_broccoli_message(self, 'Copied', 'Text copied to clipboard.')
+
+    def _emit_apply(self):
+        text = self.text().strip()
+        if not text:
+            show_broccoli_message(self, 'Empty text', 'There is no text to send.')
+            return
+        target_index = int(self.destination_combo.currentData())
+        mode = str(self.mode_combo.currentData() or 'replace')
+        payload = {
+            'text': text,
+            'target_index': target_index,
+            'append': mode == 'append',
+            'new_conversation': bool(self.api_new_checkbox.isChecked()) if target_index == 1 else False,
+            'site_index': None,
+        }
+        if target_index in (0, 2) and self.url_combo.count():
+            site_data = self.url_combo.currentData()
+            try:
+                payload['site_index'] = int(site_data)
+            except (TypeError, ValueError):
+                payload['site_index'] = None
+        self.apply_requested.emit(payload)
+
+    def _refresh_target_controls(self):
+        try:
+            target_index = int(self.destination_combo.currentData())
+        except (TypeError, ValueError):
+            target_index = 1
+        is_api = target_index == 1
+        is_external = target_index in (0, 2)
+        self.api_new_checkbox.setVisible(is_api)
+        self.url_label.setVisible(is_external)
+        self.url_combo.setVisible(is_external)
+        self.url_combo.clear()
+        if is_external and self.owner is not None and hasattr(self.owner, '_external_prompt_panel_for_index'):
+            panel, _dock = self.owner._external_prompt_panel_for_index(target_index)
+            items = panel.target_items() if panel is not None and hasattr(panel, 'target_items') else []
+            for item in items:
+                idx = int(item.get('index', -1))
+                label = str(item.get('label', '') or item.get('url', '') or f'Tab {idx + 1}')
+                url = str(item.get('url', '') or '')
+                display = f'{label} - {url}' if url and url != label else label
+                self.url_combo.addItem(display, idx)
+            if not items:
+                self.url_combo.addItem('Active URL', None)
+
+    def _apply_theme(self):
+        if self._theme_updating:
+            return
+        self._theme_updating = True
+        dark = is_dark_theme(app)
+        bg = '#2D2D2D' if dark else '#FFFFFF'
+        fg = '#F2F2F7' if dark else '#20242B'
+        muted = '#A7AEB8' if dark else '#6D7580'
+        input_bg = '#343436' if dark else '#F7F8FA'
+        border = '#4A4B4F' if dark else '#DDE2EA'
+        try:
+            self.setStyleSheet(
+                'QDialog { background: transparent; }'
+                f'QPlainTextEdit {{ background: {input_bg}; color: {fg}; '
+                f'border: 1px solid {border}; border-radius: 8px; padding: 8px; }}'
+                f'QLabel {{ color: {fg}; }}'
+                f'QCheckBox {{ color: {fg}; }}'
+            )
+            self.title_lbl.setStyleSheet(
+                f'color: {fg}; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
+                'font-size: 18px; font-weight: 700;'
+            )
+            self.subtitle_lbl.setStyleSheet(
+                f'color: {muted}; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 12px;'
+            )
+            for combo in (self.destination_combo, self.mode_combo, self.url_combo):
+                combo._force_dark = dark
+                combo._update_style()
+            for button in (self.copy_button, self.apply_button, self.close_button):
+                button._force_dark = dark
+                button.update_theme()
+            self.update()
+        finally:
+            self._theme_updating = False
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if self._theme_updating:
+            return
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._apply_theme()
+
+
 class SharePanel(QWidget):
     copy_requested = pyqtSignal()
     save_requested = pyqtSignal()
@@ -19834,8 +21588,13 @@ class MyWidget(QWidget):  # 主窗口
         self.text1.setPlaceholderText('Your prompts here...')
         self._text1_popup = AssistantPromptPopup(self)
         self._text1_popup.edit.setPlaceholderText('Your prompts here...')
+        self._slash_command_popup = SlashCommandPopup(self)
+        self._slash_command_popup.selected.connect(self._insert_slash_command)
         self._prompt_syncing = False
         self.text1.textChanged.connect(self._sync_prompt_from_inline)
+        self.text1.textChanged.connect(self._refresh_slash_command_popup)
+        self.text1.installEventFilter(self)
+        self._slash_command_popup.list_widget.installEventFilter(self)
         self._text1_popup.edit.textChanged.connect(self._sync_prompt_from_popup)
         self.text1.multiline_changed.connect(lambda _state: self._refresh_text1_popup_visibility())
         self.text1.anchor_geometry_changed.connect(self._update_text1_popup_geometry)
@@ -20452,11 +22211,25 @@ class MyWidget(QWidget):  # 主窗口
         self._active_chat_request = None
         self._active_chat_signals = None
         self._active_chat_thread = None
+        self._active_browser_use_request = None
+        self._active_browser_use_signals = None
+        self._active_browser_use_thread = None
         self._mcp_conversation_allowlist = set()
         self._active_render_request_id = 0
         self._active_render_signals = None
         self._active_render_thread = None
+        self._conversation_runtime_refresh_request_id = 0
+        self._conversation_runtime_refresh_workers = []
         self._pending_real2_scroll = False
+        self._rendered_message_hashes = []
+        self._rendered_conversation_path = ''
+        self._message_display_html_cache = {}
+        self._structured_transfer_active = False
+        self._structured_transfer_messages = []
+        self._structured_transfer_last_signature = ''
+        self._structured_transfer_autosave_timer = QTimer(self)
+        self._structured_transfer_autosave_timer.setInterval(2500)
+        self._structured_transfer_autosave_timer.timeout.connect(self._autosave_structured_transfer_edits)
         self._selection_context_widgets = set()
         self._install_selection_context_menus()
         self._daily_memory_rollup_running = False
@@ -20518,12 +22291,84 @@ class MyWidget(QWidget):  # 主窗口
                 pass
 
     def eventFilter(self, obj, event):
+        slash_popup = getattr(self, '_slash_command_popup', None)
+        if obj is getattr(self, 'text1', None) and event.type() == QEvent.Type.KeyPress:
+            if slash_popup is not None and slash_popup.isVisible():
+                key = event.key()
+                if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+                    count = slash_popup.list_widget.count()
+                    if count:
+                        row = slash_popup.list_widget.currentRow()
+                        delta = 1 if key == Qt.Key.Key_Down else -1
+                        slash_popup.list_widget.setCurrentRow(max(0, min(count - 1, row + delta)))
+                    return True
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Tab):
+                    command = slash_popup.current_command()
+                    if command:
+                        self._insert_slash_command(command)
+                        return True
+                if key == Qt.Key.Key_Escape:
+                    slash_popup.hide()
+                    return True
+        if slash_popup is not None and obj is slash_popup.list_widget and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Tab):
+                command = slash_popup.current_command()
+                if command:
+                    self._insert_slash_command(command)
+                    return True
+            if event.key() == Qt.Key.Key_Escape:
+                slash_popup.hide()
+                self.text1.setFocus()
+                return True
         if isinstance(obj, QWebEngineView):
             return False
         if event.type() == QEvent.Type.ContextMenu and self._is_selection_context_widget(obj):
             if self._handle_selection_context_menu(obj, event):
                 return True
         return super().eventFilter(obj, event)
+
+    def _current_slash_query(self) -> str:
+        text = self.text1.toPlainText()
+        cursor_pos = self.text1.textCursor().position()
+        before_cursor = text[:cursor_pos]
+        line_start = before_cursor.rfind('\n') + 1
+        current_line = before_cursor[line_start:]
+        stripped = current_line.lstrip()
+        if not stripped.startswith('/'):
+            return ''
+        return stripped
+
+    def _refresh_slash_command_popup(self):
+        popup = getattr(self, '_slash_command_popup', None)
+        if popup is None:
+            return
+        query = self._current_slash_query()
+        focus_widget = QApplication.focusWidget()
+        focus_ok = focus_widget is self.text1 or focus_widget is popup.list_widget
+        if query and focus_ok and self.stacked_widget.currentIndex() == 1:
+            popup.show_for_anchor(self.text1, query)
+        else:
+            popup.hide()
+
+    def _insert_slash_command(self, command: str):
+        command = str(command or '')
+        if not command:
+            return
+        cursor = self.text1.textCursor()
+        text = self.text1.toPlainText()
+        pos = cursor.position()
+        before = text[:pos]
+        line_start = before.rfind('\n') + 1
+        line_prefix = text[line_start:pos]
+        slash_offset = len(line_prefix) - len(line_prefix.lstrip())
+        replace_start = line_start + slash_offset
+        cursor.setPosition(replace_start)
+        cursor.setPosition(pos, QTextCursor.MoveMode.KeepAnchor)
+        cursor.insertText(command)
+        self.text1.setTextCursor(cursor)
+        if getattr(self, '_slash_command_popup', None) is not None:
+            self._slash_command_popup.hide()
+        self.text1.setFocus()
 
     def _selection_context_owner(self, obj):
         current = obj
@@ -20664,39 +22509,61 @@ class MyWidget(QWidget):  # 主窗口
         if self.stacked_widget.currentIndex() != index:
             self.stacked_widget.setCurrentIndex(index)
 
+    def _route_text_to_api_prompt(self, text: str, append: bool = False, new_conversation: bool = False):
+        text = str(text or '').strip()
+        if not text:
+            return
+        if new_conversation:
+            self.ClearX()
+        self._select_main_tab(1)
+        self._set_plain_text_prompt(self.text1, text, append)
+        self.text1.setFocus()
+        self._refresh_text1_popup_visibility()
+
+    def _route_text_to_external_prompt(self, target_index: int, text: str, append: bool = False, site_index=None):
+        text = str(text or '').strip()
+        if not text:
+            return
+        target_index = int(target_index)
+        self._select_main_tab(target_index)
+        panel, dock = self._external_prompt_panel_for_index(target_index)
+        if panel is None or dock is None:
+            return
+        try:
+            if site_index is not None:
+                panel.select_site(int(site_index))
+        except Exception:
+            pass
+        panel.set_prompt_dock_visible(True, animated=True)
+        self._set_plain_text_prompt(dock.prompt_edit, text, append)
+        dock.prompt_edit.setFocus()
+
+    def _route_text_to_terminal_prompt(self, text: str, append: bool = False):
+        text = str(text or '').strip()
+        if not text:
+            return
+        self._select_main_tab(3)
+        terminal = getattr(self, 'terminal_widget', None)
+        if terminal is not None:
+            self._set_plain_text_prompt(terminal.input_line, text, append)
+            terminal.input_line.setFocus()
+
     def _route_selection_to_prompt(self, target_index: int, text: str, append: bool = False):
         text = str(text or '').strip()
         if not text:
             return
         target_index = int(target_index)
         if target_index == 0:
-            self._select_main_tab(0)
-            panel, dock = self._external_prompt_panel_for_index(0)
-            if panel is not None and dock is not None:
-                panel.set_prompt_dock_visible(True, animated=True)
-                self._set_plain_text_prompt(dock.prompt_edit, text, append)
-                dock.prompt_edit.setFocus()
+            self._route_text_to_external_prompt(0, text, append)
             return
         if target_index == 1:
-            self._select_main_tab(1)
-            self._set_plain_text_prompt(self.text1, text, append)
-            self.text1.setFocus()
-            self._refresh_text1_popup_visibility()
+            self._route_text_to_api_prompt(text, append)
             return
         if target_index == 2:
-            self._select_main_tab(2)
-            panel, dock = self._external_prompt_panel_for_index(2)
-            if panel is not None and dock is not None:
-                panel.set_prompt_dock_visible(True, animated=True)
-                self._set_plain_text_prompt(dock.prompt_edit, text, append)
-                dock.prompt_edit.setFocus()
+            self._route_text_to_external_prompt(2, text, append)
             return
         if target_index == 3:
-            self._select_main_tab(3)
-            terminal = getattr(self, 'terminal_widget', None)
-            if terminal is not None:
-                self._set_plain_text_prompt(terminal.input_line, text, append)
-                terminal.input_line.setFocus()
+            self._route_text_to_terminal_prompt(text, append)
 
     def _add_selected_text_output(self, text: str):
         text = str(text or '').strip()
@@ -20802,6 +22669,8 @@ class MyWidget(QWidget):  # 主窗口
             return
         if self._text1_popup.isVisible():
             self._text1_popup.show_for_anchor(self.text1)
+        if hasattr(self, '_slash_command_popup') and self._slash_command_popup.isVisible():
+            self._slash_command_popup.show_for_anchor(self.text1, self._current_slash_query())
 
     def _refresh_text1_popup_visibility(self):
         if not hasattr(self, '_text1_popup'):
@@ -20821,6 +22690,7 @@ class MyWidget(QWidget):  # 主窗口
 
     def _on_prompt_focus_changed(self, _old, _new):
         QTimer.singleShot(0, self._refresh_text1_popup_visibility)
+        QTimer.singleShot(0, self._refresh_slash_command_popup)
 
     def _sync_branch_state_metadata(self, state: dict | None):
         if not isinstance(state, dict):
@@ -21503,6 +23373,166 @@ class MyWidget(QWidget):  # 主窗口
     def ShareX(self):
         if self.stacked_widget.currentIndex() != 1:
             return
+        choice = ask_broccoli_message(
+            self,
+            'Share',
+            'Choose what to share from the current API conversation.',
+            ['Full Markdown', 'Task Capsule', 'Screenshot', 'Cancel'],
+            default_button_text='Screenshot',
+            size=QSize(500, 190),
+        )
+        if choice == 'Full Markdown':
+            self._share_full_markdown_text()
+            return
+        if choice == 'Task Capsule':
+            self._start_task_capsule_share()
+            return
+        if choice == 'Screenshot':
+            self._share_screenshot_current_api_output()
+            return
+
+    def _current_conversation_markdown_for_share(self) -> str:
+        messages = get_current_chat_history_messages()
+        if messages:
+            return render_chat_history_markdown(messages).strip()
+        fallback = read_text_file(BasePath + 'output.txt', '').strip()
+        if fallback:
+            return fallback
+        if getattr(self, 'real1', None) is not None:
+            return self.real1.toPlainText().strip()
+        return ''
+
+    def _share_full_markdown_text(self):
+        text = self._current_conversation_markdown_for_share()
+        if not text.strip():
+            self._show_broccoli_message('Share', 'There is no conversation markdown to share.')
+            return
+        self._show_share_text_dialog('Full Markdown', text)
+
+    def _start_task_capsule_share(self):
+        text = self._current_conversation_markdown_for_share()
+        if not text.strip():
+            self._show_broccoli_message('Task Capsule', 'There is no conversation content to summarize.')
+            return
+        self._start_task_capsule_share_from_markdown(
+            text,
+            dialog_title='Task Capsule',
+            dialog_subtitle='Generated via the active API profile. Edit before sending.',
+        )
+
+    def _start_task_capsule_share_from_markdown(self,
+                                                markdown_text: str,
+                                                *,
+                                                dialog_title: str = 'Task Capsule',
+                                                dialog_subtitle: str = '',
+                                                source_meta: dict | None = None):
+        markdown_text = str(markdown_text or '').strip()
+        if not markdown_text:
+            self._show_broccoli_message('Task Capsule', 'There is no conversation content to summarize.')
+            return
+        running = getattr(self, '_task_capsule_share_thread', None)
+        if running is not None and running.is_alive():
+            self._show_broccoli_message('Task Capsule', 'A Task Capsule is already being generated.')
+            return
+        profile = load_active_settings_profile()
+        api_key = str(profile.get('api_key', '') or '').strip()
+        endpoint = profile_runtime_base_url(profile)
+        model = str(profile.get('model', '') or '').strip()
+        timeout = int(profile.get('timeout', 60) or 60)
+        if not api_key or not endpoint or not model:
+            self._show_broccoli_message('Task Capsule', 'No active API profile is configured.')
+            return
+        capsule_id = 'tc_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        signals = AsyncTaskCapsuleSignals()
+        signals.finished.connect(self._on_task_capsule_share_finished)
+        signals.failed.connect(self._on_task_capsule_share_failed)
+        thread = AsyncTaskCapsuleThread(
+            {
+                'markdown_text': markdown_text,
+                'api_key': api_key,
+                'endpoint': endpoint,
+                'model': model,
+                'timeout': timeout,
+                'capsule_id': capsule_id,
+                'dialog_title': dialog_title,
+                'dialog_subtitle': dialog_subtitle,
+                'source_meta': dict(source_meta or {}),
+            },
+            signals,
+        )
+        self._task_capsule_share_signals = signals
+        self._task_capsule_share_thread = thread
+        thread.start()
+        self._show_broccoli_message('Task Capsule', 'Generating Task Capsule in the background.')
+
+    def _on_task_capsule_share_finished(self, payload: object):
+        self._task_capsule_share_thread = None
+        if not isinstance(payload, dict):
+            self._show_broccoli_message('Task Capsule', 'Task Capsule generation returned an invalid result.')
+            return
+        text = str(payload.get('text', '') or '').strip()
+        if not text:
+            self._show_broccoli_message('Task Capsule', 'Task Capsule generation returned empty output.')
+            return
+        self._show_share_text_dialog(
+            str(payload.get('dialog_title', '') or payload.get('title', '') or 'Task Capsule'),
+            text,
+            subtitle=str(payload.get('dialog_subtitle', '') or ''),
+        )
+
+    def _on_task_capsule_share_failed(self, message: str):
+        self._task_capsule_share_thread = None
+        self._show_broccoli_message('Task Capsule', str(message or 'Task Capsule generation failed.'))
+
+    def _show_share_text_dialog(self, title: str, text: str, subtitle: str = ''):
+        dialog = ShareTextDialog(title, text, owner=self, parent=self, subtitle=subtitle)
+        dialog.apply_requested.connect(self._handle_share_text_apply)
+        dialog.fit_to_parent(margin=48)
+        _center_broccoli_dialog(dialog, self)
+        if not hasattr(self, '_share_text_dialogs'):
+            self._share_text_dialogs = []
+        self._share_text_dialogs.append(dialog)
+
+        def forget_dialog(_result=0, dlg=dialog):
+            try:
+                self._share_text_dialogs.remove(dlg)
+            except ValueError:
+                pass
+
+        dialog.finished.connect(forget_dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _handle_share_text_apply(self, payload: object):
+        if not isinstance(payload, dict):
+            return
+        text = str(payload.get('text', '') or '').strip()
+        if not text:
+            return
+        try:
+            target_index = int(payload.get('target_index', 1))
+        except (TypeError, ValueError):
+            target_index = 1
+        append = bool(payload.get('append', False))
+        if target_index == 1:
+            self._route_text_to_api_prompt(
+                text,
+                append=append,
+                new_conversation=bool(payload.get('new_conversation', False)),
+            )
+        elif target_index in (0, 2):
+            self._route_text_to_external_prompt(
+                target_index,
+                text,
+                append=append,
+                site_index=payload.get('site_index', None),
+            )
+        elif target_index == 3:
+            self._route_text_to_terminal_prompt(text, append=append)
+        self._show_broccoli_message('Applied', 'Shared text was sent to the selected prompt box.')
+
+    def _share_screenshot_current_api_output(self):
         if self.real2.isVisible():
             self.real2.page().runJavaScript(
                 """
@@ -22750,6 +24780,86 @@ class MyWidget(QWidget):  # 主窗口
             'messages': messages,
         }
 
+    @staticmethod
+    def _web_capture_source_label(capture: dict) -> str:
+        source = str((capture or {}).get('source', '') or '').strip()
+        if source:
+            return source
+        url = str((capture or {}).get('url', '') or '').strip()
+        try:
+            host = urlparse(url).netloc
+            if host:
+                return host
+        except Exception:
+            pass
+        return 'Web'
+
+    def _web_capture_markdown_for_share(self, capture: dict) -> str:
+        capture = self._normalize_web_conversation_capture(capture)
+        messages = list(capture.get('messages') or [])
+        if not messages:
+            return ''
+        title = str(capture.get('title', '') or 'Web conversation').strip()
+        source = self._web_capture_source_label(capture)
+        url = str(capture.get('url', '') or '').strip()
+        header = [f'# {title}', '', f'Source: {source}']
+        if url:
+            header.append(f'URL: {url}')
+        header.append('')
+        return ('\n'.join(header) + render_chat_history_markdown(messages)).strip()
+
+    def _share_web_capture_markdown(self, tab_index: int, capture: dict):
+        capture = self._normalize_web_conversation_capture(capture)
+        markdown = self._web_capture_markdown_for_share(capture)
+        if not markdown:
+            self._show_broccoli_message('Share', 'No current page conversation text was detected.')
+            return
+        source = self._web_capture_source_label(capture)
+        self._show_share_text_dialog(
+            f'Full Markdown - {source}',
+            markdown,
+            subtitle=f'Captured from current {source} URL. Edit before copying or sending.',
+        )
+
+    def _start_web_capture_task_capsule_share(self, tab_index: int, capture: dict):
+        capture = self._normalize_web_conversation_capture(capture)
+        markdown = self._web_capture_markdown_for_share(capture)
+        if not markdown:
+            self._show_broccoli_message('Task Capsule', 'No current page conversation text was detected.')
+            return
+        profile = load_active_settings_profile()
+        profile_name = str(profile.get('name', '') or 'Active API profile').strip()
+        model = str(profile.get('model', '') or '').strip()
+        choice = ask_broccoli_message(
+            self,
+            'Task Capsule',
+            (
+                'Task Capsule will be generated with API profile:\n'
+                f'{profile_name}' + (f' / {model}' if model else '') +
+                '\n\nIt will not use the AI model open in this web page.'
+            ),
+            ['Generate', 'Cancel'],
+            default_button_text='Generate',
+            size=QSize(520, 230),
+        )
+        if choice != 'Generate':
+            return
+        source = self._web_capture_source_label(capture)
+        self._start_task_capsule_share_from_markdown(
+            markdown,
+            dialog_title=f'Task Capsule - {source}',
+            dialog_subtitle=(
+                f'Generated via API profile: {profile_name}'
+                + (f' / {model}' if model else '')
+                + '. Edit before sending.'
+            ),
+            source_meta={
+                'source': source,
+                'title': str(capture.get('title', '') or ''),
+                'url': str(capture.get('url', '') or ''),
+            },
+        )
+
     def _show_web_conversation_sync_menu(self, tab_index: int, payload):
         capture = self._normalize_web_conversation_capture(payload)
         messages = capture.get('messages', [])
@@ -22781,6 +24891,21 @@ class MyWidget(QWidget):  # 主窗口
         cross_forward_action.setEnabled(len(selected_views) >= 2)
         cross_forward_action.triggered.connect(lambda _checked=False, tab=tab_index: self._cross_forward_selected_web_replies(tab))
         menu.addAction(cross_forward_action)
+        menu.addSeparator()
+
+        full_md_action = QAction('Share Full Markdown...', menu)
+        full_md_action.setEnabled(bool(messages))
+        full_md_action.triggered.connect(
+            lambda _checked=False, tab=tab_index, cap=capture: self._share_web_capture_markdown(tab, cap)
+        )
+        menu.addAction(full_md_action)
+
+        capsule_action = QAction('Generate Task Capsule via API profile...', menu)
+        capsule_action.setEnabled(bool(messages))
+        capsule_action.triggered.connect(
+            lambda _checked=False, tab=tab_index, cap=capture: self._start_web_capture_task_capsule_share(tab, cap)
+        )
+        menu.addAction(capsule_action)
         menu.addSeparator()
 
         new_action = QAction('New API history', menu)
@@ -23709,27 +25834,50 @@ class MyWidget(QWidget):  # 主窗口
 
     @staticmethod
     def _inject_text_to_web_view(view: QWebEngineView, text: str):
-        escaped = str(text or '').replace('\\', '\\\\').replace('`', '\\`')
+        text_json = json.dumps(str(text or ''), ensure_ascii=False)
         js = f"""
         (function() {{
-            const t = `{escaped}`;
-            const ce = document.querySelector('div[contenteditable="true"]');
-            if (ce) {{
-                ce.focus();
-                document.execCommand('selectAll', false, null);
-                document.execCommand('insertText', false, t);
-                return 'ce';
-            }}
-            const ta = document.querySelector('textarea');
-            if (ta) {{
+            const t = {text_json};
+            const visible = (node) => {{
+                if (!node) return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 8
+                    && rect.height > 8
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || 1) > 0.01;
+            }};
+            const candidates = Array.from(document.querySelectorAll('div[contenteditable="true"], [contenteditable="plaintext-only"], textarea'))
+                .filter(visible)
+                .sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+            const input = candidates[0] || null;
+            if (!input) return null;
+            input.focus();
+            if (input.tagName && input.tagName.toLowerCase() === 'textarea') {{
                 const setter = Object.getOwnPropertyDescriptor(
                     HTMLTextAreaElement.prototype, 'value').set;
-                setter.call(ta, t);
-                ta.dispatchEvent(new Event('input', {{bubbles: true}}));
-                ta.focus();
+                setter.call(input, t);
+                input.dispatchEvent(new Event('input', {{bubbles: true}}));
+                input.dispatchEvent(new Event('change', {{bubbles: true}}));
                 return 'ta';
             }}
-            return null;
+            const selection = window.getSelection && window.getSelection();
+            if (selection && document.createRange) {{
+                const range = document.createRange();
+                range.selectNodeContents(input);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }}
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, t);
+            input.dispatchEvent(new InputEvent('input', {{
+                bubbles: true,
+                cancelable: true,
+                inputType: 'insertText',
+                data: t
+            }}));
+            return 'ce';
         }})()
         """
         view.page().runJavaScript(js)
@@ -24988,8 +27136,11 @@ class MyWidget(QWidget):  # 主窗口
             timeout = int(profile.get('timeout', 60) or 60)
         except (TypeError, ValueError):
             timeout = 60
-        client = create_openai_client(api_key, profile_runtime_base_url(profile), timeout)
-        response = client.chat.completions.create(
+        endpoint = profile_runtime_base_url(profile)
+        client = create_openai_client(api_key, endpoint, timeout)
+        response = create_chat_completion(
+            client,
+            endpoint=endpoint,
             model=model,
             messages=messages,
             stream=False,
@@ -25102,6 +27253,7 @@ class MyWidget(QWidget):  # 主窗口
     def _build_media_generation_input(self,
                                       question_text: str,
                                       shared_context: str,
+                                      step_context: str,
                                       previous_results: list[dict],
                                       goal: str) -> str:
         parts = []
@@ -25110,7 +27262,9 @@ class MyWidget(QWidget):  # 主窗口
         if goal.strip():
             parts.append(f'Step goal:\n{goal.strip()}')
         if shared_context.strip():
-            parts.append(f'Retrieved context:\n{shared_context.strip()}')
+            parts.append(f'Global retrieved context:\n{shared_context.strip()}')
+        if step_context.strip():
+            parts.append(f'Step-specific retrieved context:\n{step_context.strip()}')
         if previous_results:
             prev = []
             for result in previous_results:
@@ -25126,6 +27280,7 @@ class MyWidget(QWidget):  # 主窗口
                              goal: str,
                              question_text: str,
                              shared_context: str,
+                             step_context: str,
                              previous_results: list[dict]) -> dict:
         model_name = str(profile.get('model', '')).strip()
         try:
@@ -25137,7 +27292,7 @@ class MyWidget(QWidget):  # 主窗口
             profile_runtime_base_url(profile),
             timeout,
         )
-        prompt = self._build_media_generation_input(question_text, shared_context, previous_results, goal)
+        prompt = self._build_media_generation_input(question_text, shared_context, step_context, previous_results, goal)
         response = client.responses.create(
             model=model_name,
             input=prompt,
@@ -25166,6 +27321,7 @@ class MyWidget(QWidget):  # 主窗口
                                    goal: str,
                                    question_text: str,
                                    shared_context: str,
+                                   step_context: str,
                                    previous_results: list[dict]) -> dict:
         model_name = str(profile.get('model', '')).strip()
         try:
@@ -25177,7 +27333,7 @@ class MyWidget(QWidget):  # 主窗口
             profile_runtime_base_url(profile),
             timeout,
         )
-        prompt = self._build_media_generation_input(question_text, shared_context, previous_results, goal)
+        prompt = self._build_media_generation_input(question_text, shared_context, step_context, previous_results, goal)
         response = client.images.generate(
             model=model_name,
             prompt=prompt,
@@ -25213,6 +27369,7 @@ class MyWidget(QWidget):  # 主窗口
                                  profile: dict,
                                  goal: str,
                                  question_text: str,
+                                 step_context: str,
                                  previous_results: list[dict]) -> dict:
         model_name = str(profile.get('model', '')).strip()
         try:
@@ -25229,6 +27386,8 @@ class MyWidget(QWidget):  # 主窗口
             input_text = specialized_step_context_output(result)
             if input_text:
                 break
+        if not input_text:
+            input_text = str(step_context or '').strip()
         if not input_text:
             input_text = str(question_text or '').strip()
         if not input_text:
@@ -25293,14 +27452,34 @@ class MyWidget(QWidget):  # 主窗口
         skills = load_skill_records_from_store(store, enabled_only=True)
         catalog = skill_catalog_text(skills)
         skill_names = {record.get('name', '') for record in skills}
+        forced_slash, forced_capability, forced_task = parse_specialized_slash_command(question_text)
         try:
             planner_output = self._run_profile_chat_completion(
                 planner_profile,
                 build_planner_messages(question_text, summarize_attachment_types(attachment_records), catalog),
             )
         except Exception:
-            return {'steps': [], 'finalize_with_default_chat': False, 'reason': ''}
-        return normalize_planner_plan(parse_json_object_from_text(planner_output), skill_names)
+            planner_output = ''
+        plan = normalize_planner_plan(parse_json_object_from_text(planner_output), skill_names)
+        if forced_slash and forced_capability and forced_task:
+            if not any(str(step.get('capability', '') or '') == forced_capability for step in plan.get('steps', [])):
+                plan['steps'].insert(
+                    0,
+                    {
+                        'capability': forced_capability,
+                        'goal': forced_task,
+                        'depends_on_previous': False,
+                        'extract': f'{specialized_capability_label(forced_capability)} result',
+                        'context_policy': 'fresh',
+                        'context_query': forced_task,
+                    },
+                )
+            plan['finalize_with_default_chat'] = True
+            if not plan.get('finalize_focus'):
+                plan['finalize_focus'] = f'summarize the {specialized_capability_label(forced_capability)} result and answer the user'
+            if not plan.get('reason'):
+                plan['reason'] = f'The user explicitly requested {forced_capability} via slash command.'
+        return plan
 
     def _review_specialized_step_result(self,
                                         result: dict,
@@ -25391,6 +27570,7 @@ class MyWidget(QWidget):  # 主窗口
                             goal: str,
                             question_text: str,
                             shared_context: str,
+                            step_context: str,
                             previous_results: list[dict],
                             downstream_extract: str = '',
                             store: dict | None = None) -> dict:
@@ -25419,6 +27599,7 @@ class MyWidget(QWidget):  # 主窗口
                     goal=goal,
                     question_text=question_text,
                     shared_context=shared_context,
+                    step_context=step_context,
                     previous_results=previous_results,
                     downstream_extract=downstream_extract,
                 ),
@@ -25441,11 +27622,79 @@ class MyWidget(QWidget):  # 主窗口
             },
         }
 
+    def _execute_browser_use_step(self,
+                                  *,
+                                  goal: str,
+                                  question_text: str,
+                                  shared_context: str,
+                                  step_context: str,
+                                  previous_results: list[dict],
+                                  downstream_extract: str = '') -> dict:
+        previous_sections = []
+        for result in previous_results or []:
+            body = specialized_step_context_output(result)
+            if body:
+                previous_sections.append(
+                    f"{result.get('capability', 'previous_step')} ({result.get('model_name', '')}):\n{body}"
+                )
+        task_parts = [
+            'Original user request:\n' + str(question_text or '').strip(),
+            'Browser automation goal:\n' + str(goal or '').strip(),
+        ]
+        if shared_context.strip():
+            task_parts.append('Broccoli global retrieved context:\n' + shared_context.strip())
+        if step_context.strip():
+            task_parts.append('Broccoli step-specific retrieved context:\n' + step_context.strip())
+        if previous_sections:
+            task_parts.append('Previous step output:\n' + '\n\n'.join(previous_sections))
+        if downstream_extract:
+            task_parts.append('Downstream handoff requirement:\n' + str(downstream_extract or '').strip())
+        task_parts.append(
+            'Use the browser to complete only the browser automation part of this step. '
+            'Return concrete findings, relevant URLs, and any errors encountered.'
+        )
+        task = '\n\n'.join(task_parts)
+        try:
+            config = self._prepare_browser_use_config(
+                task,
+                history_messages=[],
+                storage_history_messages=[],
+                interactive=False,
+            )
+            if not config:
+                raise RuntimeError('Browser Use configuration unavailable.')
+            result = BrowserUseThread(config).run_blocking()
+            answer = str((result or {}).get('answer', '') or 'Browser Use task completed.').strip()
+            metadata = dict((result or {}).get('metadata') or {})
+            metadata.update({
+                'goal': goal,
+                'execution_mode': str(config.get('llm_wrapper', '') or ''),
+                'browser_task': task,
+            })
+            return {
+                'capability': BROWSER_USE_CAPABILITY,
+                'capability_label': specialized_capability_label(BROWSER_USE_CAPABILITY),
+                'model_name': str(config.get('model', '') or '').strip(),
+                'text_output': answer,
+                'artifacts': [],
+                'metadata': metadata,
+            }
+        except Exception as exc:
+            return {
+                'capability': BROWSER_USE_CAPABILITY,
+                'capability_label': specialized_capability_label(BROWSER_USE_CAPABILITY),
+                'model_name': '',
+                'text_output': f'Browser Use step failed: {str(exc)}',
+                'artifacts': [],
+                'metadata': {'goal': goal, 'execution_mode': 'browser_use'},
+            }
+
     def _execute_specialized_step(self,
                                   capability: str,
                                   goal: str,
                                   question_text: str,
                                   shared_context: str,
+                                  step_context: str,
                                   previous_results: list[dict],
                                   attachment_records: list[dict],
                                   downstream_extract: str = '',
@@ -25457,9 +27706,19 @@ class MyWidget(QWidget):  # 主窗口
                 goal=goal,
                 question_text=question_text,
                 shared_context=shared_context,
+                step_context=step_context,
                 previous_results=previous_results,
                 downstream_extract=downstream_extract,
                 store=store,
+            )
+        if capability == BROWSER_USE_CAPABILITY:
+            return self._execute_browser_use_step(
+                goal=goal,
+                question_text=question_text,
+                shared_context=shared_context,
+                step_context=step_context,
+                previous_results=previous_results,
+                downstream_extract=downstream_extract,
             )
         profile = resolve_specialized_profile(store, capability, None)
         if profile is None:
@@ -25472,7 +27731,7 @@ class MyWidget(QWidget):  # 主窗口
                 try:
                     output, executions = self._run_profile_chat_completion_with_code_execution(
                         profile,
-                        build_specialized_step_messages(capability, goal, question_text, shared_context, previous_results, downstream_extract),
+                        build_specialized_step_messages(capability, goal, question_text, shared_context, previous_results, downstream_extract, step_context),
                     )
                 except Exception as exc:
                     output = f'Web search step failed: {str(exc)}'
@@ -25485,7 +27744,7 @@ class MyWidget(QWidget):  # 主窗口
                     'metadata': {'goal': goal, 'execution_mode': execution_mode, 'code_executions': executions},
                 }
             try:
-                return self._run_web_search_step(profile, goal, question_text, shared_context, previous_results)
+                return self._run_web_search_step(profile, goal, question_text, shared_context, step_context, previous_results)
             except Exception as exc:
                 return {
                     'capability': capability,
@@ -25497,7 +27756,7 @@ class MyWidget(QWidget):  # 主窗口
                 }
         if capability == 'image_generation':
             try:
-                return self._run_image_generation_step(profile, goal, question_text, shared_context, previous_results)
+                return self._run_image_generation_step(profile, goal, question_text, shared_context, step_context, previous_results)
             except Exception as exc:
                 return {
                     'capability': capability,
@@ -25509,7 +27768,7 @@ class MyWidget(QWidget):  # 主窗口
                 }
         if capability == 'text_to_speech':
             try:
-                return self._run_text_to_speech_step(profile, goal, question_text, previous_results)
+                return self._run_text_to_speech_step(profile, goal, question_text, step_context, previous_results)
             except Exception as exc:
                 return {
                     'capability': capability,
@@ -25544,7 +27803,7 @@ class MyWidget(QWidget):  # 主窗口
         try:
             output, executions = self._run_profile_chat_completion_with_code_execution(
                 profile,
-                build_specialized_step_messages(capability, goal, question_text, shared_context, previous_results, downstream_extract),
+                build_specialized_step_messages(capability, goal, question_text, shared_context, previous_results, downstream_extract, step_context),
             )
         except Exception as exc:
             output = f'Step failed: {str(exc)}'
@@ -25561,6 +27820,13 @@ class MyWidget(QWidget):  # 主窗口
                                   plan: dict,
                                   question_text: str,
                                   shared_context: str,
+                                  history_messages: list[dict],
+                                  retrieval_documents: list[dict],
+                                  api_key: str,
+                                  endpoint: str,
+                                  model: str,
+                                  timeout: int,
+                                  selected_message_indices: set | list | None,
                                   attachment_records: list[dict],
                                   progress_callback=None) -> list[dict]:
         steps = list(plan.get('steps', []) or [])
@@ -25614,17 +27880,56 @@ class MyWidget(QWidget):  # 主窗口
                 previous = []
             next_step = steps[i + 1] if i + 1 < len(steps) else None
             downstream_extract = str((next_step or {}).get('extract', '')).strip() if next_step and next_step.get('depends_on_previous') else ''
+            context_policy = normalize_specialized_step_context_policy(step.get('context_policy', 'auto'))
+            step_context_query = ''
+            step_context = ''
+            if context_policy != 'none':
+                step_context_query = self._build_specialized_step_retrieval_query(
+                    question_text=question_text,
+                    goal=goal,
+                    previous_results=previous,
+                    downstream_extract=downstream_extract,
+                    explicit_query=str(step.get('context_query', '') or '').strip(),
+                )
+                if step_context_query:
+                    progress(
+                        f'Retrieving step-specific context for {step_label}'
+                        + f'\nQuery: {specialized_progress_snippet(step_context_query)}'
+                    )
+                    try:
+                        step_context = self._build_specialized_step_retrieval_context(
+                            query_text=step_context_query,
+                            history_messages=history_messages,
+                            selected_message_indices=selected_message_indices,
+                            retrieval_documents=retrieval_documents,
+                            api_key=api_key,
+                            endpoint=endpoint,
+                            model=model,
+                            timeout=timeout,
+                            progress_callback=progress_callback,
+                        )
+                    except Exception as exc:
+                        progress(f'Step-specific context retrieval failed: {exc}')
+                        step_context = ''
             result = self._execute_specialized_step(
                 capability=capability,
                 goal=goal,
                 question_text=question_text,
                 shared_context=shared_context,
+                step_context=step_context,
                 previous_results=previous,
                 attachment_records=attachment_records,
                 downstream_extract=downstream_extract,
                 skill_name=str(step.get('skill_name', '') or '').strip(),
             )
             if result:
+                metadata = dict(result.get('metadata') or {})
+                metadata.update({
+                    'context_policy': context_policy,
+                    'context_query': step_context_query,
+                    'step_context_chars': len(step_context),
+                })
+                result['metadata'] = metadata
                 progress(
                     f'Specialized step {executed_steps + 1} output ready: {step_label}'
                     + ('\n' + specialized_progress_snippet(str(result.get('text_output', '') or '')) if result.get('text_output') else '')
@@ -25663,6 +27968,8 @@ class MyWidget(QWidget):  # 主窗口
                                 'goal': ('Retry the previous step with a corrected approach. ' + (missing or goal)).strip(),
                                 'depends_on_previous': bool(results),
                                 'extract': downstream_extract,
+                                'context_policy': context_policy,
+                                'context_query': step_context_query,
                             }
                         )
                     if new_step:
@@ -25854,64 +28161,20 @@ class MyWidget(QWidget):  # 主窗口
                                                  model: str,
                                                  timeout: int,
                                                  refresh_ui: bool = True) -> dict | None:
-        record = self._load_active_conversation_record()
-        if record is None:
+        if not self._active_conversation_path:
             return None
-
-        mutated = False
-        turns = record.get('display', {}).get('turns', [])
-        try:
-            summarized_count = max(0, int(record.get('memory', {}).get('last_summarized_turn_count', 0) or 0))
-        except (TypeError, ValueError):
-            summarized_count = 0
-        if summarized_count < len(turns):
-            try:
-                record = update_conversation_running_summary(record, api_key, endpoint, model, timeout)
-                mutated = True
-            except Exception:
-                pass
-
-        fresh_chunks = build_retrieval_chunks(record.get('messages', []))
-        current_chunks = record.get('retrieval', {}).get('chunks', [])
-        needs_retrieval_refresh = len(fresh_chunks) != len(current_chunks)
-        if not needs_retrieval_refresh:
-            for fresh_chunk, current_chunk in zip(fresh_chunks, current_chunks):
-                if fresh_chunk.get('id') != current_chunk.get('id') or fresh_chunk.get('text') != current_chunk.get('text'):
-                    needs_retrieval_refresh = True
-                    break
-                if not current_chunk.get('embedding'):
-                    needs_retrieval_refresh = True
-                    break
-        if needs_retrieval_refresh:
-            record['retrieval']['chunks'] = fresh_chunks
-            mutated = True
-
-        embedding_config = load_embedding_runtime_config()
-        embedding_ok = False
-        if embedding_config is not None:
-            embedding_ok, _ = probe_embedding_capability(embedding_config['profile'])
-        if embedding_ok and embedding_config is not None:
-            embedding_chunks = record.get('retrieval', {}).get('chunks', [])
-            if any(not chunk.get('embedding') for chunk in embedding_chunks):
-                try:
-                    record = ensure_conversation_retrieval_embeddings(
-                        record,
-                        embedding_config['api_key'],
-                        embedding_config['endpoint'],
-                        embedding_config['timeout'],
-                        embedding_config['model'],
-                    )
-                    mutated = True
-                except Exception:
-                    pass
-
-        if mutated:
-            saved = write_conversation_record(record['path'], record)
-            self._active_conversation_path = saved['path']
+        result = refresh_conversation_runtime_data_for_path(
+            self._active_conversation_path,
+            api_key,
+            endpoint,
+            model,
+            timeout,
+        )
+        if result.get('updated'):
+            self._active_conversation_path = str(result.get('path') or self._active_conversation_path)
             if refresh_ui:
                 self._refresh_history_panel()
-            return saved
-        return record
+        return self._load_active_conversation_record()
 
     def _build_active_history_context(self,
                                       question_text: str,
@@ -26045,6 +28308,97 @@ class MyWidget(QWidget):  # 主窗口
             )
         return build_external_context_retrieval_block(relevant_chunks)
 
+    def _build_specialized_step_retrieval_query(self,
+                                                *,
+                                                question_text: str,
+                                                goal: str,
+                                                previous_results: list[dict],
+                                                downstream_extract: str = '',
+                                                explicit_query: str = '') -> str:
+        explicit = str(explicit_query or '').strip()
+        if explicit:
+            return explicit
+        parts = [
+            'Original user request:\n' + str(question_text or '').strip(),
+            'Current specialized step goal:\n' + str(goal or '').strip(),
+        ]
+        previous_sections = []
+        for result in previous_results or []:
+            body = specialized_step_context_output(result)
+            if body:
+                previous_sections.append(body)
+        if previous_sections:
+            parts.append('Relevant previous step result:\n' + '\n\n'.join(previous_sections))
+        if downstream_extract:
+            parts.append('Downstream need:\n' + str(downstream_extract or '').strip())
+        return '\n\n'.join(part for part in parts if part.strip()).strip()
+
+    def _build_specialized_step_retrieval_context(self,
+                                                  *,
+                                                  query_text: str,
+                                                  history_messages: list[dict],
+                                                  selected_message_indices: set | list | None,
+                                                  retrieval_documents: list[dict],
+                                                  api_key: str,
+                                                  endpoint: str,
+                                                  model: str,
+                                                  timeout: int,
+                                                  progress_callback=None) -> str:
+        query = str(query_text or '').strip()
+        if not query:
+            return ''
+        blocks = []
+
+        def progress(message: str):
+            if progress_callback is None:
+                return
+            try:
+                progress_callback(str(message or '').strip())
+            except Exception:
+                pass
+
+        if retrieval_documents:
+            attachment_context, _attachment_references = self._build_attachment_retrieval_context(
+                query,
+                retrieval_documents,
+                api_key,
+                endpoint,
+                timeout,
+            )
+            if attachment_context:
+                blocks.append(attachment_context)
+
+        history_enabled = read_text_file(BasePath + 'history.txt', '0') == '1'
+        if history_enabled and history_messages:
+            history_context = self._build_active_history_context(
+                query,
+                history_messages,
+                api_key,
+                endpoint,
+                model,
+                timeout,
+                selected_message_indices=selected_message_indices,
+                refresh_ui=False,
+            )
+            if history_context:
+                blocks.append(history_context)
+
+        active_profile = load_active_settings_profile()
+        if active_profile.get('remember_memory', True):
+            memory_context = self._build_saved_memory_prompt_context(query)
+            if memory_context:
+                blocks.append(memory_context)
+
+        progress('Retrieving step-specific external context and MCP sources')
+        external_context = self._build_external_context_prompt_context(query, progress_callback=progress_callback)
+        if external_context:
+            blocks.append(external_context)
+
+        context = '\n\n'.join(block for block in blocks if block).strip()
+        if len(context) > SPECIALIZED_STEP_RETRIEVAL_CONTEXT_MAX_CHARS:
+            context = context[:SPECIALIZED_STEP_RETRIEVAL_CONTEXT_MAX_CHARS].rstrip() + '\n\n[Step-specific context truncated.]'
+        return context
+
     def _ensure_active_conversation(self, first_question: str, history_messages: list[dict]):
         if self._active_conversation_path:
             return
@@ -26091,6 +28445,7 @@ class MyWidget(QWidget):  # 主窗口
         record = load_conversation_record(path)
         if record is None:
             return
+        self._reset_structured_transfer_state()
         self._mcp_conversation_allowlist = set()
         self._active_conversation_path = record['path']
         save_chat_history_messages(record['messages'])
@@ -26400,7 +28755,9 @@ class MyWidget(QWidget):  # 主窗口
                             'content': 'Today conversation summaries:\n\n' + '\n\n'.join(f'- {summary}' for summary in summaries),
                         },
                     ]
-                    response = client.chat.completions.create(
+                    response = create_chat_completion(
+                        client,
+                        endpoint=endpoint,
                         model=model,
                         messages=rollup_messages,
                         stream=False,
@@ -27373,6 +29730,9 @@ end run'''"""
         """
 
     def show_welcome_state(self):
+        self._reset_structured_transfer_state()
+        self._rendered_message_hashes = []
+        self._rendered_conversation_path = ''
         self._active_render_request_id += 1
         self.cleanup_async_render()
         self._pending_real2_scroll = False
@@ -27383,6 +29743,7 @@ end run'''"""
         self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
 
     def render_stream_preview(self, text: str):
+        self._reset_structured_transfer_state()
         self._active_render_request_id += 1
         self.cleanup_async_render()
         self._pending_real2_scroll = False
@@ -27416,6 +29777,49 @@ end run'''"""
             self._active_render_signals,
         )
         self._active_render_thread.start()
+
+    def try_append_final_messages(self, history_messages: list[dict]) -> bool:
+        if self._structured_transfer_active:
+            return False
+        history_messages = list(history_messages or [])
+        if not history_messages:
+            return False
+        old_hashes = list(getattr(self, '_rendered_message_hashes', []) or [])
+        new_hashes = chat_message_render_hashes(history_messages)
+        if not old_hashes or len(new_hashes) <= len(old_hashes):
+            return False
+        if new_hashes[:len(old_hashes)] != old_hashes:
+            return False
+        if str(getattr(self, '_rendered_conversation_path', '') or '') != str(self._active_conversation_path or ''):
+            return False
+        appended_messages = history_messages[len(old_hashes):]
+        if not appended_messages:
+            return False
+        markdown_fragment, display_prefix_map = render_chat_messages_display_fragment(
+            appended_messages,
+            len(old_hashes),
+        )
+        if re.search(r'(?<!\\)\$\$|\\\(|\\\[|\\begin\{', markdown_fragment, re.DOTALL):
+            return False
+        html_fragment = render_markdown_display_fragment_to_html(markdown_fragment, display_prefix_map)
+        if not html_fragment.strip():
+            return False
+        self._active_render_request_id += 1
+        self.cleanup_async_render()
+        script = (
+            "document.body.insertAdjacentHTML('beforeend', "
+            + json.dumps(html_fragment, ensure_ascii=False)
+            + "); window.scrollTo(0, document.body.scrollHeight);"
+        )
+        self._pending_real2_scroll = False
+        self.real2.page().runJavaScript(script)
+        self._rendered_message_hashes = new_hashes
+        self._rendered_conversation_path = str(self._active_conversation_path or '')
+        self.real1.clear()
+        self.real1.setVisible(False)
+        self.real2.setVisible(True)
+        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+        return True
 
     def flush_chat_stream_preview(self):
         if not self._active_chat_request:
@@ -27486,6 +29890,275 @@ end run'''"""
     def cleanup_async_render(self):
         self._active_render_signals = None
         self._active_render_thread = None
+
+    def start_conversation_runtime_refresh(self,
+                                           *,
+                                           conversation_path: str,
+                                           api_key: str,
+                                           endpoint: str,
+                                           model: str,
+                                           timeout: int) -> None:
+        path = str(conversation_path or '').strip()
+        if not path:
+            return
+        self._conversation_runtime_refresh_request_id += 1
+        request_id = self._conversation_runtime_refresh_request_id
+        signals = ConversationRuntimeRefreshSignals()
+        signals.finished.connect(
+            self.on_conversation_runtime_refresh_finished,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        signals.failed.connect(
+            self.on_conversation_runtime_refresh_failed,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        thread = ConversationRuntimeRefreshThread(
+            {
+                'request_id': request_id,
+                'conversation_path': path,
+                'api_key': str(api_key or ''),
+                'endpoint': str(endpoint or ''),
+                'model': str(model or ''),
+                'timeout': int(timeout or 60),
+            },
+            signals,
+        )
+        self._conversation_runtime_refresh_workers.append(
+            {'request_id': request_id, 'signals': signals, 'thread': thread}
+        )
+        thread.start()
+
+    def _forget_conversation_runtime_refresh_worker(self, request_id: int) -> None:
+        self._conversation_runtime_refresh_workers = [
+            item for item in self._conversation_runtime_refresh_workers
+            if int(item.get('request_id', 0) or 0) != int(request_id)
+        ]
+
+    def on_conversation_runtime_refresh_finished(self, payload: dict):
+        request_id = int(payload.get('request_id', 0) or 0)
+        self._forget_conversation_runtime_refresh_worker(request_id)
+        if not payload.get('updated'):
+            return
+        path = str(payload.get('path', '') or '').strip()
+        if path and str(self._active_conversation_path or '') == path:
+            self._active_conversation_path = path
+            if getattr(self, '_history_panel_visible', False):
+                self._refresh_history_panel()
+
+    def on_conversation_runtime_refresh_failed(self, payload: dict):
+        self._forget_conversation_runtime_refresh_worker(int(payload.get('request_id', 0) or 0))
+
+    def _reset_structured_transfer_state(self):
+        timer = getattr(self, '_structured_transfer_autosave_timer', None)
+        if timer is not None:
+            timer.stop()
+        self._structured_transfer_active = False
+        self._structured_transfer_messages = []
+        self._structured_transfer_last_signature = ''
+
+    def cleanup_browser_use_request(self):
+        self._active_browser_use_request = None
+        self._active_browser_use_signals = None
+        self._active_browser_use_thread = None
+
+    def _launch_chrome_for_browser_use(self, chrome_path: str, cdp_url: str) -> bool:
+        user_data_dir = normalize_browser_use_settings(load_settings_store().get('globals', {}))['browser_use_user_data_dir']
+        return launch_browser_use_chrome(chrome_path, cdp_url, user_data_dir)
+
+    def _prepare_browser_use_config(self,
+                                    task: str,
+                                    history_messages: list[dict],
+                                    storage_history_messages: list[dict],
+                                    *,
+                                    interactive: bool = True) -> dict | None:
+        def fail(title: str, message: str):
+            if interactive:
+                show_broccoli_message(self, title, message)
+                return None
+            raise RuntimeError(f'{title}: {message}')
+
+        store = load_settings_store()
+        globals_store = store.get('globals', {})
+        settings = normalize_browser_use_settings(globals_store)
+        if not settings['browser_use_enabled']:
+            return fail('Browser Use disabled', 'Enable Browser Use slash command in Settings > General > Browser Use.')
+        chrome_path = settings['browser_use_chrome_executable']
+        if not browser_use_chrome_executable_exists(chrome_path):
+            return fail(
+                'Google Chrome not found',
+                'Browser Use needs Google Chrome installed. Download Chrome from google.com/chrome, then try again.',
+            )
+        profile = browser_use_effective_profile(store)
+        if profile is None:
+            return fail('No Browser Use profile', 'Select a Browser Use model profile in Settings > Models.')
+        api_key = str(profile.get('api_key', '') or '').strip()
+        model = str(profile.get('model', '') or '').strip()
+        llm_wrapper = settings['browser_use_llm']
+        if llm_wrapper == 'openai':
+            endpoint = profile_runtime_base_url(profile)
+        elif llm_wrapper == 'anthropic':
+            endpoint = normalize_endpoint_value(profile.get('endpoint', ''))
+        else:
+            endpoint = ''
+        if not api_key or not model or (llm_wrapper == 'openai' and not endpoint):
+            if llm_wrapper == 'openai':
+                detail = 'The selected Browser Use profile needs endpoint, API key, and model.'
+            else:
+                detail = 'The selected Browser Use profile needs API key and model.'
+            return fail('Browser Use profile incomplete', detail)
+        chrome_mode = settings['browser_use_chrome_mode']
+        cdp_url = settings['browser_use_cdp_url']
+        if not settings['browser_use_open_new_window']:
+            chrome_mode = 'connect_existing'
+            if not browser_use_cdp_available(cdp_url):
+                if not launch_browser_use_chrome(chrome_path, cdp_url, settings['browser_use_user_data_dir']):
+                    return fail(
+                        'Browser Use Chrome unavailable',
+                        'Broccoli could not launch or connect to the fixed Browser Use Chrome instance. Check the Chrome executable, profile folder, and CDP URL in Settings > General > Browser Use.',
+                    )
+        elif chrome_mode == 'connect_existing' and not browser_use_cdp_available(cdp_url):
+            if not interactive:
+                if not self._launch_chrome_for_browser_use(chrome_path, cdp_url):
+                    chrome_mode = 'launch_system_chrome'
+            else:
+                user_data_dir = settings['browser_use_user_data_dir']
+                message = (
+                    'Chrome must expose a remote debugging endpoint before Browser Use can control it.\n\n'
+                    f'CDP URL: {cdp_url}\n\n'
+                    f'Browser Use profile folder:\n{user_data_dir}\n\n'
+                    'Broccoli will launch a separate Chrome window with this profile. Sign in there once; future Browser Use tasks reuse that login state.'
+                )
+                clicked = ask_broccoli_message(
+                    self,
+                    'Chrome CDP not reachable',
+                    message,
+                    ['Cancel', 'Launch managed Chrome'],
+                    default_button_text='Launch managed Chrome',
+                    size=QSize(520, 260),
+                )
+                if clicked != 'Launch managed Chrome':
+                    return None
+                if not self._launch_chrome_for_browser_use(chrome_path, cdp_url):
+                    chrome_mode = 'launch_system_chrome'
+        try:
+            timeout = int(profile.get('timeout', 60) or 60)
+        except (TypeError, ValueError):
+            timeout = 60
+        return {
+            'task': task,
+            'api_key': api_key,
+            'endpoint': endpoint,
+            'model': model,
+            'llm_wrapper': llm_wrapper,
+            'timeout': timeout,
+            'max_steps': settings['browser_use_max_steps'],
+            'use_vision': settings['browser_use_use_vision'],
+            'chrome_mode': chrome_mode,
+            'cdp_url': cdp_url,
+            'chrome_executable': chrome_path,
+            'user_data_dir': settings['browser_use_user_data_dir'],
+            'open_new_window': settings['browser_use_open_new_window'],
+            'close_window_after_task': settings['browser_use_close_window_after_task'],
+            'history_messages': history_messages,
+            'storage_history_messages': storage_history_messages,
+            'question_text': '/browser use ' + task,
+        }
+
+    def start_browser_use_request(self, config: dict):
+        self._active_browser_use_request = {
+            'config': config,
+            'history_messages': list(config.get('history_messages') or []),
+            'storage_history_messages': list(config.get('storage_history_messages') or config.get('history_messages') or []),
+            'question_text': str(config.get('question_text', '') or ''),
+            'status_lines': [],
+        }
+        self._active_browser_use_signals = BrowserUseSignals()
+        self._active_browser_use_signals.status.connect(
+            self.on_browser_use_status,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._active_browser_use_signals.finished.connect(
+            self.on_browser_use_finished,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._active_browser_use_signals.failed.connect(
+            self.on_browser_use_failed,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._active_browser_use_thread = BrowserUseThread(config, self._active_browser_use_signals)
+        self._active_browser_use_thread.start()
+
+    def on_browser_use_status(self, message: str):
+        if not self._active_browser_use_request:
+            return
+        message = str(message or '').strip()
+        if not message:
+            return
+        lines = self._active_browser_use_request.setdefault('status_lines', [])
+        if not lines or lines[-1] != message:
+            lines.append(message)
+        del lines[:-8]
+        status_text = 'Running Browser Use...\n' + '\n'.join(f'- {line}' for line in lines)
+        self.render_stream_preview(
+            build_chat_preview(
+                self._active_browser_use_request['history_messages'],
+                self._active_browser_use_request['question_text'],
+                status_text,
+            )
+        )
+
+    def on_browser_use_finished(self, payload: dict):
+        if not self._active_browser_use_request:
+            return
+        config = self._active_browser_use_request['config']
+        history_messages = self._active_browser_use_request.get(
+            'storage_history_messages',
+            self._active_browser_use_request['history_messages'],
+        )
+        raw_question = self._active_browser_use_request['question_text']
+        answer_text = str((payload or {}).get('answer', '') or 'Browser Use task completed.')
+        if (payload or {}).get('cancelled'):
+            answer_text = answer_text or 'Browser Use task was stopped.'
+        prefix = (
+            f'<div class="pipeline-default-heading"><strong>Browser Use · '
+            f'{html.escape(str(config.get("model", "") or ""))}</strong></div>'
+        )
+        new_messages, final_text = append_chat_turn(
+            history_messages,
+            raw_question,
+            answer_text,
+            attachments=[],
+            assistant_display_prefix_html=prefix,
+        )
+        self.render_final_output(final_text, history_messages=new_messages)
+        self._save_active_conversation(new_messages)
+        self._append_question_to_branch_state(raw_question, max(0, len(new_messages) - 2))
+        self.text1.clear()
+        self._set_prompt_edit_read_only(False)
+        self._restore_send_button()
+        self.cleanup_browser_use_request()
+
+    def on_browser_use_failed(self, error_text: str):
+        if not self._active_browser_use_request:
+            return
+        history_messages = self._active_browser_use_request.get(
+            'storage_history_messages',
+            self._active_browser_use_request['history_messages'],
+        )
+        raw_question = self._active_browser_use_request['question_text']
+        new_messages, final_text = append_chat_turn(
+            history_messages,
+            raw_question,
+            f'Browser Use failed: {str(error_text or "").strip()}',
+            attachments=[],
+        )
+        self.render_final_output(final_text, history_messages=new_messages)
+        self._save_active_conversation(new_messages)
+        self._append_question_to_branch_state(raw_question, max(0, len(new_messages) - 2))
+        self.text1.setPlainText(self.LastQ)
+        self._set_prompt_edit_read_only(False)
+        self._restore_send_button()
+        self.cleanup_browser_use_request()
 
     def _launch_main_chat_request(self,
                                   *,
@@ -27739,6 +30412,11 @@ end run'''"""
             self.cleanup_async_preflight()
             self._set_prompt_edit_read_only(False)
             self._restore_send_button()
+            return
+        if self._active_browser_use_request:
+            if self._active_browser_use_thread is not None:
+                self._active_browser_use_thread.request_stop()
+            self.on_browser_use_finished({'cancelled': True, 'answer': 'Browser Use task was stopped.'})
             return
         if not self._active_chat_request:
             return
@@ -28030,6 +30708,8 @@ end run'''"""
             return
         self.cleanup_async_render()
         self._pending_real2_scroll = True
+        self._rendered_message_hashes = list(payload.get('message_hashes') or [])
+        self._rendered_conversation_path = str(self._active_conversation_path or '')
         self.real2.setHtml(str(payload.get('html', '') or ''))
         self.real1.clear()
         self.real1.setVisible(False)
@@ -28052,6 +30732,8 @@ end run'''"""
             display_prefix_html=str(payload.get('display_prefix_html', '') or ''),
             display_prefix_map=display_prefix_map,
         )
+        self._rendered_message_hashes = chat_message_render_hashes(history_messages)
+        self._rendered_conversation_path = str(self._active_conversation_path or '')
         self.real2.setHtml(html_text)
         self.real1.clear()
         self.real1.setVisible(False)
@@ -28129,15 +30811,17 @@ end run'''"""
                 structured_outputs=structured_outputs,
                 step_results=list(config.get('step_results') or []),
             )
-            self.render_final_output(final_text, history_messages=new_messages)
+            if not self.try_append_final_messages(new_messages):
+                self.render_final_output(final_text, history_messages=new_messages)
             self._save_active_conversation(new_messages, new_outputs=generated_outputs)
             self._append_question_to_branch_state(self._active_chat_request['question_text'], question_index)
             if config.get('api_key') and config.get('endpoint'):
-                self._refresh_active_conversation_runtime_data(
-                    config['api_key'],
-                    config['endpoint'],
-                    config['model'],
-                    config.get('timeout', 60),
+                self.start_conversation_runtime_refresh(
+                    conversation_path=str(self._active_conversation_path or ''),
+                    api_key=config['api_key'],
+                    endpoint=config['endpoint'],
+                    model=config['model'],
+                    timeout=config.get('timeout', 60),
                 )
             self.text1.clear()
         except Exception as exc:
@@ -28148,7 +30832,8 @@ end run'''"""
                 attachments=config.get('attachment_records'),
                 assistant_display_prefix_html=display_prefix_html,
             )
-            self.render_final_output(fallback, history_messages=new_messages)
+            if not self.try_append_final_messages(new_messages):
+                self.render_final_output(fallback, history_messages=new_messages)
             self._save_active_conversation(new_messages)
             self._append_question_to_branch_state(self._active_chat_request['question_text'], max(0, len(new_messages) - 2))
             self.text1.setPlainText(self.LastQ)
@@ -28174,7 +30859,8 @@ end run'''"""
             attachments=config.get('attachment_records'),
             assistant_display_prefix_html=display_prefix_html,
         )
-        self.render_final_output(final_text, history_messages=new_messages)
+        if not self.try_append_final_messages(new_messages):
+            self.render_final_output(final_text, history_messages=new_messages)
         self._save_active_conversation(new_messages)
         self._append_question_to_branch_state(self._active_chat_request['question_text'], max(0, len(new_messages) - 2))
         self.text1.setPlainText(self.LastQ)
@@ -28397,6 +31083,12 @@ end run'''"""
         )
 
         self.LastQ = str(raw_question)
+        is_specialized_slash, slash_capability, slash_task = parse_specialized_slash_command(raw_question)
+        if is_specialized_slash and not slash_task:
+            self._restore_send_button()
+            command = next((cmd for cmd, capability, _desc in SPECIALIZED_SLASH_COMMANDS if capability == slash_capability), '/')
+            show_broccoli_message(self, 'Slash task empty', f'Type a task after {command}.')
+            return
         self._set_prompt_edit_read_only(True)
         full_history_messages = get_current_chat_history_messages()
         temp_branch_state = self._branch_states.pop('__current__', None) if not self._active_conversation_path else None
@@ -28532,11 +31224,13 @@ end run'''"""
         )
 
     def ClearX(self):
+        self._reset_structured_transfer_state()
         self.text1.clear()
         self._set_prompt_edit_read_only(False)
         self.trans = 0
         self._active_conversation_path = None
         self._mcp_conversation_allowlist = set()
+        self.cleanup_browser_use_request()
         self._webfetch_records = []
         self._webfetch_generated_attachment = None
         self._webfetch_panel_dismissed = False
@@ -30062,29 +32756,271 @@ end run'''"""
             zhong = zhong.replace('  ', ' ')
             return zhong
 
+    def _display_html_for_message_card(self, message: dict, index: int) -> str:
+        normalized = normalize_chat_history_message(message)
+        if not normalized:
+            return ''
+        dark = bool(is_dark_theme(app))
+        message_hash = chat_message_render_hash(normalized)
+        cache_key = f'{int(dark)}:{index}:{message_hash}'
+        cache = getattr(self, '_message_display_html_cache', None)
+        if cache is None:
+            cache = {}
+            self._message_display_html_cache = cache
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+        markup, display_prefix_map = render_chat_message_display_markup(
+            normalized,
+            index,
+            include_separator=(index > 0),
+        )
+        rendered = render_markdown_display_fragment_to_html(markup, display_prefix_map)
+        role = html.escape(str(normalized.get('role', '') or '').strip().lower(), quote=True)
+        message_hash_attr = html.escape(message_hash, quote=True)
+        card = (
+            f'<section class="chat-display-message" data-message-index="{index}" '
+            f'data-message-role="{role}" data-message-hash="{message_hash_attr}">'
+            f'{rendered}'
+            '</section>'
+        )
+        if len(cache) > 1500:
+            cache.clear()
+        cache[cache_key] = card
+        return card
+
+    def _replace_transfer_editor_with_display_messages(self, messages: list[dict]) -> None:
+        messages = [message for message in (messages or []) if normalize_chat_history_message(message)]
+        if not messages:
+            return
+        cards = [
+            {'index': index, 'html': self._display_html_for_message_card(message, index)}
+            for index, message in enumerate(messages)
+        ]
+        cards = [item for item in cards if item.get('html')]
+        if not cards:
+            return
+        self.cleanup_async_render()
+        self._active_render_request_id += 1
+        self._pending_real2_scroll = False
+        script = (
+            '(function(items){'
+            'for (const item of items) {'
+            'const selector = "[data-message-index=\\"" + item.index + "\\"]";'
+            'const node = document.querySelector(selector);'
+            'if (node) { node.outerHTML = item.html; }'
+            'else { document.body.insertAdjacentHTML("beforeend", item.html); }'
+            '}'
+            'window.__broccoliStructuredTransferDirty = false;'
+            'window.broccoliCollectStructuredMessages = undefined;'
+            'window.scrollTo(0, document.body.scrollHeight);'
+            '})(%s);'
+        ) % json.dumps(cards, ensure_ascii=False)
+        self.real2.page().runJavaScript(script)
+        self._rendered_message_hashes = chat_message_render_hashes(messages)
+        self._rendered_conversation_path = str(self._active_conversation_path or '')
+        self.real1.clear()
+        self.real1.setVisible(False)
+        self.real2.setVisible(True)
+        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+
+    def _materialize_legacy_messages_for_transfer(self, output_text: str) -> list[dict]:
+        messages = parse_legacy_chat_history_markdown(output_text)
+        if not messages:
+            return []
+        markdown = save_chat_history_messages(messages)
+        if self._active_conversation_path:
+            record = self._load_active_conversation_record()
+            if record is not None:
+                record['messages'] = list(messages)
+                record['rendered_markdown'] = markdown
+                record['updated_at'] = datetime.datetime.now().isoformat(timespec='seconds')
+                saved = write_conversation_record(self._active_conversation_path, record)
+                self._active_conversation_path = saved['path']
+                self._refresh_history_panel()
+                self._refresh_links_panel()
+                self._refresh_outputs_panel()
+                self._refresh_branch_state_from_current_conversation()
+        return messages
+
+    def _structured_transfer_signature(self, messages: list[dict]) -> str:
+        parts = []
+        for index, message in enumerate(messages or []):
+            parts.append(
+                {
+                    'index': index,
+                    'role': str(message.get('role', '') or ''),
+                    'content': str(message.get('content', '') or ''),
+                    'timestamp': str(message.get('timestamp', '') or ''),
+                    'attachments': message.get('attachments') or [],
+                    'display_prefix_html': str(message.get('display_prefix_html', '') or ''),
+                }
+            )
+        return json.dumps(parts, ensure_ascii=False, sort_keys=True)
+
+    def _structured_transfer_parts_dir(self) -> str:
+        if self._active_conversation_path:
+            return os.path.join(conversation_attachment_dir(self._active_conversation_path), STRUCTURED_MESSAGE_PARTS_DIRNAME)
+        return os.path.join(BROCCOLI_APP_DATA_DIR, STRUCTURED_MESSAGE_PARTS_DIRNAME, 'current')
+
+    def _persist_structured_transfer_parts(self, messages: list[dict]) -> None:
+        out_dir = self._structured_transfer_parts_dir()
+        os.makedirs(out_dir, exist_ok=True)
+        manifest = []
+        for index, message in enumerate(messages or []):
+            role = str(message.get('role', '') or 'message').strip().lower()
+            role = re.sub(r'[^a-z0-9_-]+', '_', role) or 'message'
+            filename = f'{index:04d}_{role}.txt'
+            path = os.path.join(out_dir, filename)
+            write_text_file(path, str(message.get('content', '') or ''))
+            manifest.append(
+                {
+                    'index': index,
+                    'role': role,
+                    'timestamp': str(message.get('timestamp', '') or ''),
+                    'filename': filename,
+                }
+            )
+        with open(os.path.join(out_dir, 'manifest.json'), 'w', encoding='utf-8') as handle:
+            json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+    def _disconnect_transfer_plaintext_save(self):
+        try:
+            self.real1.textChanged.disconnect(self.save_text)
+        except Exception:
+            pass
+
+    def _enter_structured_transfer_edit(self, history_messages: list[dict]):
+        self.cleanup_async_render()
+        self._active_render_request_id += 1
+        self._structured_transfer_active = True
+        self._structured_transfer_messages = copy.deepcopy(history_messages)
+        self._structured_transfer_last_signature = self._structured_transfer_signature(self._structured_transfer_messages)
+        self._persist_structured_transfer_parts(self._structured_transfer_messages)
+        for index, message in enumerate(self._structured_transfer_messages):
+            self._display_html_for_message_card(message, index)
+        self._disconnect_transfer_plaintext_save()
+        self.real1.setReadOnly(True)
+        self.real1.clear()
+        self.real1.setVisible(False)
+        self.real2.setVisible(True)
+        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+        self._pending_real2_scroll = True
+        self.real2.setHtml(render_structured_transfer_editor_html(self._structured_transfer_messages, is_dark_theme(app)))
+        self._structured_transfer_autosave_timer.start()
+
+    def _collect_structured_transfer_edits(self, callback, clear_dirty: bool = True):
+        if not self._structured_transfer_active:
+            callback(None)
+            return
+        js = (
+            'window.broccoliCollectStructuredMessages '
+            f'&& window.broccoliCollectStructuredMessages({"true" if clear_dirty else "false"})'
+        )
+        try:
+            self.real2.page().runJavaScript(js, callback)
+        except Exception:
+            callback(None)
+
+    def _apply_structured_transfer_payload(self, payload, *, force: bool = False) -> tuple[list[dict], str] | None:
+        if not self._structured_transfer_active:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        dirty = bool(payload.get('dirty', False))
+        if not dirty and not force:
+            return None
+        edited_items = payload.get('messages', [])
+        if not isinstance(edited_items, list):
+            return None
+        messages = copy.deepcopy(self._structured_transfer_messages or get_current_chat_history_messages())
+        if not messages:
+            return None
+        for item in edited_items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get('index'))
+            except (TypeError, ValueError):
+                continue
+            if index < 0 or index >= len(messages):
+                continue
+            updated = dict(messages[index])
+            updated['content'] = str(item.get('content', '') or '')
+            messages[index] = updated
+        signature = self._structured_transfer_signature(messages)
+        if signature == self._structured_transfer_last_signature and not force:
+            return None
+        markdown = save_chat_history_messages(messages)
+        self._structured_transfer_messages = messages
+        self._structured_transfer_last_signature = signature
+        self._persist_structured_transfer_parts(messages)
+        if self._active_conversation_path:
+            record = self._load_active_conversation_record()
+            if record is not None:
+                record['messages'] = list(messages)
+                record['rendered_markdown'] = render_chat_history_markdown(messages)
+                record['updated_at'] = datetime.datetime.now().isoformat(timespec='seconds')
+                saved = write_conversation_record(self._active_conversation_path, record)
+                self._active_conversation_path = saved['path']
+                self._refresh_history_panel()
+                self._refresh_links_panel()
+                self._refresh_outputs_panel()
+                self._refresh_branch_state_from_current_conversation()
+        return messages, markdown
+
+    def _autosave_structured_transfer_edits(self):
+        if not self._structured_transfer_active:
+            return
+        self._collect_structured_transfer_edits(
+            lambda payload: self._apply_structured_transfer_payload(payload, force=False),
+            clear_dirty=True,
+        )
+
+    def _leave_structured_transfer_edit(self):
+        self._structured_transfer_autosave_timer.stop()
+
+        def finish(payload):
+            result = self._apply_structured_transfer_payload(payload, force=True)
+            messages = result[0] if result else (self._structured_transfer_messages or get_current_chat_history_messages())
+            self._structured_transfer_active = False
+            self._structured_transfer_messages = []
+            self._structured_transfer_last_signature = ''
+            self.real1.setReadOnly(True)
+            self.real1.clear()
+            self.real1.setVisible(False)
+            self.real2.setVisible(True)
+            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+            self._replace_transfer_editor_with_display_messages(messages)
+
+        self._collect_structured_transfer_edits(finish, clear_dirty=True)
+
     def transferview(self):
+        if self._structured_transfer_active:
+            self.trans = 0
+            self._leave_structured_transfer_edit()
+            return
         self.trans += 1
         AllText = read_file_contents(BasePath + 'output.txt', '')
         history_messages = get_current_chat_history_messages()
+        if not history_messages:
+            history_messages = self._materialize_legacy_messages_for_transfer(AllText)
+        if history_messages and self.trans % 2 != 0:
+            self._enter_structured_transfer_edit(history_messages)
+            return
         if self.trans % 2 == 0: # html
             self.real1.setVisible(False)
             self.real2.setVisible(True)
             self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
             self.real1.setReadOnly(True)
-            self.real1.textChanged.disconnect(self.save_text)
+            self._disconnect_transfer_plaintext_save()
             self.render_final_output(AllText, history_messages=history_messages or None)
         else: # text
-            self.real1.setVisible(True)
-            self.real2.setVisible(False)
-            self.drawing_layer.setVisible(False)
-            self.real1.setReadOnly(False)
-            self.real1.setText(AllText)
-            self.real1.ensureCursorVisible()  # 游标可用
-            cursor = self.real1.textCursor()  # 设置游标
-            pos = len(self.real1.toPlainText())  # 获取文本尾部的位置
-            cursor.setPosition(pos)  # 游标位置设置为尾部
-            self.real1.setTextCursor(cursor)  # 滚动到游标位置
-            self.real1.textChanged.connect(self.save_text)
+            self.real1.setVisible(False)
+            self.real2.setVisible(True)
+            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+            self.real1.setReadOnly(True)
+            self._disconnect_transfer_plaintext_save()
 
     def _update_left_pill_layout(self):
         layout = getattr(self, '_left_content_lay', None)
@@ -30233,6 +33169,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self.refresh_embedding_profile_selector(self.settings_store.get('globals', {}).get('embedding_profile', ''))
         self.refresh_specialized_profile_selectors(self.settings_store.get('globals', {}).get('specialized_profiles', {}))
         self.refresh_specialized_execution_selectors(self.settings_store.get('globals', {}).get('specialized_execution_modes', {}))
+        self.refresh_browser_use_profile_selector(self.settings_store.get('globals', {}).get('browser_use_profile', ''))
         if hasattr(self, 'background_vision_profile_list_widget'):
             self.refresh_background_vision_profile_list(
                 self.settings_store.get('globals', {}).get('background_vision_profile_names', [])
@@ -30251,6 +33188,19 @@ class SettingsPanel(QWidget):  # Customization settings
         self.embedding_profile_combo.setCurrentIndex(index)
         self.embedding_profile_combo.blockSignals(False)
         self._update_embedding_status_hint()
+
+    def refresh_browser_use_profile_selector(self, selected_name: str | None = None):
+        if not hasattr(self, 'browser_use_profile_combo'):
+            return
+        selected_name = str(selected_name or '').strip()
+        self.browser_use_profile_combo.blockSignals(True)
+        self.browser_use_profile_combo.clear()
+        self.browser_use_profile_combo.addItem('Default active profile', '')
+        for profile in self.settings_store['profiles']:
+            self.browser_use_profile_combo.addItem(profile['name'], profile['name'])
+        index = self.browser_use_profile_combo.findData(selected_name)
+        self.browser_use_profile_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.browser_use_profile_combo.blockSignals(False)
 
     def refresh_specialized_profile_selectors(self, selected_profiles: dict | None = None):
         selected_profiles = normalize_specialized_profiles(selected_profiles)
@@ -30353,6 +33303,56 @@ class SettingsPanel(QWidget):  # Customization settings
             'background_vision_max_records': self.background_vision_max_records_input.text(),
         })
 
+    def _set_browser_use_settings(self, globals_store: dict):
+        settings = normalize_browser_use_settings(globals_store)
+        self.browser_use_enabled_checkbox.setChecked(bool(settings['browser_use_enabled']))
+        self.refresh_browser_use_profile_selector(settings['browser_use_profile'])
+        self._set_dropdown_current_data(self.browser_use_llm_combo, settings['browser_use_llm'])
+        self.browser_use_max_steps_input.setText(str(settings['browser_use_max_steps']))
+        self._set_dropdown_current_data(self.browser_use_vision_combo, settings['browser_use_use_vision'])
+        self._set_dropdown_current_data(self.browser_use_chrome_mode_combo, settings['browser_use_chrome_mode'])
+        self.browser_use_cdp_url_input.setText(settings['browser_use_cdp_url'])
+        self.browser_use_chrome_executable_input.setText(settings['browser_use_chrome_executable'])
+        self.browser_use_user_data_dir_input.setText(settings['browser_use_user_data_dir'])
+        self.browser_use_open_new_window_checkbox.setChecked(bool(settings['browser_use_open_new_window']))
+        self.browser_use_close_window_checkbox.setChecked(bool(settings['browser_use_close_window_after_task']))
+        self._update_browser_use_controls()
+
+    def _current_browser_use_settings(self) -> dict:
+        return normalize_browser_use_settings({
+            'browser_use_enabled': self.browser_use_enabled_checkbox.isChecked(),
+            'browser_use_profile': str(self.browser_use_profile_combo.currentData() or '').strip(),
+            'browser_use_llm': self.browser_use_llm_combo.currentData(),
+            'browser_use_max_steps': self.browser_use_max_steps_input.text(),
+            'browser_use_use_vision': self.browser_use_vision_combo.currentData(),
+            'browser_use_chrome_mode': self.browser_use_chrome_mode_combo.currentData(),
+            'browser_use_cdp_url': self.browser_use_cdp_url_input.text(),
+            'browser_use_chrome_executable': self.browser_use_chrome_executable_input.text(),
+            'browser_use_user_data_dir': self.browser_use_user_data_dir_input.text(),
+            'browser_use_open_new_window': self.browser_use_open_new_window_checkbox.isChecked(),
+            'browser_use_close_window_after_task': self.browser_use_close_window_checkbox.isChecked(),
+        })
+
+    def _update_browser_use_controls(self):
+        enabled = bool(self.browser_use_enabled_checkbox.isChecked())
+        mode = normalize_browser_use_chrome_mode(self.browser_use_chrome_mode_combo.currentData())
+        for widget in (
+            self.browser_use_profile_combo,
+            self.browser_use_llm_combo,
+            self.browser_use_max_steps_input,
+            self.browser_use_vision_combo,
+            self.browser_use_chrome_mode_combo,
+            self.browser_use_open_new_window_checkbox,
+            self.browser_use_close_window_checkbox,
+            self.browser_use_launch_button,
+        ):
+            widget.setEnabled(enabled)
+        self.browser_use_cdp_url_input.setEnabled(enabled and mode == 'connect_existing')
+        self.browser_use_chrome_executable_input.setEnabled(enabled)
+        self.browser_use_chrome_browse_button.setEnabled(enabled)
+        self.browser_use_user_data_dir_input.setEnabled(enabled)
+        self.browser_use_user_data_dir_button.setEnabled(enabled)
+
     def _update_background_vision_controls(self):
         enabled = bool(self.background_vision_enabled_checkbox.isChecked())
         show_enabled = enabled
@@ -30446,6 +33446,7 @@ class SettingsPanel(QWidget):  # Customization settings
         )))
         self._set_code_runner_records(globals_store.get('code_runners', []))
         self._set_background_vision_settings(globals_store)
+        self._set_browser_use_settings(globals_store)
         self.webfetch_download_input.setText(globals_store.get('webfetch_download_path', ''))
         self._set_prompt_records(parse_custom_prompt_storage(globals_store.get('custom_prompt', '')))
         self._set_skill_records(globals_store.get('skills', []))
@@ -30459,6 +33460,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self.refresh_embedding_profile_selector(globals_store.get('embedding_profile', ''))
         self.refresh_specialized_profile_selectors(globals_store.get('specialized_profiles', {}))
         self.refresh_specialized_execution_selectors(globals_store.get('specialized_execution_modes', {}))
+        self.refresh_browser_use_profile_selector(globals_store.get('browser_use_profile', ''))
         _pdf_val = int(globals_store.get('pdf_max_pages', 10))
         _idx = self.pdf_pages_combo.findData(_pdf_val)
         if _idx >= 0:
@@ -30527,6 +33529,8 @@ class SettingsPanel(QWidget):  # Customization settings
         self.settings_store['active_profile'] = self.settings_store['profiles'][0]['name']
         if self.settings_store['globals'].get('embedding_profile') == profile_name:
             self.settings_store['globals']['embedding_profile'] = ''
+        if self.settings_store['globals'].get('browser_use_profile') == profile_name:
+            self.settings_store['globals']['browser_use_profile'] = ''
         specialized = normalize_specialized_profiles(self.settings_store['globals'].get('specialized_profiles', {}))
         for key, value in specialized.items():
             if value == profile_name:
@@ -30613,6 +33617,7 @@ class SettingsPanel(QWidget):  # Customization settings
                     }
                 ),
                 'userscripts': self._current_userscripts(),
+                **self._current_browser_use_settings(),
                 **self._current_background_vision_settings(),
             }
 
@@ -30673,6 +33678,10 @@ class SettingsPanel(QWidget):  # Customization settings
             globals_store['embedding_profile'] = profile['name']
         if globals_store.get('embedding_profile') and globals_store['embedding_profile'] not in {item['name'] for item in updated_profiles}:
             globals_store['embedding_profile'] = ''
+        if globals_store.get('browser_use_profile') == previous_profile_name:
+            globals_store['browser_use_profile'] = profile['name']
+        if globals_store.get('browser_use_profile') and globals_store['browser_use_profile'] not in {item['name'] for item in updated_profiles}:
+            globals_store['browser_use_profile'] = ''
         vision_names = normalize_background_vision_profile_names(globals_store.get('background_vision_profile_names', []))
         if previous_profile_name and profile['name'] != previous_profile_name:
             vision_names = [profile['name'] if name == previous_profile_name else name for name in vision_names]
@@ -31703,6 +34712,59 @@ class SettingsPanel(QWidget):  # Customization settings
             self.annotation_pen_color_input.setText(color.name().upper())
             self._mark_dirty_if_needed()
 
+    def _browse_browser_use_chrome_executable(self):
+        start_path = self.browser_use_chrome_executable_input.text().strip() or DEFAULT_BROWSER_USE_CHROME_EXECUTABLE
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            'Select Google Chrome executable',
+            start_path,
+        )
+        if chosen:
+            self.browser_use_chrome_executable_input.setText(chosen)
+            self._mark_dirty_if_needed()
+
+    def _browse_browser_use_user_data_dir(self):
+        chosen = QFileDialog.getExistingDirectory(
+            self,
+            'Select Browser Use Chrome profile folder',
+            self.browser_use_user_data_dir_input.text().strip() or DEFAULT_BROWSER_USE_USER_DATA_DIR,
+        )
+        if chosen:
+            self.browser_use_user_data_dir_input.setText(chosen)
+            self._mark_dirty_if_needed()
+
+    def launch_browser_use_chrome_from_settings(self):
+        settings = self._current_browser_use_settings()
+        chrome_path = settings['browser_use_chrome_executable']
+        cdp_url = settings['browser_use_cdp_url']
+        user_data_dir = settings['browser_use_user_data_dir']
+        if not browser_use_chrome_executable_exists(chrome_path):
+            show_broccoli_message(
+                self,
+                'Google Chrome not found',
+                'Browser Use needs Google Chrome installed. Check the Chrome executable path.',
+            )
+            return
+        if browser_use_cdp_available(cdp_url):
+            show_broccoli_message(
+                self,
+                'Browser Use Chrome',
+                'The fixed Browser Use Chrome instance is already reachable. Open or select the page you want, then run a /browser use task.',
+            )
+            return
+        if launch_browser_use_chrome(chrome_path, cdp_url, user_data_dir):
+            show_broccoli_message(
+                self,
+                'Browser Use Chrome launched',
+                'Use this Chrome window to open pages, sign in, and prepare background tabs. When "Open each task in a new Chrome tab/window" is off, Browser Use will continue from this instance.',
+            )
+        else:
+            show_broccoli_message(
+                self,
+                'Browser Use Chrome unavailable',
+                'Broccoli could not launch or connect to the fixed Browser Use Chrome instance. Check the CDP URL port and Chrome profile folder.',
+            )
+
     def _set_general_page(self, index: int):
         if not hasattr(self, 'general_pages'):
             return
@@ -32132,6 +35194,45 @@ class SettingsPanel(QWidget):  # Customization settings
         self.planner_placeholder_button = QWidget(self)
         self.planner_placeholder_button.setFixedWidth(self.embedding_test_button.sizeHint().width())
         self.planner_placeholder_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.browser_use_profile_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.browser_use_profile_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.browser_use_profile_combo.setMinimumWidth(120)
+        self.browser_use_profile_combo.setMaximumWidth(220)
+        self.browser_use_llm_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.browser_use_llm_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.browser_use_llm_combo.setMinimumWidth(124)
+        self.browser_use_llm_combo.setMaximumWidth(232)
+        for label, value in BROWSER_USE_LLM_OPTIONS:
+            self.browser_use_llm_combo.addItem(label, value)
+        self.browser_use_enabled_checkbox = QCheckBox('Enable Browser Use slash command', self)
+        self.browser_use_max_steps_input = QLineEdit(self)
+        self.browser_use_max_steps_input.setPlaceholderText(str(DEFAULT_BROWSER_USE_MAX_STEPS))
+        self.browser_use_max_steps_input.setFixedHeight(22)
+        self.browser_use_vision_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.browser_use_vision_combo.setMinimumWidth(180)
+        for label, value in BROWSER_USE_VISION_OPTIONS:
+            self.browser_use_vision_combo.addItem(label, value)
+        self.browser_use_chrome_mode_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.browser_use_chrome_mode_combo.setMinimumWidth(220)
+        for label, value in BROWSER_USE_CHROME_MODE_OPTIONS:
+            self.browser_use_chrome_mode_combo.addItem(label, value)
+        self.browser_use_cdp_url_input = QLineEdit(self)
+        self.browser_use_cdp_url_input.setPlaceholderText(DEFAULT_BROWSER_USE_CDP_URL)
+        self.browser_use_cdp_url_input.setFixedHeight(22)
+        self.browser_use_chrome_executable_input = QLineEdit(self)
+        self.browser_use_chrome_executable_input.setPlaceholderText(DEFAULT_BROWSER_USE_CHROME_EXECUTABLE)
+        self.browser_use_chrome_executable_input.setFixedHeight(22)
+        self.browser_use_chrome_browse_button = MacNormalButton('Browse', self)
+        self.browser_use_chrome_browse_button.clicked.connect(self._browse_browser_use_chrome_executable)
+        self.browser_use_user_data_dir_input = QLineEdit(self)
+        self.browser_use_user_data_dir_input.setPlaceholderText(DEFAULT_BROWSER_USE_USER_DATA_DIR)
+        self.browser_use_user_data_dir_input.setFixedHeight(22)
+        self.browser_use_user_data_dir_button = MacNormalButton('Browse', self)
+        self.browser_use_user_data_dir_button.clicked.connect(self._browse_browser_use_user_data_dir)
+        self.browser_use_launch_button = MacNormalButton('Launch Browser Use Chrome', self)
+        self.browser_use_launch_button.clicked.connect(self.launch_browser_use_chrome_from_settings)
+        self.browser_use_open_new_window_checkbox = QCheckBox('Open each task in a new Chrome tab/window', self)
+        self.browser_use_close_window_checkbox = QCheckBox('Close Browser Use window after task', self)
         for capability, _label in SPECIALIZED_CAPABILITIES:
             combo = DropdownButton(self, always_dark=False, compact_light=True)
             combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -32365,6 +35466,48 @@ class SettingsPanel(QWidget):  # Customization settings
         general_page_6_layout.addWidget(QLabel('Background vision prompt'))
         general_page_6_layout.addWidget(self.background_vision_prompt_edit, 1)
 
+        general_page_7 = QWidget()
+        general_page_7_layout = QVBoxLayout(general_page_7)
+        general_page_7_layout.setContentsMargins(0, 0, 0, 0)
+        general_page_7_layout.setSpacing(12)
+        browser_use_form = QFormLayout()
+        browser_use_form.setContentsMargins(0, 0, 0, 0)
+        browser_use_form.setSpacing(10)
+        browser_use_chrome_row = QWidget()
+        browser_use_chrome_row_layout = QHBoxLayout(browser_use_chrome_row)
+        browser_use_chrome_row_layout.setContentsMargins(0, 0, 0, 0)
+        browser_use_chrome_row_layout.setSpacing(4)
+        browser_use_chrome_row_layout.addWidget(self.browser_use_chrome_executable_input, 1)
+        browser_use_chrome_row_layout.addWidget(self.browser_use_chrome_browse_button)
+        browser_use_profile_dir_row = QWidget()
+        browser_use_profile_dir_row_layout = QHBoxLayout(browser_use_profile_dir_row)
+        browser_use_profile_dir_row_layout.setContentsMargins(0, 0, 0, 0)
+        browser_use_profile_dir_row_layout.setSpacing(4)
+        browser_use_profile_dir_row_layout.addWidget(self.browser_use_user_data_dir_input, 1)
+        browser_use_profile_dir_row_layout.addWidget(self.browser_use_user_data_dir_button)
+        browser_use_form.addRow('Chrome mode', self.browser_use_chrome_mode_combo)
+        browser_use_form.addRow('CDP URL', self.browser_use_cdp_url_input)
+        browser_use_form.addRow('Chrome executable', browser_use_chrome_row)
+        browser_use_form.addRow('Chrome profile folder', browser_use_profile_dir_row)
+        browser_use_form.addRow('Max steps', self.browser_use_max_steps_input)
+        browser_use_form.addRow('Vision', self.browser_use_vision_combo)
+        general_page_7_layout.addWidget(self.browser_use_enabled_checkbox)
+        general_page_7_layout.addLayout(browser_use_form)
+        general_page_7_layout.addWidget(self.browser_use_launch_button)
+        general_page_7_layout.addWidget(self.browser_use_open_new_window_checkbox)
+        general_page_7_layout.addWidget(self.browser_use_close_window_checkbox)
+        browser_use_hint = QLabel(
+            'Use Launch system Chrome for the most reliable setup. Broccoli uses this dedicated profile folder; sign in there once, then later Browser Use tasks reuse that login state.',
+            self,
+        )
+        browser_use_hint.setWordWrap(True)
+        browser_use_hint.setStyleSheet(
+            'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
+            'font-size: 11px; color: #8E8E93;'
+        )
+        general_page_7_layout.addWidget(browser_use_hint)
+        general_page_7_layout.addStretch(1)
+
         self.general_pages = QStackedWidget(self)
         self.general_pages.addWidget(general_page_1)
         self.general_pages.addWidget(general_page_2)
@@ -32372,13 +35515,14 @@ class SettingsPanel(QWidget):  # Customization settings
         self.general_pages.addWidget(general_page_4)
         self.general_pages.addWidget(general_page_5)
         self.general_pages.addWidget(general_page_6)
+        self.general_pages.addWidget(general_page_7)
         self.general_prev_button = MacNormalButton('‹', self)
         self.general_next_button = MacNormalButton('›', self)
         self.general_prev_button.setFixedWidth(44)
         self.general_next_button.setFixedWidth(44)
         self.general_prev_button.clicked.connect(lambda: self._set_general_page(self.general_pages.currentIndex() - 1))
         self.general_next_button.clicked.connect(lambda: self._set_general_page(self.general_pages.currentIndex() + 1))
-        self.general_page_label = QLabel('1 / 6', self)
+        self.general_page_label = QLabel('1 / 7', self)
         self.general_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         general_pager = QWidget()
         general_pager_layout = QHBoxLayout(general_pager)
@@ -32451,6 +35595,21 @@ class SettingsPanel(QWidget):  # Customization settings
             row.setLayout(row_layout)
             full_row.setLayout(full_row_layout)
             specialized_rows_layout.addWidget(full_row)
+        browser_use_model_row = QWidget()
+        browser_use_model_row_layout = QHBoxLayout(browser_use_model_row)
+        browser_use_model_row_layout.setContentsMargins(0, 0, 0, 0)
+        browser_use_model_row_layout.setSpacing(6)
+        browser_use_model_label = QLabel('Browser Use', self)
+        browser_use_model_label.setFixedWidth(112)
+        browser_use_model_controls = QWidget()
+        browser_use_model_controls_layout = QHBoxLayout(browser_use_model_controls)
+        browser_use_model_controls_layout.setContentsMargins(0, 0, 0, 0)
+        browser_use_model_controls_layout.setSpacing(4)
+        browser_use_model_controls_layout.addWidget(self.browser_use_profile_combo, 3)
+        browser_use_model_controls_layout.addWidget(self.browser_use_llm_combo, 2)
+        browser_use_model_row_layout.addWidget(browser_use_model_label)
+        browser_use_model_row_layout.addWidget(browser_use_model_controls, 1)
+        specialized_rows_layout.addWidget(browser_use_model_row)
         specialized_rows.setLayout(specialized_rows_layout)
         embedding_layout.addLayout(embedding_form)
         embedding_layout.addWidget(specialized_rows)
@@ -32656,6 +35815,19 @@ class SettingsPanel(QWidget):  # Customization settings
         self.background_vision_schedule_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
         self.background_vision_wait_mode_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
         self.background_vision_image_format_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
+        self.browser_use_enabled_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.browser_use_enabled_checkbox.toggled.connect(self._update_browser_use_controls)
+        self.browser_use_profile_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
+        self.browser_use_llm_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
+        self.browser_use_max_steps_input.textChanged.connect(self._mark_dirty_if_needed)
+        self.browser_use_vision_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
+        self.browser_use_chrome_mode_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
+        self.browser_use_chrome_mode_combo.currentIndexChanged.connect(self._update_browser_use_controls)
+        self.browser_use_cdp_url_input.textChanged.connect(self._mark_dirty_if_needed)
+        self.browser_use_chrome_executable_input.textChanged.connect(self._mark_dirty_if_needed)
+        self.browser_use_user_data_dir_input.textChanged.connect(self._mark_dirty_if_needed)
+        self.browser_use_open_new_window_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.browser_use_close_window_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.background_vision_keep_history_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.background_vision_save_captures_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.background_vision_save_captures_checkbox.toggled.connect(self._update_background_vision_controls)
@@ -32717,6 +35889,7 @@ class SettingsPanel(QWidget):  # Customization settings
                     }
                 ),
                 'userscripts': self._current_userscripts(),
+                **self._current_browser_use_settings(),
                 **self._current_background_vision_settings(),
             },
             'profile': {
