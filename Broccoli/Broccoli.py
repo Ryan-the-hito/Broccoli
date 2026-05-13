@@ -153,7 +153,7 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.7'
+VERSION = '2.0.8'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
 BUNDLED_RESOURCES_DIR = _resolve_bundled_resources_dir()
@@ -610,6 +610,16 @@ def _coerce_int(value, default: int, min_value: int | None = None, max_value: in
     return parsed
 
 
+def online_memory_minutes_to_hours(value) -> int:
+    minutes = _coerce_int(value, 60, 1, 525600)
+    return max(1, (minutes + 59) // 60)
+
+
+def online_memory_hours_to_minutes(value) -> int:
+    hours = _coerce_int(value, 1, 1, 8760)
+    return hours * 60
+
+
 def normalize_background_vision_schedule_mode(value) -> str:
     mode = str(value or '').strip()
     return mode if mode in {'fixed_interval', 'after_completion'} else 'fixed_interval'
@@ -710,6 +720,214 @@ def normalize_browser_use_settings(raw: dict | None) -> dict:
         ),
     })
     return settings
+
+
+ONLINE_MEMORY_ENDPOINT_TYPE_OPTIONS = (
+    ('web', 'Web URL'),
+    ('local_file', 'Local file'),
+)
+ONLINE_MEMORY_READ_METHOD_OPTIONS = (
+    ('management_page', 'Management page'),
+    ('chat_prompt', 'Chat prompt'),
+    ('text_only_page', 'Text-only page'),
+    ('custom_script', 'Custom script'),
+)
+ONLINE_MEMORY_WRITE_METHOD_OPTIONS = (
+    ('chat_prompt', 'Chat prompt'),
+    ('text_overwrite', 'Overwrite text'),
+    ('text_append', 'Append text'),
+    ('disabled', 'Disabled'),
+)
+ONLINE_MEMORY_TEMPLATE_OPTIONS = (
+    ('generic_ai_chat', 'Generic AI chat'),
+    ('web_special_rules', 'Web special rules'),
+)
+ONLINE_MEMORY_RULE_FIELDS = (
+    ('read_prompt', 'Read prompt'),
+    ('write_prompt', 'Write prompt'),
+    ('cleaner_prompt', 'Cleaner prompt'),
+    ('merge_prompt', 'Merge prompt'),
+    ('extract_selector', 'Selector / script'),
+)
+DEFAULT_ONLINE_MEMORY_READ_PROMPT = (
+    'Please list all durable memory, preferences, and long-term facts you currently retain about me. '
+    'Return only the memory content, grouped as concise bullet points.'
+)
+DEFAULT_ONLINE_MEMORY_WRITE_PROMPT = (
+    'Please remember the following durable user memory for future conversations. '
+    'Preserve concrete facts, preferences, and standing instructions.\n\n{memory}'
+)
+DEFAULT_ONLINE_MEMORY_CLEANER_PROMPT = (
+    'Clean the following extracted text into Broccoli permanent memory. Keep only durable user facts, '
+    'preferences, standing instructions, and stable context. Remove page chrome, duplicates, transient chat text, '
+    'and irrelevant UI labels. Return plain text only.\n\n{text}'
+)
+
+
+def normalize_online_memory_endpoint_type(value: str) -> str:
+    candidate = str(value or '').strip()
+    allowed = {key for key, _label in ONLINE_MEMORY_ENDPOINT_TYPE_OPTIONS}
+    return candidate if candidate in allowed else 'web'
+
+
+def normalize_online_memory_read_method(value: str) -> str:
+    candidate = str(value or '').strip()
+    allowed = {key for key, _label in ONLINE_MEMORY_READ_METHOD_OPTIONS}
+    return candidate if candidate in allowed else 'management_page'
+
+
+def normalize_online_memory_write_method(value: str) -> str:
+    candidate = str(value or '').strip()
+    allowed = {key for key, _label in ONLINE_MEMORY_WRITE_METHOD_OPTIONS}
+    return candidate if candidate in allowed else 'chat_prompt'
+
+
+def normalize_online_memory_template(value: str) -> str:
+    candidate = str(value or '').strip()
+    allowed = {key for key, _label in ONLINE_MEMORY_TEMPLATE_OPTIONS}
+    return candidate if candidate in allowed else 'generic_ai_chat'
+
+
+def online_memory_template_defaults(template: str) -> dict:
+    template = normalize_online_memory_template(template)
+    defaults = {
+        'endpoint_type': 'web',
+        'read_method': 'chat_prompt',
+        'write_method': 'chat_prompt',
+        'from_url': '',
+        'to_url': '',
+        'read_prompt': DEFAULT_ONLINE_MEMORY_READ_PROMPT,
+        'write_prompt': DEFAULT_ONLINE_MEMORY_WRITE_PROMPT,
+        'cleaner_prompt': DEFAULT_ONLINE_MEMORY_CLEANER_PROMPT,
+        'merge_prompt': '',
+        'extract_selector': '',
+    }
+    if template == 'web_special_rules':
+        defaults.update({
+            'read_method': 'management_page',
+            'write_method': 'chat_prompt',
+        })
+    return defaults
+
+
+def online_memory_special_defaults_for_url(url: str) -> dict:
+    try:
+        host = urlparse(str(url or '')).netloc.lower()
+    except Exception:
+        host = ''
+    host = host[4:] if host.startswith('www.') else host
+    if host.endswith('chatgpt.com'):
+        return {
+            'from_url': 'https://chatgpt.com/#settings/Personalization',
+            'to_url': 'https://chatgpt.com/',
+            'read_method': 'management_page',
+            'write_method': 'chat_prompt',
+        }
+    if host.endswith('claude.ai'):
+        return {
+            'from_url': 'https://claude.ai/settings/capabilities?modal=memory',
+            'to_url': 'https://claude.ai/new',
+            'read_method': 'management_page',
+            'write_method': 'chat_prompt',
+        }
+    if host.endswith('gemini.google.com'):
+        return {
+            'from_url': 'https://gemini.google.com/app',
+            'to_url': 'https://gemini.google.com/app',
+            'read_method': 'chat_prompt',
+            'write_method': 'chat_prompt',
+        }
+    return {}
+
+
+def default_online_memory_source(index: int = 1, template: str = 'generic_ai_chat') -> dict:
+    defaults = online_memory_template_defaults(template)
+    now_id = datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')
+    return normalize_online_memory_source({
+        'id': f'online-memory-{now_id}-{index}',
+        'enabled': True,
+        'name': f'Memory source {index}',
+        'template': template,
+        **defaults,
+    }, index)
+
+
+def normalize_online_memory_source(record: dict | None, index: int = 1) -> dict | None:
+    if not isinstance(record, dict):
+        return None
+    raw_template = str(record.get('template', 'generic_ai_chat') or '').strip()
+    template = normalize_online_memory_template(raw_template)
+    defaults = online_memory_template_defaults(template)
+    if template == 'web_special_rules':
+        special_defaults = online_memory_special_defaults_for_url(
+            record.get('from_url') or record.get('to_url') or ''
+        )
+        if special_defaults:
+            defaults.update(special_defaults)
+    source_id = str(record.get('id', '') or '').strip()
+    if not source_id:
+        seed = f"{record.get('name', '')}-{record.get('from_url', '')}-{index}-{time.time()}"
+        source_id = 'online-memory-' + hashlib.sha1(seed.encode('utf-8', 'ignore')).hexdigest()[:12]
+    return {
+        'id': source_id,
+        'enabled': bool(record.get('enabled', True)),
+        'name': str(record.get('name', '') or f'Memory source {index}').strip() or f'Memory source {index}',
+        'template': template,
+        'endpoint_type': normalize_online_memory_endpoint_type(record.get('endpoint_type', defaults.get('endpoint_type', 'web'))),
+        'from_url': str(record.get('from_url', defaults.get('from_url', '')) or '').strip(),
+        'to_url': str(record.get('to_url', defaults.get('to_url', '')) or '').strip(),
+        'read_method': normalize_online_memory_read_method(
+            record.get('read_method', defaults.get('read_method'))
+        ),
+        'write_method': normalize_online_memory_write_method(
+            record.get('write_method', defaults.get('write_method'))
+        ),
+        'read_prompt': str(record.get('read_prompt', defaults.get('read_prompt', '')) or ''),
+        'write_prompt': str(record.get('write_prompt', defaults.get('write_prompt', '')) or ''),
+        'cleaner_prompt': str(record.get('cleaner_prompt', defaults.get('cleaner_prompt', '')) or ''),
+        'merge_prompt': str(record.get('merge_prompt', defaults.get('merge_prompt', '')) or ''),
+        'extract_selector': str(record.get('extract_selector', defaults.get('extract_selector', '')) or ''),
+        'last_status': str(record.get('last_status', '') or ''),
+        'last_pull_at': str(record.get('last_pull_at', '') or ''),
+        'last_push_at': str(record.get('last_push_at', '') or ''),
+    }
+
+
+def normalize_online_memory_sources(records) -> list[dict]:
+    normalized = []
+    if isinstance(records, list):
+        for index, record in enumerate(records, start=1):
+            source = normalize_online_memory_source(record, index)
+            if source is not None:
+                normalized.append(source)
+    return normalized
+
+
+ONLINE_MEMORY_LOCAL_ID = 'local_memory'
+
+
+def normalize_online_memory_route_from(value: str, endpoints: list[dict]) -> str:
+    candidate = str(value or '').strip()
+    allowed = {ONLINE_MEMORY_LOCAL_ID, *{str(item.get('id', '') or '') for item in endpoints}}
+    if candidate in allowed:
+        return candidate
+    return ONLINE_MEMORY_LOCAL_ID
+
+
+def normalize_online_memory_route_to(values, endpoints: list[dict]) -> list[str]:
+    allowed = {ONLINE_MEMORY_LOCAL_ID, *{str(item.get('id', '') or '') for item in endpoints}}
+    normalized = []
+    if isinstance(values, str):
+        raw_values = [values]
+    elif isinstance(values, list):
+        raw_values = values
+    else:
+        raw_values = []
+    for value in raw_values:
+        candidate = str(value or '').strip()
+        if candidate and candidate in allowed and candidate not in normalized:
+            normalized.append(candidate)
+    return normalized or [ONLINE_MEMORY_LOCAL_ID]
 
 
 def default_background_vision_settings() -> dict:
@@ -5930,6 +6148,12 @@ def default_global_settings() -> dict:
         'memory_items': [],
         'memory_retention_days': 30,
         'memory_last_rollup_date': '',
+        'online_memory_enabled': False,
+        'online_memory_default_interval_minutes': 60,
+        'online_memory_snooze_when_idle': True,
+        'online_memory_sources': [],
+        'online_memory_route_from': ONLINE_MEMORY_LOCAL_ID,
+        'online_memory_route_to': [ONLINE_MEMORY_LOCAL_ID],
         'skills': [],
         'specialized_profiles': default_specialized_profiles(),
         'specialized_execution_modes': default_specialized_execution_modes(),
@@ -6017,6 +6241,19 @@ def load_settings_store() -> dict:
                 'memory_text': str(store['globals'].get('memory_text', globals_store['memory_text'])),
                 'memory_retention_days': int(store['globals'].get('memory_retention_days', globals_store['memory_retention_days'])),
                 'memory_last_rollup_date': str(store['globals'].get('memory_last_rollup_date', globals_store['memory_last_rollup_date'])).strip(),
+                'online_memory_enabled': bool(store['globals'].get('online_memory_enabled', globals_store['online_memory_enabled'])),
+                'online_memory_default_interval_minutes': _coerce_int(
+                    store['globals'].get(
+                        'online_memory_default_interval_minutes',
+                        globals_store['online_memory_default_interval_minutes'],
+                    ),
+                    60,
+                    1,
+                    525600,
+                ),
+                'online_memory_snooze_when_idle': bool(
+                    store['globals'].get('online_memory_snooze_when_idle', globals_store['online_memory_snooze_when_idle'])
+                ),
             }
         )
         globals_store['skills'] = normalize_skill_records(store['globals'].get('skills', globals_store['skills']))
@@ -6036,6 +6273,17 @@ def load_settings_store() -> dict:
             )
         raw_memory_items = store['globals'].get('memory_items', globals_store['memory_items'])
         globals_store['memory_items'] = normalize_memory_item_records(raw_memory_items)
+        globals_store['online_memory_sources'] = normalize_online_memory_sources(
+            store['globals'].get('online_memory_sources', globals_store['online_memory_sources'])
+        )
+        globals_store['online_memory_route_from'] = normalize_online_memory_route_from(
+            store['globals'].get('online_memory_route_from', globals_store['online_memory_route_from']),
+            globals_store['online_memory_sources'],
+        )
+        globals_store['online_memory_route_to'] = normalize_online_memory_route_to(
+            store['globals'].get('online_memory_route_to', globals_store['online_memory_route_to']),
+            globals_store['online_memory_sources'],
+        )
         globals_store.update(normalize_background_vision_settings(store['globals']))
 
     active_profile = str(store.get('active_profile', profiles[0]['name'])).strip()
@@ -9112,6 +9360,100 @@ def normalize_specialized_step_context_policy(value) -> str:
     return 'auto'
 
 
+SPECIALIZED_STEP_CONTEXT_SOURCES = ('attachments', 'history', 'memory', 'external')
+SPECIALIZED_AUTO_CONTEXT_DEFAULT_SKIP_CAPABILITIES = {
+    'web_search',
+    BROWSER_USE_CAPABILITY,
+    'text_to_speech',
+    'speech_to_text',
+    'image_generation',
+    'video_generation',
+    'video_to_text',
+}
+SPECIALIZED_AUTO_CONTEXT_KNOWLEDGE_CAPABILITIES = {'task_reasoning', SPECIALIZED_SKILL_CAPABILITY}
+SPECIALIZED_AUTO_CONTEXT_STOPWORDS = {
+    'the', 'and', 'for', 'with', 'from', 'that', 'this', 'task', 'step', 'user', 'request',
+    'current', 'original', 'relevant', 'previous', 'result', 'output', 'goal', 'need',
+    'needs', 'using', 'about', 'into', 'return', 'provide', 'make', 'create', 'generate',
+    'answer', 'summarize', 'summary', 'analyze', 'analysis', 'specialized', 'context',
+    'query', 'downstream', 'handoff', 'requirement', 'requirements',
+}
+SPECIALIZED_AUTO_SOURCE_HINTS = {
+    'attachments': {
+        'attachment', 'attached', 'file', 'files', 'document', 'documents', 'pdf', 'csv',
+        'screenshot', 'image', 'uploaded', '附件', '文件', '文档', '上传', '图片', '截图',
+    },
+    'history': {
+        'history', 'conversation', 'chat', 'previous', 'earlier', 'prior', 'transcript',
+        '历史', '对话', '聊天', '记录', '之前', '前面', '上文',
+    },
+    'memory': {
+        'memory', 'remember', 'remembered', 'preference', 'preferences', 'profile',
+        '记忆', '记住', '记得', '偏好', '资料',
+    },
+    'external': {
+        'mcp', 'external', 'source', 'sources', 'repository', 'repo', 'github', 'database',
+        'drive', 'notion', 'slack', 'linear', 'docs', 'workspace', '资料库', '外部',
+        '仓库', '数据库', '项目库',
+    },
+}
+SPECIALIZED_AUTO_KNOWLEDGE_HINTS = {
+    'retrieve', 'search', 'find', 'lookup', 'look up', 'fetch', 'query', 'check', 'verify',
+    'reference', 'source', 'record', 'records', 'history', 'memory', 'mcp', 'external',
+    '检索', '搜索', '查找', '查询', '查看', '核对', '验证', '记录', '记忆', '资料', '来源',
+}
+
+
+def specialized_auto_context_tokens(text: str, limit: int = 40) -> list[str]:
+    raw = str(text or '').lower()
+    tokens = []
+    seen = set()
+
+    def add(token: str):
+        token = str(token or '').strip().lower()
+        if not token or token in seen or token in SPECIALIZED_AUTO_CONTEXT_STOPWORDS:
+            return
+        if len(token) < 2:
+            return
+        seen.add(token)
+        tokens.append(token)
+
+    for token in re.findall(r'[a-z][a-z0-9_./:-]{2,}|[0-9][a-z0-9_./:-]{1,}', raw):
+        add(token)
+        if len(tokens) >= limit:
+            return tokens
+
+    try:
+        cjk_terms = jieba.lcut(str(text or ''))
+    except Exception:
+        cjk_terms = re.findall(r'[\u4e00-\u9fff]{2,}', str(text or ''))
+    for token in cjk_terms:
+        token = str(token or '').strip()
+        if len(token) < 2:
+            continue
+        if re.fullmatch(r'[\W_]+', token):
+            continue
+        add(token)
+        if len(tokens) >= limit:
+            break
+    return tokens
+
+
+def specialized_auto_context_coverage(query_text: str, available_context: str) -> tuple[float, list[str]]:
+    tokens = specialized_auto_context_tokens(query_text)
+    if not tokens:
+        return 1.0, []
+    haystack = str(available_context or '').lower()
+    missing = [token for token in tokens if token.lower() not in haystack]
+    coverage = (len(tokens) - len(missing)) / max(1, len(tokens))
+    return coverage, missing
+
+
+def specialized_auto_query_has_hint(query_text: str, hints: set[str]) -> bool:
+    lowered = str(query_text or '').lower()
+    return any(hint in lowered for hint in hints)
+
+
 def normalize_planner_plan(plan: dict | None, available_skill_names: set[str] | None = None) -> dict:
     normalized = {
         'steps': [],
@@ -9450,6 +9792,25 @@ def render_markdown_document_to_html(mdstr: str, dark: bool, display_prefix_html
             margin-top: 10px;
             padding-top: 10px;
             border-top: none;
+        }
+        .pipeline-details,
+        .pipeline-step,
+        .pipeline-step-body {
+            max-width: 100%%;
+            box-sizing: border-box;
+        }
+        .pipeline-step-body,
+        .pipeline-step-body p,
+        .pipeline-step-body li,
+        .pipeline-step-body a {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+        .pipeline-step-body pre,
+        .pipeline-step-body code {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
         .pipeline-step-body > *:first-child {
             margin-top: 8px;
@@ -11214,14 +11575,66 @@ class BrowserUseThread(threading.Thread):
         self.signals = signals
         self._stop_event = threading.Event()
         self._process = None
+        cancel_name = f'browser_use_{int(time.time() * 1000)}_{id(self)}.stop'
+        self._cancel_path = os.path.join(BROCCOLI_APP_DATA_DIR, 'BrowserUseCancel', cancel_name)
+
+    def _write_cancel_token(self):
+        try:
+            os.makedirs(os.path.dirname(self._cancel_path), exist_ok=True)
+            with open(self._cancel_path, 'w', encoding='utf-8') as handle:
+                handle.write('stop\n')
+        except Exception:
+            pass
+
+    def _cleanup_cancel_token(self):
+        try:
+            if self._cancel_path and os.path.exists(self._cancel_path):
+                os.remove(self._cancel_path)
+        except Exception:
+            pass
+
+    def _terminate_process_async(self):
+        process = self._process
+        if process is None:
+            return
+
+        def terminate():
+            try:
+                if process.poll() is not None:
+                    return
+                try:
+                    process.wait(timeout=1.5)
+                    return
+                except subprocess.TimeoutExpired:
+                    pass
+                if sys.platform != 'win32':
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                    except Exception:
+                        process.terminate()
+                else:
+                    process.terminate()
+                try:
+                    process.wait(timeout=1.5)
+                    return
+                except subprocess.TimeoutExpired:
+                    pass
+                if sys.platform != 'win32':
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    except Exception:
+                        process.kill()
+                else:
+                    process.kill()
+            except Exception:
+                pass
+
+        threading.Thread(target=terminate, daemon=True).start()
 
     def request_stop(self):
         self._stop_event.set()
-        try:
-            if self._process is not None and self._process.poll() is None:
-                self._process.terminate()
-        except Exception:
-            pass
+        self._write_cancel_token()
+        self._terminate_process_async()
 
     def run_blocking(self) -> dict:
         task = str(self.config.get('task', '') or '').strip()
@@ -11232,17 +11645,26 @@ class BrowserUseThread(threading.Thread):
         env = os.environ.copy()
         env.setdefault('BROWSER_USE_CONFIG_DIR', os.path.join(BROCCOLI_APP_DATA_DIR, 'BrowserUseConfig'))
         os.makedirs(env['BROWSER_USE_CONFIG_DIR'], exist_ok=True)
-        self._process = subprocess.Popen(
-            browser_use_worker_command(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-        )
-        stdout, stderr = self._process.communicate(json.dumps(self.config, ensure_ascii=False))
-        if self._stop_event.is_set():
-            return {'cancelled': True, 'answer': 'Browser Use task was stopped.'}
+        worker_config = dict(self.config)
+        worker_config['cancel_path'] = self._cancel_path
+        popen_kwargs = {
+            'stdin': subprocess.PIPE,
+            'stdout': subprocess.PIPE,
+            'stderr': subprocess.PIPE,
+            'text': True,
+            'env': env,
+        }
+        if sys.platform == 'win32':
+            popen_kwargs['creationflags'] = getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+        else:
+            popen_kwargs['start_new_session'] = True
+        try:
+            self._process = subprocess.Popen(browser_use_worker_command(), **popen_kwargs)
+            stdout, stderr = self._process.communicate(json.dumps(worker_config, ensure_ascii=False))
+            if self._stop_event.is_set():
+                return {'cancelled': True, 'answer': 'Browser Use task was stopped.'}
+        finally:
+            self._cleanup_cancel_token()
         result = None
         prefix = '__BROCCOLI_BROWSER_USE_RESULT__'
         for line in reversed((stdout or '').splitlines()):
@@ -17614,6 +18036,114 @@ class TranslationWorkerThread(threading.Thread):
             self.signals.failed.emit(str(exc))
 
 
+class OnlineMemoryWorkerSignals(QObject):
+    finished = pyqtSignal(str, dict)
+
+
+class OnlineMemoryWorkerThread(threading.Thread):
+    def __init__(self, task_id: str, task: dict, signals: OnlineMemoryWorkerSignals):
+        super().__init__(daemon=True)
+        self.task_id = str(task_id or '')
+        self.task = task
+        self.signals = signals
+
+    def run(self):
+        action = str(self.task.get('action', '') or '')
+        try:
+            if action == 'clean':
+                result = self._run_clean()
+            elif action == 'merge':
+                result = self._run_merge()
+            elif action == 'read_file':
+                result = self._run_read_file()
+            elif action == 'write_file':
+                result = self._run_write_file()
+            else:
+                result = {'ok': False, 'text': '', 'error': f'Unknown online memory worker action: {action}'}
+        except Exception as exc:
+            result = {
+                'ok': False,
+                'text': str(self.task.get('fallback_text', '') or ''),
+                'error': str(exc),
+            }
+        self.signals.finished.emit(self.task_id, result)
+
+    def _profile_completion_config(self):
+        profile = self.task.get('profile') if isinstance(self.task.get('profile'), dict) else {}
+        api_key = str(profile.get('api_key', '') or '').strip()
+        model = str(profile.get('model', '') or '').strip()
+        if not api_key or not model:
+            return None
+        timeout = int(profile.get('timeout', 60) or 60)
+        endpoint = profile_runtime_base_url(profile)
+        return {
+            'api_key': api_key,
+            'model': model,
+            'timeout': timeout,
+            'endpoint': endpoint,
+        }
+
+    def _run_completion(self, prompt: str, fallback_text: str):
+        config = self._profile_completion_config()
+        if config is None:
+            return {'ok': True, 'text': fallback_text, 'used_ai': False}
+        client = create_openai_client(config['api_key'], config['endpoint'], config['timeout'])
+        response = create_chat_completion(
+            client,
+            endpoint=config['endpoint'],
+            model=config['model'],
+            messages=[{'role': 'user', 'content': prompt}],
+            stream=False,
+        )
+        content = response.choices[0].message.content
+        return {'ok': True, 'text': str(content or '').strip() or fallback_text, 'used_ai': True}
+
+    def _run_clean(self):
+        text = str(self.task.get('raw_text', '') or '').strip()
+        prompt = str(self.task.get('prompt', '') or '').strip()
+        if not text or not prompt:
+            return {'ok': True, 'text': text, 'used_ai': False}
+        try:
+            return self._run_completion(prompt.replace('{text}', text), text)
+        except Exception as exc:
+            return {'ok': False, 'text': text, 'error': str(exc)}
+
+    def _run_merge(self):
+        local_text = str(self.task.get('local_text', '') or '').strip()
+        remote_text = str(self.task.get('remote_text', '') or '').strip()
+        prompt = str(self.task.get('prompt', '') or '').strip()
+        if not remote_text or not prompt:
+            return {'ok': True, 'text': remote_text, 'used_ai': False}
+        try:
+            content = prompt.replace('{local_memory}', local_text).replace('{remote_memory}', remote_text)
+            return self._run_completion(content, remote_text)
+        except Exception as exc:
+            return {'ok': False, 'text': remote_text, 'error': str(exc)}
+
+    def _run_read_file(self):
+        path = str(self.task.get('path', '') or '').strip()
+        if not path:
+            return {'ok': True, 'text': ''}
+        try:
+            return {'ok': True, 'text': Path(path).read_text(encoding='utf-8')}
+        except Exception as exc:
+            return {'ok': False, 'text': '', 'error': str(exc)}
+
+    def _run_write_file(self):
+        path = str(self.task.get('path', '') or '').strip()
+        memory_text = str(self.task.get('memory_text', '') or '')
+        write_method = str(self.task.get('write_method', '') or '')
+        if not path:
+            return {'ok': False, 'text': '', 'error': 'File path is empty.'}
+        target = Path(path)
+        if write_method == 'text_append' and target.exists():
+            existing = target.read_text(encoding='utf-8')
+            target.write_text((existing.rstrip() + '\n\n' + memory_text.strip()).strip() + '\n', encoding='utf-8')
+        else:
+            target.write_text(memory_text.strip() + '\n', encoding='utf-8')
+        return {'ok': True, 'text': ''}
+
+
 class TranslationPopupWindow(QWidget):
     closed = pyqtSignal(object)
 
@@ -20481,7 +21011,7 @@ class ShareTextDialog(QDialog):
         self.api_new_checkbox = QCheckBox('Start new API conversation first', self)
         self.url_label = QLabel('URL', self)
         self.url_combo = DropdownButton(self, compact_light=True)
-        self.url_combo.setMinimumWidth(300)
+        self.url_combo.setFixedWidth(180)
 
         target_form = QFormLayout()
         target_form.setContentsMargins(0, 0, 0, 0)
@@ -20558,7 +21088,7 @@ class ShareTextDialog(QDialog):
 
     def _copy_text(self):
         QApplication.clipboard().setText(self.text())
-        show_broccoli_message(self, 'Copied', 'Text copied to clipboard.')
+        self.accept()
 
     def _emit_apply(self):
         text = self.text().strip()
@@ -20581,6 +21111,7 @@ class ShareTextDialog(QDialog):
             except (TypeError, ValueError):
                 payload['site_index'] = None
         self.apply_requested.emit(payload)
+        self.accept()
 
     def _refresh_target_controls(self):
         try:
@@ -20646,6 +21177,212 @@ class ShareTextDialog(QDialog):
             return
         if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
             self._apply_theme()
+
+
+class OnlineMemoryStatusDialog(QDialog):
+    def __init__(self, owner, source: dict, role: str = 'from', parent=None):
+        super().__init__(parent)
+        self.owner = owner
+        self.source = dict(source or {})
+        self.role = role if role in {'from', 'to'} else 'from'
+        self._theme_updating = False
+        self._panel_margin = 14
+        self._panel_radius = 26
+        self._view = None
+        self.setWindowTitle('Online Memory Source')
+        self.setModal(False)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.resize(680, 620)
+        self.setMinimumSize(420, 420)
+
+        self.title_lbl = QLabel(self.source.get('name', 'Online memory source'), self)
+        self.status_lbl = QLabel('', self)
+        self.status_lbl.setWordWrap(True)
+        self.role_combo = DropdownButton(self, compact_light=True)
+        self.role_combo.setMinimumWidth(108)
+        self.role_combo.setMaximumWidth(132)
+        self.role_combo.addItem('From URL', 'from')
+        self.role_combo.addItem('To URL', 'to')
+        role_index = self.role_combo.findData(self.role)
+        self.role_combo.setCurrentIndex(role_index if role_index >= 0 else 0)
+        self.role_combo.currentIndexChanged.connect(self._change_role)
+
+        self.view_host = QWidget(self)
+        self.view_layout = QVBoxLayout(self.view_host)
+        self.view_layout.setContentsMargins(0, 0, 0, 0)
+        self.view_layout.setSpacing(0)
+
+        self.reload_button = MacNormalButton('Reload', self)
+        self.use_current_button = MacNormalButton('Use current URL', self)
+        self.pull_button = MacNormalButton('Pull now', self)
+        self.push_button = MacNormalButton('Push now', self)
+        self.close_button = MacNormalButton('Close', self)
+        self.reload_button.clicked.connect(self.reload_current)
+        self.use_current_button.clicked.connect(self.use_current_url)
+        self.pull_button.clicked.connect(lambda: self.owner._pull_online_memory_source(self.source.get('id', '')))
+        self.push_button.clicked.connect(lambda: self.owner._push_online_memory_source(self.source.get('id', '')))
+        self.close_button.clicked.connect(self.close)
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.addWidget(self.title_lbl, 1)
+        top_row.addWidget(self.role_combo)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(8)
+        button_row.addStretch()
+        button_widths = {
+            self.reload_button: 112,
+            self.use_current_button: 172,
+            self.pull_button: 112,
+            self.push_button: 112,
+            self.close_button: 112,
+        }
+        for button in (self.reload_button, self.use_current_button, self.pull_button, self.push_button, self.close_button):
+            button.setFixedWidth(button_widths.get(button, max(96, button.sizeHint().width() + 18)))
+            button_row.addWidget(button)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(36, 34, 36, 34)
+        layout.setSpacing(12)
+        layout.addLayout(top_row)
+        layout.addWidget(self.status_lbl)
+        layout.addWidget(self.view_host, 1)
+        layout.addLayout(button_row)
+        self._apply_theme()
+        self._attach_role_view()
+
+    def fit_to_owner(self, margin: int = 10):
+        owner_window = self.owner.window() if self.owner is not None else None
+        base_widget = getattr(owner_window, 'qw3', None) if owner_window is not None else None
+        if isinstance(base_widget, QWidget):
+            base_rect = base_widget.geometry()
+            center = base_widget.mapToGlobal(base_widget.rect().center())
+            max_w = max(760, base_rect.width() - int(margin) * 2)
+            max_h = max(420, base_rect.height() - int(margin) * 2)
+        elif owner_window is not None:
+            base_rect = owner_window.frameGeometry()
+            center = base_rect.center()
+            max_w = max(760, base_rect.width() - int(margin) * 2)
+            max_h = max(420, base_rect.height() - int(margin) * 2)
+        else:
+            screen = QApplication.primaryScreen()
+            available = screen.availableGeometry() if screen is not None else QRect(0, 0, 900, 700)
+            center = available.center()
+            max_w = max(760, available.width() - int(margin) * 2)
+            max_h = max(420, available.height() - int(margin) * 2)
+        width = min(960, max_w)
+        height = min(620, max_h)
+        self.resize(width, height)
+        frame = self.frameGeometry()
+        frame.moveCenter(center)
+        self.move(frame.topLeft())
+
+    def _change_role(self):
+        new_role = str(self.role_combo.currentData() or 'from')
+        if new_role == self.role:
+            return
+        self._detach_view()
+        self.role = new_role
+        self._attach_role_view()
+
+    def _detach_view(self):
+        if self._view is None:
+            return
+        while self.view_layout.count():
+            item = self.view_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None and widget is not self._view:
+                widget.deleteLater()
+        self.owner._return_online_memory_view(self.source.get('id', ''), self.role, self._view)
+        self._view = None
+
+    def _attach_role_view(self):
+        self._view = self.owner._ensure_online_memory_view(self.source.get('id', ''), self.role, self.source)
+        if self._view is not None:
+            self._view.setParent(self.view_host)
+            self.view_layout.addWidget(self._view)
+            self._view.show()
+            url_key = 'from_url' if self.role == 'from' else 'to_url'
+            target_url = str(self.source.get(url_key, '') or '').strip()
+            try:
+                current_url = self._view.url().toString() if self._view.url().isValid() else ''
+            except Exception:
+                current_url = ''
+            if target_url and current_url != target_url:
+                self._view.load(QUrl(target_url))
+        status = str(self.source.get('last_status', '') or 'No sync status yet.')
+        url_key = 'from_url' if self.role == 'from' else 'to_url'
+        self.status_lbl.setText(f"Role: {self.role.title()} · URL: {self.source.get(url_key, '')}\n{status}")
+
+    def reload_current(self):
+        if self._view is not None:
+            self._view.reload()
+
+    def use_current_url(self):
+        if self._view is None:
+            return
+        try:
+            url = self._view.url().toString()
+        except Exception:
+            url = ''
+        if not url:
+            return
+        url_key = 'from_url' if self.role == 'from' else 'to_url'
+        self.source[url_key] = url
+        if hasattr(self.owner, '_set_online_memory_endpoint_url'):
+            self.owner._set_online_memory_endpoint_url(self.source.get('id', ''), url_key, url)
+        status = str(self.source.get('last_status', '') or 'No sync status yet.')
+        self.status_lbl.setText(f"Role: {self.role.title()} · URL: {url}\n{status}")
+
+    def closeEvent(self, event):
+        self._detach_view()
+        super().closeEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        dark = is_dark_theme(app)
+        panel_rect = QRectF(
+            self._panel_margin,
+            self._panel_margin,
+            self.width() - self._panel_margin * 2,
+            self.height() - self._panel_margin * 2,
+        )
+        bg_path = QPainterPath()
+        bg_path.addRoundedRect(panel_rect, self._panel_radius, self._panel_radius)
+        painter.fillPath(bg_path, QColor('#2D2D2D' if dark else '#FFFFFF'))
+        painter.setPen(QPen(QColor('#3A3A3A' if dark else '#ECECEC'), 1))
+        painter.drawPath(bg_path)
+        painter.end()
+
+    def _apply_theme(self):
+        if self._theme_updating:
+            return
+        self._theme_updating = True
+        dark = is_dark_theme(app)
+        try:
+            self.title_lbl.setStyleSheet(
+                f'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
+                f'font-size: 14px; font-weight: 600; color: {"#F2F2F7" if dark else "#20242B"};'
+            )
+            self.status_lbl.setStyleSheet(
+                f'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
+                f'font-size: 11px; color: {"#A7AEB8" if dark else "#7A8391"};'
+            )
+            if self._view is not None:
+                self._view.setStyleSheet(webview_stylesheet(dark))
+            for widget in self.findChildren(DropdownButton):
+                widget._force_dark = dark
+                widget._update_style()
+            for widget in self.findChildren(MacNormalButton):
+                widget._force_dark = dark
+                widget.update_theme()
+            self.update()
+        finally:
+            self._theme_updating = False
 
 
 class SharePanel(QWidget):
@@ -23561,22 +24298,27 @@ class MyWidget(QWidget):  # 主窗口
         except (TypeError, ValueError):
             target_index = 1
         append = bool(payload.get('append', False))
-        if target_index == 1:
-            self._route_text_to_api_prompt(
-                text,
-                append=append,
-                new_conversation=bool(payload.get('new_conversation', False)),
-            )
-        elif target_index in (0, 2):
-            self._route_text_to_external_prompt(
-                target_index,
-                text,
-                append=append,
-                site_index=payload.get('site_index', None),
-            )
-        elif target_index == 3:
-            self._route_text_to_terminal_prompt(text, append=append)
-        self._show_broccoli_message('Applied', 'Shared text was sent to the selected prompt box.')
+        new_conversation = bool(payload.get('new_conversation', False))
+        site_index = payload.get('site_index', None)
+
+        def apply_payload():
+            if target_index == 1:
+                self._route_text_to_api_prompt(
+                    text,
+                    append=append,
+                    new_conversation=new_conversation,
+                )
+            elif target_index in (0, 2):
+                self._route_text_to_external_prompt(
+                    target_index,
+                    text,
+                    append=append,
+                    site_index=site_index,
+                )
+            elif target_index == 3:
+                self._route_text_to_terminal_prompt(text, append=append)
+
+        QTimer.singleShot(0, apply_payload)
 
     def _share_screenshot_current_api_output(self):
         if self.real2.isVisible():
@@ -25691,6 +26433,14 @@ class MyWidget(QWidget):  # 主窗口
         return host.endswith('perplexity.ai')
 
     @staticmethod
+    def _is_gemini_web_view(view: QWebEngineView) -> bool:
+        try:
+            host = view.url().host().lower()
+        except Exception:
+            host = ''
+        return host.endswith('gemini.google.com')
+
+    @staticmethod
     def _web_auto_send_after_inject_enabled() -> bool:
         return bool(load_settings_store().get('globals', {}).get('web_auto_send_after_inject', False))
 
@@ -25802,7 +26552,7 @@ class MyWidget(QWidget):  # 主窗口
                 const style = window.getComputedStyle(node);
                 return rect.width > 8 && rect.height > 8 && style.display !== 'none' && style.visibility !== 'hidden';
             };
-            const input = Array.from(document.querySelectorAll('div[contenteditable="true"], textarea'))
+            const input = Array.from(document.querySelectorAll('div[contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], textarea'))
                 .filter(visible)
                 .sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom)[0];
             if (!input) return null;
@@ -25894,7 +26644,7 @@ class MyWidget(QWidget):  # 主窗口
                     && style.visibility !== 'hidden'
                     && Number(style.opacity || 1) > 0.01;
             }};
-            const candidates = Array.from(document.querySelectorAll('div[contenteditable="true"], [contenteditable="plaintext-only"], textarea'))
+            const candidates = Array.from(document.querySelectorAll('div[contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], textarea'))
                 .filter(visible)
                 .sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
             const input = candidates[0] || null;
@@ -25979,7 +26729,7 @@ class MyWidget(QWidget):  # 主窗口
                 node.id,
                 node.className
             ].filter(Boolean).join(' ').toLowerCase();
-            const input = document.querySelector('div[contenteditable="true"], textarea');
+            const input = document.querySelector('div[contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], textarea');
             const composerCandidates = [
                 input && input.closest('form'),
                 input && input.closest('[data-testid*="composer"]'),
@@ -26203,11 +26953,6 @@ class MyWidget(QWidget):  # 主窗口
             });
             if (!btn) return null;
             const rect = btn.getBoundingClientRect();
-            btn.focus && btn.focus();
-            btn.click && btn.click();
-            btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true }));
-            btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true }));
-            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
             return {
                 x: Math.max(8, Math.min(window.innerWidth - 8, rect.left + rect.width / 2)),
                 y: Math.max(8, Math.min(window.innerHeight - 8, rect.top + rect.height / 2))
@@ -26252,11 +26997,6 @@ class MyWidget(QWidget):  # 主窗口
             });
             if (!btn) return null;
             const rect = btn.getBoundingClientRect();
-            btn.focus && btn.focus();
-            btn.click && btn.click();
-            btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true }));
-            btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true }));
-            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
             return {
                 x: Math.max(8, Math.min(window.innerWidth - 8, rect.left + rect.width / 2)),
                 y: Math.max(8, Math.min(window.innerHeight - 8, rect.top + rect.height / 2))
@@ -26301,8 +27041,9 @@ class MyWidget(QWidget):  # 主窗口
             };
             const clickButton = (btn) => {
                 btn.focus && btn.focus();
-                btn.click();
+                btn.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true, cancelable: true, composed: true, pointerType: 'mouse'}));
                 btn.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, composed: true}));
+                btn.dispatchEvent(new PointerEvent('pointerup', {bubbles: true, cancelable: true, composed: true, pointerType: 'mouse'}));
                 btn.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, composed: true}));
                 btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, composed: true}));
             };
@@ -26316,13 +27057,13 @@ class MyWidget(QWidget):  # 主窗口
                     btn.getAttribute('data-testid')
                 ].filter(Boolean).join(' ').toLowerCase();
                 if (/(stop|cancel|停止|中止|キャンセル|voice|mic|audio)/.test(text)) return false;
-                return /(send|submit|发送|送信|送出)/.test(text);
+                return /(send|submit|发送|送信|送出|送信する|送出する)/.test(text);
             });
             if (candidates.length) {
                 clickButton(candidates[candidates.length - 1]);
                 return 'button';
             }
-            const input = document.querySelector('div[contenteditable="true"], textarea');
+            const input = document.querySelector('div[contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], textarea');
             if (input) {
                 input.focus();
                 const opts = {
@@ -26471,12 +27212,12 @@ class MyWidget(QWidget):  # 主窗口
                 if (!visible(btn) || disabled(btn)) return false;
                 const text = visibleText(btn);
                 if (/(stop|cancel|停止|中止|キャンセル|voice|mic|audio)/.test(text)) return false;
-                return /(send|submit|发送|送信|送出)/.test(text);
+                return /(send|submit|发送|送信|送出|送信する|送出する)/.test(text);
             });
             if (candidates.length) {
                 return { ready: true, reason: 'button-ready' };
             }
-            const input = document.querySelector('div[contenteditable="true"], textarea');
+            const input = document.querySelector('div[contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], textarea');
             if (input && visible(input)) {
                 return { ready: true, reason: 'keyboard-fallback' };
             }
@@ -27931,6 +28672,14 @@ class MyWidget(QWidget):  # 主窗口
             context_policy = normalize_specialized_step_context_policy(step.get('context_policy', 'auto'))
             step_context_query = ''
             step_context = ''
+            step_context_resolution = {
+                'should_retrieve': False,
+                'effective_policy': 'none',
+                'sources': [],
+                'reason': 'No step-specific retrieval requested.',
+                'coverage': 1.0,
+                'missing_terms': [],
+            }
             if context_policy != 'none':
                 step_context_query = self._build_specialized_step_retrieval_query(
                     question_text=question_text,
@@ -27939,9 +28688,22 @@ class MyWidget(QWidget):  # 主窗口
                     downstream_extract=downstream_extract,
                     explicit_query=str(step.get('context_query', '') or '').strip(),
                 )
-                if step_context_query:
+                step_context_resolution = self._resolve_specialized_step_retrieval_request(
+                    policy=context_policy,
+                    capability=capability,
+                    query_text=step_context_query,
+                    explicit_query=str(step.get('context_query', '') or '').strip(),
+                    shared_context=shared_context,
+                    previous_results=previous,
+                    retrieval_documents=retrieval_documents,
+                    history_messages=history_messages,
+                )
+                if step_context_query and step_context_resolution.get('should_retrieve'):
+                    source_label = ', '.join(step_context_resolution.get('sources') or SPECIALIZED_STEP_CONTEXT_SOURCES)
                     progress(
                         f'Retrieving step-specific context for {step_label}'
+                        + (f'\nSources: {source_label}' if source_label else '')
+                        + f"\nReason: {step_context_resolution.get('reason', '')}"
                         + f'\nQuery: {specialized_progress_snippet(step_context_query)}'
                     )
                     try:
@@ -27954,11 +28716,17 @@ class MyWidget(QWidget):  # 主窗口
                             endpoint=endpoint,
                             model=model,
                             timeout=timeout,
+                            context_sources=step_context_resolution.get('sources') or SPECIALIZED_STEP_CONTEXT_SOURCES,
                             progress_callback=progress_callback,
                         )
                     except Exception as exc:
                         progress(f'Step-specific context retrieval failed: {exc}')
                         step_context = ''
+                elif context_policy == 'auto':
+                    progress(
+                        f'Skipping step-specific context for {step_label}'
+                        + f"\nReason: {step_context_resolution.get('reason', '')}"
+                    )
             result = self._execute_specialized_step(
                 capability=capability,
                 goal=goal,
@@ -27974,6 +28742,11 @@ class MyWidget(QWidget):  # 主窗口
                 metadata = dict(result.get('metadata') or {})
                 metadata.update({
                     'context_policy': context_policy,
+                    'context_effective_policy': step_context_resolution.get('effective_policy', 'none'),
+                    'context_sources': list(step_context_resolution.get('sources') or []),
+                    'context_auto_reason': str(step_context_resolution.get('reason', '') or ''),
+                    'context_coverage': step_context_resolution.get('coverage', 1.0),
+                    'context_missing_terms': list(step_context_resolution.get('missing_terms') or [])[:12],
                     'context_query': step_context_query,
                     'step_context_chars': len(step_context),
                 })
@@ -28381,6 +29154,139 @@ class MyWidget(QWidget):  # 主窗口
             parts.append('Downstream need:\n' + str(downstream_extract or '').strip())
         return '\n\n'.join(part for part in parts if part.strip()).strip()
 
+    def _available_specialized_step_context_sources(self,
+                                                    retrieval_documents: list[dict],
+                                                    history_messages: list[dict]) -> list[str]:
+        available = []
+        if retrieval_documents:
+            available.append('attachments')
+        if read_text_file(BasePath + 'history.txt', '0') == '1' and history_messages:
+            available.append('history')
+        active_profile = load_active_settings_profile()
+        if active_profile.get('remember_memory', True):
+            available.append('memory')
+        store = load_settings_store()
+        globals_store = store.get('globals', {}) if isinstance(store, dict) else {}
+        if bool(globals_store.get('external_context_enabled', True)):
+            sources = normalize_external_context_sources(globals_store.get('external_context_sources', []))
+            if any(source.get('enabled', True) and source.get('auto_context', True) for source in sources):
+                available.append('external')
+        return [source for source in SPECIALIZED_STEP_CONTEXT_SOURCES if source in available]
+
+    def _specialized_step_context_source_scope(self,
+                                               query_text: str,
+                                               available_sources: list[str],
+                                               *,
+                                               allow_default_local: bool = False) -> list[str]:
+        selected = []
+        for source in SPECIALIZED_STEP_CONTEXT_SOURCES:
+            if source not in available_sources:
+                continue
+            if specialized_auto_query_has_hint(query_text, SPECIALIZED_AUTO_SOURCE_HINTS.get(source, set())):
+                selected.append(source)
+        if not selected and allow_default_local:
+            selected = [source for source in ('attachments', 'history', 'memory') if source in available_sources]
+        return selected
+
+    def _resolve_specialized_step_retrieval_request(self,
+                                                    *,
+                                                    policy: str,
+                                                    capability: str,
+                                                    query_text: str,
+                                                    explicit_query: str,
+                                                    shared_context: str,
+                                                    previous_results: list[dict],
+                                                    retrieval_documents: list[dict],
+                                                    history_messages: list[dict]) -> dict:
+        normalized_policy = normalize_specialized_step_context_policy(policy)
+        available_sources = self._available_specialized_step_context_sources(retrieval_documents, history_messages)
+        query = str(query_text or '').strip()
+        explicit = bool(str(explicit_query or '').strip())
+        previous_context = '\n\n'.join(
+            specialized_step_context_output(result)
+            for result in (previous_results or [])
+            if specialized_step_context_output(result)
+        )
+        available_context = '\n\n'.join(part for part in (shared_context, previous_context) if str(part or '').strip())
+        coverage, missing_terms = specialized_auto_context_coverage(query, available_context)
+
+        base = {
+            'should_retrieve': False,
+            'effective_policy': 'none',
+            'sources': [],
+            'reason': '',
+            'coverage': coverage,
+            'missing_terms': missing_terms,
+        }
+        if normalized_policy == 'none':
+            base['reason'] = 'Planner requested no extra step context.'
+            return base
+        if not query:
+            base['reason'] = 'Step did not produce a retrieval query.'
+            return base
+        if not available_sources:
+            base['reason'] = 'No step-specific context sources are available.'
+            return base
+
+        if normalized_policy == 'fresh':
+            base.update({
+                'should_retrieve': True,
+                'effective_policy': 'fresh',
+                'sources': available_sources,
+                'reason': 'Planner explicitly requested fresh step context.',
+            })
+            return base
+
+        source_scope = self._specialized_step_context_source_scope(
+            query,
+            available_sources,
+            allow_default_local=False,
+        )
+        has_knowledge_hint = specialized_auto_query_has_hint(query, SPECIALIZED_AUTO_KNOWLEDGE_HINTS)
+
+        if capability in SPECIALIZED_AUTO_CONTEXT_DEFAULT_SKIP_CAPABILITIES and not explicit:
+            base['reason'] = f'Auto skipped because {specialized_capability_label(capability)} normally gathers or transforms its own input.'
+            return base
+        if previous_context.strip() and not explicit and not has_knowledge_hint:
+            base['reason'] = 'Auto skipped because the step is driven by previous step output.'
+            return base
+        if coverage >= (0.72 if explicit else 0.55):
+            base['reason'] = f'Auto skipped because existing context covers the step query ({coverage:.0%}).'
+            return base
+
+        if not source_scope and explicit:
+            source_scope = [source for source in ('attachments', 'history', 'memory') if source in available_sources]
+        if not source_scope and not available_context.strip() and capability in SPECIALIZED_AUTO_CONTEXT_KNOWLEDGE_CAPABILITIES:
+            source_scope = [source for source in ('attachments', 'history', 'memory') if source in available_sources] or available_sources
+
+        if explicit and source_scope:
+            base.update({
+                'should_retrieve': True,
+                'effective_policy': 'auto',
+                'sources': source_scope,
+                'reason': f'Auto found a focused context_query with missing terms ({coverage:.0%} covered).',
+            })
+            return base
+        if has_knowledge_hint and source_scope and coverage < 0.65:
+            base.update({
+                'should_retrieve': True,
+                'effective_policy': 'auto',
+                'sources': source_scope,
+                'reason': f'Auto found an explicit retrieval/source need with missing terms ({coverage:.0%} covered).',
+            })
+            return base
+        if capability in SPECIALIZED_AUTO_CONTEXT_KNOWLEDGE_CAPABILITIES and source_scope and coverage < 0.35:
+            base.update({
+                'should_retrieve': True,
+                'effective_policy': 'auto',
+                'sources': source_scope,
+                'reason': f'Auto found low coverage for a knowledge-oriented step ({coverage:.0%} covered).',
+            })
+            return base
+
+        base['reason'] = f'Auto skipped because no clear new knowledge gap was found ({coverage:.0%} covered).'
+        return base
+
     def _build_specialized_step_retrieval_context(self,
                                                   *,
                                                   query_text: str,
@@ -28391,11 +29297,13 @@ class MyWidget(QWidget):  # 主窗口
                                                   endpoint: str,
                                                   model: str,
                                                   timeout: int,
+                                                  context_sources: list[str] | tuple[str, ...] | set[str] | None = None,
                                                   progress_callback=None) -> str:
         query = str(query_text or '').strip()
         if not query:
             return ''
         blocks = []
+        enabled_sources = set(context_sources or SPECIALIZED_STEP_CONTEXT_SOURCES)
 
         def progress(message: str):
             if progress_callback is None:
@@ -28405,7 +29313,7 @@ class MyWidget(QWidget):  # 主窗口
             except Exception:
                 pass
 
-        if retrieval_documents:
+        if 'attachments' in enabled_sources and retrieval_documents:
             attachment_context, _attachment_references = self._build_attachment_retrieval_context(
                 query,
                 retrieval_documents,
@@ -28417,7 +29325,7 @@ class MyWidget(QWidget):  # 主窗口
                 blocks.append(attachment_context)
 
         history_enabled = read_text_file(BasePath + 'history.txt', '0') == '1'
-        if history_enabled and history_messages:
+        if 'history' in enabled_sources and history_enabled and history_messages:
             history_context = self._build_active_history_context(
                 query,
                 history_messages,
@@ -28432,15 +29340,16 @@ class MyWidget(QWidget):  # 主窗口
                 blocks.append(history_context)
 
         active_profile = load_active_settings_profile()
-        if active_profile.get('remember_memory', True):
+        if 'memory' in enabled_sources and active_profile.get('remember_memory', True):
             memory_context = self._build_saved_memory_prompt_context(query)
             if memory_context:
                 blocks.append(memory_context)
 
-        progress('Retrieving step-specific external context and MCP sources')
-        external_context = self._build_external_context_prompt_context(query, progress_callback=progress_callback)
-        if external_context:
-            blocks.append(external_context)
+        if 'external' in enabled_sources:
+            progress('Retrieving step-specific external context and MCP sources')
+            external_context = self._build_external_context_prompt_context(query, progress_callback=progress_callback)
+            if external_context:
+                blocks.append(external_context)
 
         context = '\n\n'.join(block for block in blocks if block).strip()
         if len(context) > SPECIALIZED_STEP_RETRIEVAL_CONTEXT_MAX_CHARS:
@@ -31349,6 +32258,14 @@ end run'''"""
         )
 
     def ClearX(self):
+        if self._active_preflight_thread is not None:
+            self._active_preflight_thread.request_stop()
+        if self._active_chat_thread is not None:
+            self._active_chat_thread.request_stop()
+        if self._active_browser_use_thread is not None:
+            self._active_browser_use_thread.request_stop()
+        self.cleanup_async_preflight()
+        self.cleanup_async_chat()
         self._reset_structured_transfer_state()
         self.text1.clear()
         self._set_prompt_edit_read_only(False)
@@ -33247,6 +34164,18 @@ class SettingsPanel(QWidget):  # Customization settings
         self._external_context_source_records = []
         self._code_runner_updating = False
         self._code_runner_records = []
+        self._online_memory_updating = False
+        self._online_memory_sources = []
+        self._online_memory_route_from = ONLINE_MEMORY_LOCAL_ID
+        self._online_memory_route_to = [ONLINE_MEMORY_LOCAL_ID]
+        self._online_memory_rule_key = 'read_prompt'
+        self._online_memory_views = {}
+        self._online_memory_syncing_ids = set()
+        self._online_memory_worker_refs = []
+        self._online_memory_worker_callbacks = {}
+        self._online_memory_timer = QTimer(self)
+        self._online_memory_timer.setInterval(60000)
+        self._online_memory_timer.timeout.connect(self._run_due_online_memory_syncs)
         self._background_vision_updating = False
         self._prompt_records = []
         self._skill_records = []
@@ -33589,6 +34518,20 @@ class SettingsPanel(QWidget):  # Customization settings
         self._set_skill_records(globals_store.get('skills', []))
         self.memory_text_edit.setText(globals_store.get('memory_text', ''))
         self._set_memory_items(globals_store.get('memory_items', []))
+        self.online_memory_enabled_checkbox.setChecked(bool(globals_store.get('online_memory_enabled', False)))
+        self.online_memory_interval_input.setText(str(online_memory_minutes_to_hours(
+            globals_store.get('online_memory_default_interval_minutes', 60),
+        )))
+        self.online_memory_snooze_checkbox.setChecked(bool(globals_store.get('online_memory_snooze_when_idle', True)))
+        self._online_memory_route_from = normalize_online_memory_route_from(
+            globals_store.get('online_memory_route_from', ONLINE_MEMORY_LOCAL_ID),
+            globals_store.get('online_memory_sources', []),
+        )
+        self._online_memory_route_to = normalize_online_memory_route_to(
+            globals_store.get('online_memory_route_to', [ONLINE_MEMORY_LOCAL_ID]),
+            globals_store.get('online_memory_sources', []),
+        )
+        self._set_online_memory_sources(globals_store.get('online_memory_sources', []))
         retention_days = int(globals_store.get('memory_retention_days', 30))
         retention_index = self.memory_retention_combo.findData(retention_days)
         self.memory_retention_combo.setCurrentIndex(retention_index if retention_index >= 0 else 2)
@@ -33608,6 +34551,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self._update_blank_prompt_controls()
         self._set_userscript_records(globals_store.get('userscripts', []))
         self._updating_form = False
+        self._apply_online_memory_timer_settings()
 
     def load_profile_into_form(self, profile_name: str):
         profile = self.get_profile_by_name(profile_name)
@@ -33735,6 +34679,18 @@ class SettingsPanel(QWidget):  # Customization settings
             'memory_items': self._current_memory_items(),
             'memory_retention_days': int(self.memory_retention_combo.currentData() or 30),
             'memory_last_rollup_date': str(self.settings_store.get('globals', {}).get('memory_last_rollup_date', '')).strip(),
+            'online_memory_enabled': self.online_memory_enabled_checkbox.isChecked(),
+            'online_memory_default_interval_minutes': online_memory_hours_to_minutes(self.online_memory_interval_input.text()),
+            'online_memory_snooze_when_idle': self.online_memory_snooze_checkbox.isChecked(),
+            'online_memory_sources': normalize_online_memory_sources(self._current_online_memory_sources()),
+            'online_memory_route_from': normalize_online_memory_route_from(
+                self._online_memory_route_from,
+                self._current_online_memory_sources(),
+            ),
+            'online_memory_route_to': normalize_online_memory_route_to(
+                self._online_memory_route_to,
+                self._current_online_memory_sources(),
+            ),
             'ui_shortcut': ui_shortcut,
             'same_position_screenshot_shortcut': same_position_screenshot_shortcut,
             'pdf_max_pages': self.pdf_pages_combo.currentData(),
@@ -33860,6 +34816,7 @@ class SettingsPanel(QWidget):  # Customization settings
             window.terminal_widget.reload_shell_preferences(notify=True)
         if hasattr(window, 'apply_background_vision_settings'):
             window.apply_background_vision_settings()
+        self._apply_online_memory_timer_settings()
         self._capture_baseline()
 
     def reset_record_buttons(self):
@@ -34026,6 +34983,1488 @@ class SettingsPanel(QWidget):  # Customization settings
             item.setData(Qt.ItemDataRole.UserRole, record)
             self.memory_list_widget.addItem(item)
 
+    def _set_memory_page(self, index: int):
+        if not hasattr(self, 'memory_pages'):
+            return
+        index = max(0, min(self.memory_pages.count() - 1, int(index)))
+        self.memory_pages.setCurrentIndex(index)
+        self._update_memory_page_controls()
+
+    def _update_memory_page_controls(self):
+        if not hasattr(self, 'memory_pages'):
+            return
+        index = self.memory_pages.currentIndex()
+        count = max(1, self.memory_pages.count())
+        if hasattr(self, 'memory_page_label'):
+            self.memory_page_label.setText(f'{index + 1} / {count}')
+        if hasattr(self, 'memory_prev_button'):
+            self.memory_prev_button.setEnabled(index > 0)
+        if hasattr(self, 'memory_next_button'):
+            self.memory_next_button.setEnabled(index < count - 1)
+
+    @staticmethod
+    def _set_combo_data(combo, value):
+        index = combo.findData(value)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def _online_memory_source_display_text(self, record: dict) -> str:
+        status = 'enabled' if record.get('enabled', True) else 'disabled'
+        endpoint_type = dict(ONLINE_MEMORY_ENDPOINT_TYPE_OPTIONS).get(record.get('endpoint_type'), 'Web URL')
+        read_method = dict(ONLINE_MEMORY_READ_METHOD_OPTIONS).get(record.get('read_method'), record.get('read_method', ''))
+        write_method = dict(ONLINE_MEMORY_WRITE_METHOD_OPTIONS).get(record.get('write_method'), record.get('write_method', ''))
+        from_url = str(record.get('from_url', '') or '').strip() or 'No read target'
+        to_url = str(record.get('to_url', '') or '').strip() or 'No write target'
+        return f"{record.get('name', 'Memory endpoint')} · {status} · {endpoint_type}\n{read_method} / {write_method} · {from_url} -> {to_url}"
+
+    def _set_online_memory_sources(self, records):
+        self._online_memory_updating = True
+        self._online_memory_sources = normalize_online_memory_sources(records)
+        self.online_memory_source_list_widget.clear()
+        for record in self._online_memory_sources:
+            item = QListWidgetItem(self._online_memory_source_display_text(record))
+            item.setData(Qt.ItemDataRole.UserRole, record.get('id'))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            item.setCheckState(Qt.CheckState.Checked if record.get('enabled', True) else Qt.CheckState.Unchecked)
+            self.online_memory_source_list_widget.addItem(item)
+        if self._online_memory_sources:
+            self.online_memory_source_list_widget.setCurrentRow(0)
+        self._online_memory_updating = False
+        self._load_online_memory_fields_for_row(self.online_memory_source_list_widget.currentRow())
+        self._refresh_online_memory_route_lists()
+
+    def _current_online_memory_sources(self) -> list[dict]:
+        records = []
+        for index, record in enumerate(self._online_memory_sources):
+            current = dict(record)
+            item = self.online_memory_source_list_widget.item(index)
+            if item is not None:
+                current['enabled'] = item.checkState() == Qt.CheckState.Checked
+            normalized = normalize_online_memory_source(current, index + 1)
+            if normalized is not None:
+                records.append(normalized)
+        return records
+
+    def _online_memory_source_by_id(self, source_id: str):
+        source_id = str(source_id or '').strip()
+        for index, record in enumerate(self._online_memory_sources):
+            if str(record.get('id', '') or '') == source_id:
+                return index, record
+        return -1, None
+
+    def _load_online_memory_fields_for_row(self, row: int):
+        previous = self._online_memory_updating
+        self._online_memory_updating = True
+        enabled = 0 <= row < len(self._online_memory_sources)
+        for widget in (
+            self.online_memory_name_input,
+            self.online_memory_endpoint_type_combo,
+            self.online_memory_from_url_input,
+            self.online_memory_to_url_input,
+            self.online_memory_from_file_button,
+            self.online_memory_to_file_button,
+            self.online_memory_template_combo,
+            self.online_memory_read_method_combo,
+            self.online_memory_write_method_combo,
+            self.online_memory_rule_combo,
+            self.online_memory_rule_edit,
+            self.online_memory_delete_button,
+            self.online_memory_status_button,
+        ):
+            widget.setEnabled(enabled)
+        if enabled:
+            record = self._online_memory_sources[row]
+            endpoint_type = normalize_online_memory_endpoint_type(record.get('endpoint_type'))
+            self.online_memory_name_input.setText(str(record.get('name', '') or ''))
+            self._set_combo_data(self.online_memory_endpoint_type_combo, endpoint_type)
+            self.online_memory_from_url_input.setText(str(record.get('from_url', '') or ''))
+            self.online_memory_to_url_input.setText(str(record.get('to_url', '') or ''))
+            self._set_combo_data(self.online_memory_template_combo, normalize_online_memory_template(record.get('template', 'generic_ai_chat')))
+            self._set_combo_data(self.online_memory_read_method_combo, normalize_online_memory_read_method(record.get('read_method')))
+            self._set_combo_data(self.online_memory_write_method_combo, normalize_online_memory_write_method(record.get('write_method')))
+            self._set_combo_data(self.online_memory_rule_combo, self._online_memory_rule_key)
+            self.online_memory_rule_edit.setPlainText(str(record.get(self._online_memory_rule_key, '') or ''))
+            status = str(record.get('last_status', '') or '').strip() or 'Ready.'
+            self.online_memory_status_label.setText(status)
+            self._update_online_memory_endpoint_type_controls(endpoint_type)
+        else:
+            self.online_memory_name_input.clear()
+            self.online_memory_from_url_input.clear()
+            self.online_memory_to_url_input.clear()
+            self.online_memory_rule_edit.clear()
+            self.online_memory_status_label.setText('No online memory source selected.')
+            self._update_online_memory_endpoint_type_controls('web')
+        self._online_memory_updating = previous
+
+    def _refresh_online_memory_source_item(self, row: int):
+        if not (0 <= row < len(self._online_memory_sources)):
+            return
+        item = self.online_memory_source_list_widget.item(row)
+        if item is None:
+            return
+        previous = self._online_memory_updating
+        self._online_memory_updating = True
+        item.setText(self._online_memory_source_display_text(self._online_memory_sources[row]))
+        item.setCheckState(Qt.CheckState.Checked if self._online_memory_sources[row].get('enabled', True) else Qt.CheckState.Unchecked)
+        item.setData(Qt.ItemDataRole.UserRole, self._online_memory_sources[row].get('id'))
+        self._online_memory_updating = previous
+
+    def _on_online_memory_selection_changed(self, _current, _previous):
+        if self._online_memory_updating:
+            return
+        self._load_online_memory_fields_for_row(self.online_memory_source_list_widget.currentRow())
+        self._mark_dirty_if_needed()
+
+    def _on_online_memory_item_changed(self, item: QListWidgetItem):
+        if self._online_memory_updating or item is None:
+            return
+        row = self.online_memory_source_list_widget.row(item)
+        if 0 <= row < len(self._online_memory_sources):
+            self._online_memory_sources[row]['enabled'] = item.checkState() == Qt.CheckState.Checked
+            self._refresh_online_memory_source_item(row)
+            self._refresh_online_memory_route_lists()
+            self._mark_dirty_if_needed()
+
+    def _on_online_memory_field_changed(self):
+        if self._online_memory_updating:
+            return
+        row = self.online_memory_source_list_widget.currentRow()
+        if not (0 <= row < len(self._online_memory_sources)):
+            return
+        record = dict(self._online_memory_sources[row])
+        old_type = normalize_online_memory_endpoint_type(record.get('endpoint_type'))
+        new_type = normalize_online_memory_endpoint_type(self.online_memory_endpoint_type_combo.currentData())
+        read_method = normalize_online_memory_read_method(self.online_memory_read_method_combo.currentData())
+        write_method = normalize_online_memory_write_method(self.online_memory_write_method_combo.currentData())
+        if old_type != new_type:
+            if new_type == 'local_file':
+                read_method = 'text_only_page'
+                write_method = 'text_overwrite'
+            else:
+                read_method = 'management_page'
+                write_method = 'chat_prompt'
+        record.update({
+            'name': self.online_memory_name_input.text().strip() or f'Memory source {row + 1}',
+            'endpoint_type': new_type,
+            'from_url': self.online_memory_from_url_input.text().strip(),
+            'to_url': self.online_memory_to_url_input.text().strip(),
+            'read_method': read_method,
+            'write_method': write_method,
+        })
+        normalized = normalize_online_memory_source(record, row + 1)
+        if normalized is not None:
+            self._online_memory_sources[row] = normalized
+            self._refresh_online_memory_source_item(row)
+            self._update_online_memory_endpoint_type_controls(normalized.get('endpoint_type', 'web'))
+            if old_type != new_type:
+                self._load_online_memory_fields_for_row(row)
+            self._refresh_online_memory_route_lists()
+        self._mark_dirty_if_needed()
+
+    def _on_online_memory_template_changed(self):
+        if self._online_memory_updating:
+            return
+        row = self.online_memory_source_list_widget.currentRow()
+        if not (0 <= row < len(self._online_memory_sources)):
+            return
+        template = normalize_online_memory_template(self.online_memory_template_combo.currentData())
+        defaults = online_memory_template_defaults(template)
+        record = dict(self._online_memory_sources[row])
+        record['template'] = template
+        if template == 'web_special_rules':
+            special_defaults = online_memory_special_defaults_for_url(
+                record.get('from_url') or record.get('to_url') or ''
+            )
+            if special_defaults:
+                defaults.update(special_defaults)
+                record.update({
+                    key: special_defaults[key]
+                    for key in ('from_url', 'to_url', 'read_method', 'write_method')
+                    if key in special_defaults
+                })
+        for key in ('from_url', 'to_url', 'read_prompt', 'write_prompt', 'cleaner_prompt', 'merge_prompt', 'extract_selector'):
+            if not str(record.get(key, '') or '').strip():
+                record[key] = defaults.get(key, '')
+        record['read_method'] = defaults.get('read_method', record.get('read_method'))
+        record['write_method'] = defaults.get('write_method', record.get('write_method'))
+        normalized = normalize_online_memory_source(record, row + 1)
+        if normalized is not None:
+            self._online_memory_sources[row] = normalized
+        self._load_online_memory_fields_for_row(row)
+        self._refresh_online_memory_source_item(row)
+        self._mark_dirty_if_needed()
+
+    def _on_online_memory_rule_changed(self):
+        if self._online_memory_updating:
+            return
+        key = str(self.online_memory_rule_combo.currentData() or 'read_prompt')
+        if key not in {item[0] for item in ONLINE_MEMORY_RULE_FIELDS}:
+            key = 'read_prompt'
+        self._online_memory_rule_key = key
+        row = self.online_memory_source_list_widget.currentRow()
+        previous = self._online_memory_updating
+        self._online_memory_updating = True
+        if 0 <= row < len(self._online_memory_sources):
+            self.online_memory_rule_edit.setPlainText(str(self._online_memory_sources[row].get(key, '') or ''))
+        else:
+            self.online_memory_rule_edit.clear()
+        self._online_memory_updating = previous
+
+    def _on_online_memory_rule_edit_changed(self):
+        if self._online_memory_updating:
+            return
+        row = self.online_memory_source_list_widget.currentRow()
+        if not (0 <= row < len(self._online_memory_sources)):
+            return
+        self._online_memory_sources[row][self._online_memory_rule_key] = self.online_memory_rule_edit.toPlainText()
+        self._mark_dirty_if_needed()
+
+    def _update_online_memory_endpoint_type_controls(self, endpoint_type: str):
+        is_file = normalize_online_memory_endpoint_type(endpoint_type) == 'local_file'
+        self.online_memory_from_file_button.setVisible(is_file)
+        self.online_memory_to_file_button.setVisible(is_file)
+        self.online_memory_from_url_input.setPlaceholderText('/path/to/memory.txt' if is_file else 'https://...')
+        self.online_memory_to_url_input.setPlaceholderText('/path/to/memory.txt' if is_file else 'https://...')
+
+    def _online_memory_route_label(self, endpoint_id: str) -> str:
+        if endpoint_id == ONLINE_MEMORY_LOCAL_ID:
+            return 'Local Broccoli Memory'
+        _row, record = self._online_memory_source_by_id(endpoint_id)
+        if record is None:
+            return endpoint_id or 'Unknown endpoint'
+        return str(record.get('name', '') or endpoint_id)
+
+    def _refresh_online_memory_route_lists(self):
+        if not hasattr(self, 'online_memory_from_list_widget'):
+            return
+        previous = self._online_memory_updating
+        self._online_memory_updating = True
+        endpoints = self._current_online_memory_sources()
+        self._online_memory_route_from = normalize_online_memory_route_from(self._online_memory_route_from, endpoints)
+        self._online_memory_route_to = normalize_online_memory_route_to(self._online_memory_route_to, endpoints)
+        route_items = [{'id': ONLINE_MEMORY_LOCAL_ID, 'label': 'Local Broccoli Memory', 'enabled': True}]
+        for record in endpoints:
+            route_items.append({
+                'id': str(record.get('id', '') or ''),
+                'label': str(record.get('name', '') or record.get('id', '') or 'Memory endpoint'),
+                'enabled': bool(record.get('enabled', True)),
+            })
+        self.online_memory_from_list_widget.clear()
+        self.online_memory_to_list_widget.clear()
+        for item_data in route_items:
+            endpoint_id = item_data['id']
+            label = item_data['label'] if item_data['enabled'] else f"{item_data['label']} (disabled)"
+            from_item = QListWidgetItem(label)
+            from_item.setData(Qt.ItemDataRole.UserRole, endpoint_id)
+            from_item.setFlags(from_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            from_item.setCheckState(Qt.CheckState.Checked if endpoint_id == self._online_memory_route_from else Qt.CheckState.Unchecked)
+            self.online_memory_from_list_widget.addItem(from_item)
+            to_item = QListWidgetItem(label)
+            to_item.setData(Qt.ItemDataRole.UserRole, endpoint_id)
+            to_item.setFlags(to_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            to_item.setCheckState(Qt.CheckState.Checked if endpoint_id in self._online_memory_route_to else Qt.CheckState.Unchecked)
+            self.online_memory_to_list_widget.addItem(to_item)
+        self._online_memory_updating = previous
+
+    def _on_online_memory_route_from_changed(self, item: QListWidgetItem):
+        if self._online_memory_updating or item is None:
+            return
+        endpoint_id = str(item.data(Qt.ItemDataRole.UserRole) or '')
+        if item.checkState() != Qt.CheckState.Checked:
+            self._refresh_online_memory_route_lists()
+            return
+        self._online_memory_route_from = endpoint_id
+        previous = self._online_memory_updating
+        self._online_memory_updating = True
+        for index in range(self.online_memory_from_list_widget.count()):
+            current = self.online_memory_from_list_widget.item(index)
+            if current is not item:
+                current.setCheckState(Qt.CheckState.Unchecked)
+        self._online_memory_updating = previous
+        self._mark_dirty_if_needed()
+
+    def _on_online_memory_route_to_changed(self, _item: QListWidgetItem):
+        if self._online_memory_updating:
+            return
+        selected = []
+        for index in range(self.online_memory_to_list_widget.count()):
+            item = self.online_memory_to_list_widget.item(index)
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
+                selected.append(str(item.data(Qt.ItemDataRole.UserRole) or ''))
+        self._online_memory_route_to = normalize_online_memory_route_to(selected, self._current_online_memory_sources())
+        if not selected:
+            self._refresh_online_memory_route_lists()
+        self._mark_dirty_if_needed()
+
+    def _add_online_memory_source(self):
+        record = default_online_memory_source(len(self._online_memory_sources) + 1)
+        record['endpoint_type'] = 'web'
+        self._online_memory_sources.append(record)
+        previous = self._online_memory_updating
+        self._online_memory_updating = True
+        item = QListWidgetItem(self._online_memory_source_display_text(record))
+        item.setData(Qt.ItemDataRole.UserRole, record.get('id'))
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        item.setCheckState(Qt.CheckState.Checked)
+        self.online_memory_source_list_widget.addItem(item)
+        self.online_memory_source_list_widget.setCurrentItem(item)
+        self._online_memory_updating = previous
+        self._load_online_memory_fields_for_row(self.online_memory_source_list_widget.currentRow())
+        self._refresh_online_memory_route_lists()
+        self._mark_dirty_if_needed()
+
+    def _add_online_memory_file_source(self):
+        path, _ = QFileDialog.getOpenFileName(self, 'Select memory file', str(Path.home()), 'Text files (*.txt *.md *.json);;All files (*)')
+        if not path:
+            return
+        record = default_online_memory_source(len(self._online_memory_sources) + 1, template='generic_ai_chat')
+        record.update({
+            'name': os.path.basename(path),
+            'endpoint_type': 'local_file',
+            'from_url': path,
+            'to_url': path,
+            'read_method': 'text_only_page',
+            'write_method': 'text_overwrite',
+        })
+        self._online_memory_sources.append(normalize_online_memory_source(record, len(self._online_memory_sources) + 1))
+        self._set_online_memory_sources(self._online_memory_sources)
+        self.online_memory_source_list_widget.setCurrentRow(len(self._online_memory_sources) - 1)
+        self._mark_dirty_if_needed()
+
+    def _delete_online_memory_source(self):
+        row = self.online_memory_source_list_widget.currentRow()
+        if not (0 <= row < len(self._online_memory_sources)):
+            return
+        source_id = str(self._online_memory_sources[row].get('id', '') or '')
+        del self._online_memory_sources[row]
+        self.online_memory_source_list_widget.takeItem(row)
+        for key, view in list(self._online_memory_views.items()):
+            if key[0] == source_id:
+                try:
+                    view.deleteLater()
+                except Exception:
+                    pass
+                self._online_memory_views.pop(key, None)
+        if self._online_memory_sources:
+            self.online_memory_source_list_widget.setCurrentRow(min(row, len(self._online_memory_sources) - 1))
+        self._load_online_memory_fields_for_row(self.online_memory_source_list_widget.currentRow())
+        self._refresh_online_memory_route_lists()
+        self._mark_dirty_if_needed()
+
+    def _current_external_web_urls(self) -> list[str]:
+        window = self.window()
+        urls = []
+        for panel_name in ('ai_web_panel', 'localhost_panel'):
+            panel = getattr(window, panel_name, None)
+            if panel is None or not hasattr(panel, 'target_items'):
+                continue
+            for item in panel.target_items():
+                url = str(item.get('url', '') or '').strip()
+                if url and url not in urls:
+                    urls.append(url)
+        return urls
+
+    def _current_active_web_url(self) -> str:
+        window = self.window()
+        panel = None
+        try:
+            index = window.stacked_widget.currentIndex()
+            panel = window.ai_web_panel if index == 0 else (window.localhost_panel if index == 2 else None)
+        except Exception:
+            panel = None
+        if panel is None:
+            panel = getattr(window, 'ai_web_panel', None)
+        try:
+            return panel.active_view().url().toString()
+        except Exception:
+            return ''
+
+    def _import_online_memory_source_from_web_tabs(self):
+        urls = self._current_external_web_urls()
+        if not urls:
+            show_broccoli_message(self, 'Online memory', 'No Web tab URLs were found.')
+            return
+        existing = {(record.get('from_url'), record.get('to_url')) for record in self._online_memory_sources}
+        added = 0
+        for url in urls:
+            if (url, url) in existing:
+                continue
+            record = default_online_memory_source(len(self._online_memory_sources) + 1, template='generic_ai_chat')
+            try:
+                host = QUrl(url).host() or url
+            except Exception:
+                host = url
+            record.update({
+                'name': host,
+                'endpoint_type': 'web',
+                'from_url': url,
+                'to_url': url,
+                'read_method': 'chat_prompt',
+                'write_method': 'chat_prompt',
+            })
+            self._online_memory_sources.append(normalize_online_memory_source(record, len(self._online_memory_sources) + 1))
+            added += 1
+        self._set_online_memory_sources(self._online_memory_sources)
+        if added:
+            self._mark_dirty_if_needed()
+
+    def _set_online_memory_endpoint_url(self, source_id: str, key: str, url: str):
+        row, record = self._online_memory_source_by_id(source_id)
+        if record is None or key not in {'from_url', 'to_url'}:
+            return
+        record[key] = str(url or '').strip()
+        if row == self.online_memory_source_list_widget.currentRow():
+            previous = self._online_memory_updating
+            self._online_memory_updating = True
+            if key == 'to_url':
+                self.online_memory_to_url_input.setText(record[key])
+            else:
+                self.online_memory_from_url_input.setText(record[key])
+            self._online_memory_updating = previous
+        self._refresh_online_memory_source_item(row)
+        self._mark_dirty_if_needed()
+
+    def _browse_online_memory_file_path(self, key: str):
+        path, _ = QFileDialog.getOpenFileName(self, 'Select memory file', str(Path.home()), 'Text files (*.txt *.md *.json);;All files (*)')
+        if not path:
+            return
+        if key == 'to_url':
+            self.online_memory_to_url_input.setText(path)
+        else:
+            self.online_memory_from_url_input.setText(path)
+
+    def _online_memory_profile(self):
+        profile_name = str(self.settings_store.get('active_profile', '') or '').strip()
+        return self.get_profile_by_name(profile_name) or (self.settings_store['profiles'][0] if self.settings_store.get('profiles') else None)
+
+    def _run_online_memory_worker(self, task: dict, callback):
+        task_id = f'{time.monotonic_ns()}-{len(self._online_memory_worker_refs)}'
+        signals = OnlineMemoryWorkerSignals()
+        thread = OnlineMemoryWorkerThread(task_id, dict(task or {}), signals)
+        holder = {'id': task_id, 'thread': thread, 'signals': signals}
+        self._online_memory_worker_callbacks[task_id] = callback
+        self._online_memory_worker_refs.append(holder)
+        signals.finished.connect(self._on_online_memory_worker_finished)
+        thread.start()
+
+    def _on_online_memory_worker_finished(self, task_id: str, result: dict):
+        task_id = str(task_id or '')
+        callback = self._online_memory_worker_callbacks.pop(task_id, None)
+        self._online_memory_worker_refs = [
+            holder for holder in self._online_memory_worker_refs
+            if holder.get('id') != task_id
+        ]
+        if callback:
+            callback(result if isinstance(result, dict) else {'ok': False, 'text': '', 'error': 'Invalid worker result.'})
+
+    def _clean_online_memory_text_async(self, raw_text: str, record: dict, callback):
+        text = str(raw_text or '').strip()
+        if not text:
+            if callback:
+                QTimer.singleShot(0, lambda: callback(''))
+            return
+        prompt = str(record.get('cleaner_prompt', '') or '').strip()
+        profile = copy.deepcopy(self._online_memory_profile() or {})
+        if not prompt or not profile:
+            if callback:
+                QTimer.singleShot(0, lambda text=text: callback(text))
+            return
+        self._set_online_memory_status(record.get('id', ''), 'Cleaning extracted memory...')
+
+        def after(result: dict):
+            cleaned = str(result.get('text', '') or '').strip() or text
+            if not result.get('ok', False):
+                error = str(result.get('error', '') or '').strip()
+                self._set_online_memory_status(
+                    record.get('id', ''),
+                    f'Cleaner failed, used raw extraction: {error}' if error else 'Cleaner failed, used raw extraction.',
+                )
+            if callback:
+                callback(cleaned)
+
+        self._run_online_memory_worker({
+            'action': 'clean',
+            'raw_text': text,
+            'prompt': prompt,
+            'profile': profile,
+            'fallback_text': text,
+        }, after)
+
+    def _merge_online_memory_text_async(self, local_text: str, remote_text: str, record: dict, callback):
+        remote_text = str(remote_text or '').strip()
+        local_text = str(local_text or '').strip()
+        if not remote_text:
+            if callback:
+                QTimer.singleShot(0, lambda: callback(''))
+            return
+        prompt = str(record.get('merge_prompt', '') or '').strip()
+        profile = copy.deepcopy(self._online_memory_profile() or {})
+        if not prompt or not profile:
+            if callback:
+                QTimer.singleShot(0, lambda text=remote_text: callback(text))
+            return
+        self._set_online_memory_status(record.get('id', ''), 'Merging with local memory...')
+
+        def after(result: dict):
+            merged = str(result.get('text', '') or '').strip() or remote_text
+            if not result.get('ok', False):
+                error = str(result.get('error', '') or '').strip()
+                self._set_online_memory_status(
+                    record.get('id', ''),
+                    f'Merge failed, used remote memory: {error}' if error else 'Merge failed, used remote memory.',
+                )
+            if callback:
+                callback(merged)
+
+        self._run_online_memory_worker({
+            'action': 'merge',
+            'local_text': local_text,
+            'remote_text': remote_text,
+            'prompt': prompt,
+            'profile': profile,
+            'fallback_text': remote_text,
+        }, after)
+
+    def _read_online_memory_file_async(self, endpoint_id: str, record: dict, callback):
+        path = str(record.get('from_url') or record.get('to_url') or '').strip()
+        if not path:
+            self._set_online_memory_status(endpoint_id, 'Read skipped: file path is empty.')
+            if callback:
+                QTimer.singleShot(0, lambda: callback(''))
+            return
+        self._set_online_memory_status(endpoint_id, 'Reading memory file...')
+
+        def after_read(result: dict):
+            if not result.get('ok', False):
+                self._set_online_memory_status(endpoint_id, f"Read failed: {result.get('error', '')}")
+                if callback:
+                    callback('')
+                return
+            raw_text = str(result.get('text', '') or '')
+            self._clean_online_memory_text_async(raw_text, record, callback)
+
+        self._run_online_memory_worker({
+            'action': 'read_file',
+            'path': path,
+        }, after_read)
+
+    def _write_online_memory_file_async(self, endpoint_id: str, record: dict, memory_text: str, write_method: str):
+        path = str(record.get('to_url') or record.get('from_url') or '').strip()
+        if not path:
+            self._set_online_memory_status(endpoint_id, 'Write skipped: file path is empty.')
+            return
+        self._set_online_memory_status(endpoint_id, 'Writing memory file...')
+
+        def after_write(result: dict):
+            if result.get('ok', False):
+                self._set_online_memory_status(endpoint_id, 'File write complete.', pushed=True)
+                self._persist_online_memory_runtime_state()
+            else:
+                self._set_online_memory_status(endpoint_id, f"File write failed: {result.get('error', '')}")
+
+        self._run_online_memory_worker({
+            'action': 'write_file',
+            'path': path,
+            'memory_text': memory_text,
+            'write_method': write_method,
+        }, after_write)
+
+    def _set_online_memory_status(self, source_id: str, status: str, *, pulled: bool = False, pushed: bool = False):
+        row, record = self._online_memory_source_by_id(source_id)
+        if record is None:
+            return
+        stamp = datetime.datetime.now().isoformat(timespec='seconds')
+        record['last_status'] = str(status or '').strip()
+        if pulled:
+            record['last_pull_at'] = stamp
+        if pushed:
+            record['last_push_at'] = stamp
+        if row == self.online_memory_source_list_widget.currentRow():
+            self.online_memory_status_label.setText(record['last_status'])
+        self._refresh_online_memory_source_item(row)
+        self._mark_dirty_if_needed()
+
+    def _persist_online_memory_runtime_state(self):
+        self.settings_store['globals']['memory_text'] = self.memory_text_edit.toPlainText()
+        self.settings_store['globals']['online_memory_sources'] = normalize_online_memory_sources(self._current_online_memory_sources())
+        self.settings_store['globals']['online_memory_route_from'] = normalize_online_memory_route_from(
+            self._online_memory_route_from,
+            self._current_online_memory_sources(),
+        )
+        self.settings_store['globals']['online_memory_route_to'] = normalize_online_memory_route_to(
+            self._online_memory_route_to,
+            self._current_online_memory_sources(),
+        )
+        try:
+            save_settings_store(self.settings_store)
+        except Exception:
+            pass
+
+    def _ensure_online_memory_view(self, source_id: str, role: str, source: dict | None = None):
+        source_id = str(source_id or '').strip()
+        role = 'to' if role == 'to' else 'from'
+        key = (source_id, role)
+        view = self._online_memory_views.get(key)
+        if view is None:
+            window = self.window()
+            profile = getattr(window, '_web_profile', None) or QWebEngineProfile.defaultProfile()
+            view = QWebEngineView(self)
+            view.setPage(BroccoliWebPage(profile, view))
+            view.resize(900, 600)
+            view.hide()
+            self._online_memory_views[key] = view
+        return view
+
+    def _return_online_memory_view(self, source_id: str, role: str, view):
+        if view is None:
+            return
+        view.setParent(self)
+        view.hide()
+        if self.online_memory_snooze_checkbox.isChecked():
+            try:
+                frozen = WebViewPanel._page_lifecycle_state('Frozen')
+                WebViewPanel._set_view_lifecycle_state(view, frozen)
+            except Exception:
+                pass
+
+    def _load_online_memory_view(self, view, url: str, callback):
+        target = QUrl.fromUserInput(str(url or '').strip())
+        if not target.isValid() or not target.scheme().startswith('http'):
+            if callback:
+                QTimer.singleShot(0, lambda: callback(False))
+            return
+        try:
+            active = WebViewPanel._page_lifecycle_state('Active')
+            WebViewPanel._set_view_lifecycle_state(view, active)
+        except Exception:
+            pass
+        finished = {'done': False}
+
+        def finish(ok):
+            if finished['done']:
+                return
+            finished['done'] = True
+            try:
+                view.loadFinished.disconnect(on_load)
+            except Exception:
+                pass
+            if callback:
+                callback(bool(ok))
+
+        def on_load(ok):
+            QTimer.singleShot(800, lambda: finish(ok))
+
+        try:
+            view.loadFinished.connect(on_load)
+            view.load(target)
+            QTimer.singleShot(30000, lambda: finish(True))
+        except Exception:
+            finish(False)
+
+    def _wait_for_online_memory_chat_response(self, view, callback, timeout_ms: int = 90000, interval_ms: int = 900, stable_hits: int = 3):
+        started_at = time.monotonic()
+        state = {
+            'last_key': '',
+            'stable_hits': 0,
+            'saw_busy': False,
+            'saw_change': False,
+            'initialized': False,
+            'done': False,
+        }
+        probe_js = """
+        (function() {
+            const clean = (value) => String(value || '')
+                .replace(/\\u00a0/g, ' ')
+                .replace(/[ \\t]+\\n/g, '\\n')
+                .replace(/\\n{3,}/g, '\\n\\n')
+                .trim();
+            const visible = (node) => {
+                if (!node) return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 8
+                    && rect.height > 8
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || 1) > 0.01;
+            };
+            const textOf = (node) => [
+                node && node.innerText,
+                node && node.getAttribute && node.getAttribute('aria-label'),
+                node && node.getAttribute && node.getAttribute('title'),
+                node && node.getAttribute && node.getAttribute('data-testid'),
+                node && node.id
+            ].filter(Boolean).join(' ').toLowerCase();
+            const busyNode = Array.from(document.querySelectorAll('button, [role="button"], [role="progressbar"], [aria-busy="true"], [aria-label], [data-testid]'))
+                .find((node) => {
+                    if (!visible(node)) return false;
+                    if (node.getAttribute('aria-busy') === 'true') return true;
+                    const text = textOf(node);
+                    return /(stop|停止|中止|cancel response|stop generating|pause|生成を停止|回答を停止)/.test(text);
+                });
+            const root = document.querySelector('main, [role="main"]') || document.body;
+            const text = clean(root ? (root.innerText || root.textContent || '') : '');
+            return {
+                busy: !!busyNode,
+                length: text.length,
+                key: text.slice(Math.max(0, text.length - 5000))
+            };
+        })()
+        """
+
+        def finish():
+            if state.get('done'):
+                return
+            state['done'] = True
+            if callback:
+                callback()
+
+        def probe():
+            if state.get('done'):
+                return
+            elapsed = time.monotonic() - started_at
+            if elapsed > max(5, int(timeout_ms) / 1000):
+                finish()
+                return
+            try:
+                page = view.page()
+            except Exception:
+                finish()
+                return
+
+            def after(result):
+                result = result if isinstance(result, dict) else {}
+                key = str(result.get('key', '') or '')
+                busy = bool(result.get('busy'))
+                if busy:
+                    state['saw_busy'] = True
+                    state['stable_hits'] = 0
+                else:
+                    if key and not state.get('initialized'):
+                        state['initialized'] = True
+                        state['last_key'] = key
+                        state['stable_hits'] = 0
+                    elif key and key != state.get('last_key', ''):
+                        state['saw_change'] = True
+                        state['last_key'] = key
+                        state['stable_hits'] = 0
+                    elif key:
+                        state['stable_hits'] += 1
+                min_elapsed = 5.0 if state.get('saw_busy') or state.get('saw_change') else 8.0
+                if (
+                    elapsed >= min_elapsed
+                    and not busy
+                    and state.get('stable_hits', 0) >= max(1, int(stable_hits))
+                ):
+                    finish()
+                    return
+                QTimer.singleShot(max(150, int(interval_ms)), probe)
+
+            try:
+                page.runJavaScript(probe_js, after)
+            except Exception:
+                QTimer.singleShot(max(150, int(interval_ms)), probe)
+
+        QTimer.singleShot(1200, probe)
+
+    @staticmethod
+    def _is_claude_memory_management_url(url: str) -> bool:
+        try:
+            target = QUrl.fromUserInput(str(url or '').strip())
+            host = target.host().lower()
+            path = target.path()
+            query = target.query()
+        except Exception:
+            return False
+        return host.endswith('claude.ai') and path.startswith('/settings/capabilities') and 'modal=memory' in query
+
+    @staticmethod
+    def _is_chatgpt_memory_personalization_url(url: str) -> bool:
+        try:
+            target = QUrl.fromUserInput(str(url or '').strip())
+            host = target.host().lower()
+            fragment = target.fragment().lower()
+            path = target.path().lower()
+        except Exception:
+            return False
+        return host.endswith('chatgpt.com') and (
+            'settings/personalization' in fragment
+            or 'settings/personalization' in path
+        )
+
+    def _extract_claude_memory_management_text_from_view(self, view, callback):
+        first_pass_js = """
+        (function() {
+            const clean = (value) => String(value || '')
+                .replace(/\\u00a0/g, ' ')
+                .replace(/[ \\t]+\\n/g, '\\n')
+                .replace(/\\n{3,}/g, '\\n\\n')
+                .trim();
+            const visible = (node) => {
+                if (!node) return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 8
+                    && rect.height > 8
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || 1) > 0.01;
+            };
+            const cloneText = (node) => {
+                if (!node) return '';
+                const clone = node.cloneNode(true);
+                clone.querySelectorAll('script, style, svg, nav, menu, button, input, textarea, select, [aria-hidden="true"], [role="navigation"]').forEach((item) => item.remove());
+                return clean(clone.innerText || clone.textContent || '');
+            };
+            const bestTextFromNodes = (nodes, minLength) => {
+                const values = Array.from(nodes || [])
+                    .filter(visible)
+                    .map(cloneText)
+                    .filter((text) => text && text.length >= minLength)
+                    .sort((a, b) => b.length - a.length);
+                return values[0] || '';
+            };
+            const roots = Array.from(document.querySelectorAll('[role="dialog"], main, [role="main"], body'))
+                .filter(visible);
+            const memoryRoot = roots.find((node) => {
+                const text = cloneText(node);
+                return /Manage memory/i.test(text) && /Claude remembers/i.test(text);
+            }) || document.body;
+            // Claude's memory modal stores the regenerated summary in this
+            // standard-markdown block; keep this selector scoped to the memory URL.
+            const mainText = bestTextFromNodes(
+                memoryRoot ? memoryRoot.querySelectorAll('.standard-markdown, [class*="standard-markdown"]') : [],
+                50
+            ) || bestTextFromNodes(
+                memoryRoot ? memoryRoot.querySelectorAll('[class*="font-claude-response"], [class*="overflow-y-auto"]') : [],
+                50
+            );
+            const manageButton = Array.from(document.querySelectorAll('button'))
+                .filter(visible)
+                .find((button) => /Manage edits/i.test(clean(button.innerText || button.textContent || '')));
+            if (manageButton) {
+                manageButton.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse' }));
+                manageButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true }));
+                manageButton.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse' }));
+                manageButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true }));
+                manageButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+            }
+            return { mainText, clicked: !!manageButton };
+        })()
+        """
+        edits_pass_js = """
+        (function() {
+            const clean = (value) => String(value || '')
+                .replace(/\\u00a0/g, ' ')
+                .replace(/[ \\t]+\\n/g, '\\n')
+                .replace(/\\n{3,}/g, '\\n\\n')
+                .trim();
+            const visible = (node) => {
+                if (!node) return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 8
+                    && rect.height > 8
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || 1) > 0.01;
+            };
+            const pageText = clean(document.body ? (document.body.innerText || document.body.textContent || '') : '');
+            const isEditsView = /Manage edits/i.test(pageText) && /Back to memory/i.test(pageText);
+            if (!isEditsView) return '';
+            const items = Array.from(document.querySelectorAll('ul li p'))
+                .filter(visible)
+                .map((node) => clean(node.innerText || node.textContent || ''))
+                .filter((text) => text && text.length > 1);
+            const seen = new Set();
+            const unique = [];
+            for (const item of items) {
+                const key = item.toLowerCase().replace(/\\s+/g, ' ');
+                if (seen.has(key)) continue;
+                seen.add(key);
+                unique.push(item);
+            }
+            return unique.map((item) => '- ' + item).join('\\n');
+        })()
+        """
+
+        def finish(main_text: str, edits_text: str = ''):
+            main_text = str(main_text or '').strip()
+            edits_text = str(edits_text or '').strip()
+            if main_text and edits_text:
+                callback(main_text + '\n\n---\n\n零碎记忆:\n' + edits_text)
+            elif main_text:
+                callback(main_text)
+            else:
+                callback(edits_text)
+
+        def after_first(result):
+            result = result if isinstance(result, dict) else {}
+            main_text = str(result.get('mainText', '') or '').strip()
+            clicked = bool(result.get('clicked'))
+            if not clicked:
+                finish(main_text)
+                return
+
+            def extract_edits():
+                try:
+                    view.page().runJavaScript(
+                        edits_pass_js,
+                        lambda edits, mt=main_text: finish(mt, str(edits or '')),
+                    )
+                except Exception:
+                    finish(main_text)
+
+            QTimer.singleShot(1000, extract_edits)
+
+        try:
+            view.page().runJavaScript(first_pass_js, after_first)
+        except Exception:
+            callback('')
+
+    def _extract_chatgpt_memory_personalization_text_from_view(self, view, callback):
+        first_pass_js = """
+        (function() {
+            const clean = (value) => String(value || '')
+                .replace(/\\u00a0/g, ' ')
+                .replace(/[ \\t]+\\n/g, '\\n')
+                .replace(/\\n{3,}/g, '\\n\\n')
+                .trim();
+            const visible = (node) => {
+                if (!node) return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 8
+                    && rect.height > 8
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || 1) > 0.01;
+            };
+            const sectionTextareaValue = (name, labelPattern) => {
+                const byName = document.querySelector(`textarea[name="${name}"]`);
+                if (byName) return clean(byName.value || byName.textContent || '');
+                const sections = Array.from(document.querySelectorAll('section, [role="group"], div')).filter(visible);
+                const section = sections.find((node) => labelPattern.test(clean(node.innerText || node.textContent || '')));
+                if (!section) return '';
+                const textarea = section.querySelector('textarea');
+                return textarea ? clean(textarea.value || textarea.textContent || '') : '';
+            };
+            const customInstructions = sectionTextareaValue('traits_model_message', /Custom instructions/i);
+            const moreAboutYou = sectionTextareaValue('other_user_message', /More about you/i);
+            // ChatGPT keeps the long saved-memory list behind the Manage button
+            // on the Personalization settings page. Keep this click scoped to
+            // that URL-specific extractor so normal chat pages are unaffected.
+            const manageButton = Array.from(document.querySelectorAll('button'))
+                .filter(visible)
+                .find((button) => {
+                    const text = clean(button.innerText || button.textContent || '');
+                    const label = clean(button.getAttribute('aria-label') || '');
+                    return /^Manage$/i.test(text) || /Manage memories/i.test(label);
+                });
+            if (manageButton) {
+                manageButton.scrollIntoView({ block: 'center', inline: 'nearest' });
+                manageButton.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse' }));
+                manageButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true }));
+                manageButton.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, composed: true, pointerType: 'mouse' }));
+                manageButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true }));
+                manageButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+            }
+            return { customInstructions, moreAboutYou, clicked: !!manageButton };
+        })()
+        """
+        memories_pass_js = """
+        (function() {
+            const clean = (value) => String(value || '')
+                .replace(/\\u00a0/g, ' ')
+                .replace(/[ \\t]+\\n/g, '\\n')
+                .replace(/\\n{3,}/g, '\\n\\n')
+                .trim();
+            const visible = (node) => {
+                if (!node) return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 8
+                    && rect.height > 8
+                    && style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && Number(style.opacity || 1) > 0.01;
+            };
+            const pageText = clean(document.body ? (document.body.innerText || document.body.textContent || '') : '');
+            const isMemoriesView = /Saved memories/i.test(pageText) && /ChatGPT remembers/i.test(pageText);
+            if (!isMemoriesView) return '';
+            const roots = Array.from(document.querySelectorAll('[role="dialog"], main, [role="main"], body')).filter(visible);
+            const root = roots.find((node) => {
+                const text = clean(node.innerText || node.textContent || '');
+                return /Saved memories/i.test(text) && /ChatGPT remembers/i.test(text);
+            }) || document.body;
+            const candidates = Array.from(root.querySelectorAll(
+                '[class*="whitespace-pre-wrap"], [aria-label^="More options for memory:"]'
+            ))
+                .filter(visible)
+                .map((node) => {
+                    const label = node.getAttribute && node.getAttribute('aria-label');
+                    if (label && /^More options for memory:/i.test(label)) {
+                        return clean(label.replace(/^More options for memory:\\s*/i, ''));
+                    }
+                    return clean(node.innerText || node.textContent || '');
+                })
+                .filter((text) => {
+                    if (!text || text.length < 2) return false;
+                    if (/^Saved memories$/i.test(text)) return false;
+                    if (/^ChatGPT remembers and automatically manages/i.test(text)) return false;
+                    return true;
+                });
+            const seen = new Set();
+            const unique = [];
+            for (const item of candidates) {
+                const key = item.toLowerCase().replace(/\\s+/g, ' ');
+                if (seen.has(key)) continue;
+                seen.add(key);
+                unique.push(item);
+            }
+            return unique.map((item) => '- ' + item).join('\\n');
+        })()
+        """
+
+        def finish(custom_text: str, about_text: str, memories_text: str = ''):
+            parts = []
+            custom_text = str(custom_text or '').strip()
+            about_text = str(about_text or '').strip()
+            memories_text = str(memories_text or '').strip()
+            if custom_text:
+                parts.append('Custom instructions:\n' + custom_text)
+            if about_text:
+                parts.append('More about you:\n' + about_text)
+            if memories_text:
+                parts.append('零碎记忆:\n' + memories_text)
+            callback('\n\n---\n\n'.join(parts))
+
+        def after_first(result):
+            result = result if isinstance(result, dict) else {}
+            custom_text = str(result.get('customInstructions', '') or '').strip()
+            about_text = str(result.get('moreAboutYou', '') or '').strip()
+            clicked = bool(result.get('clicked'))
+            if not clicked:
+                finish(custom_text, about_text)
+                return
+
+            def extract_memories():
+                try:
+                    view.page().runJavaScript(
+                        memories_pass_js,
+                        lambda memories, ct=custom_text, at=about_text: finish(ct, at, str(memories or '')),
+                    )
+                except Exception:
+                    finish(custom_text, about_text)
+
+            QTimer.singleShot(2500, extract_memories)
+
+        try:
+            view.page().runJavaScript(first_pass_js, after_first)
+        except Exception:
+            callback('')
+
+    def _extract_online_memory_text_from_view(self, view, record: dict, callback):
+        selector = str(record.get('extract_selector', '') or '').strip()
+        mode = normalize_online_memory_read_method(record.get('read_method'))
+        if mode == 'custom_script' and selector:
+            js = selector
+        else:
+            try:
+                current_url = view.url().toString()
+            except Exception:
+                current_url = str(record.get('from_url', '') or '')
+            if not selector and self._is_chatgpt_memory_personalization_url(current_url):
+                self._extract_chatgpt_memory_personalization_text_from_view(view, callback)
+                return
+            if not selector and self._is_claude_memory_management_url(current_url):
+                self._extract_claude_memory_management_text_from_view(view, callback)
+                return
+            selector_json = json.dumps(selector, ensure_ascii=False)
+            js = """
+            (function() {
+                const selector = __SELECTOR__;
+                const host = String(window.location.hostname || '').toLowerCase();
+                const clean = (value) => String(value || '')
+                    .replace(/\\u00a0/g, ' ')
+                    .replace(/[ \\t]+\\n/g, '\\n')
+                    .replace(/\\n{3,}/g, '\\n\\n')
+                    .trim();
+                const visible = (node) => {
+                    if (!node) return false;
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 8
+                        && rect.height > 8
+                        && style.display !== 'none'
+                        && style.visibility !== 'hidden'
+                        && Number(style.opacity || 1) > 0.01;
+                };
+                const cloneText = (node) => {
+                    if (!node) return '';
+                    const clone = node.cloneNode(true);
+                    clone.querySelectorAll('script, style, svg, nav, menu, button, input, textarea, select, [aria-hidden="true"], [role="navigation"]').forEach((item) => item.remove());
+                    return clean(clone.innerText || clone.textContent || '');
+                };
+                const compactLines = (text) => {
+                    const lines = clean(text).split('\\n').map((line) => line.trim()).filter(Boolean);
+                    const kept = [];
+                    let previous = '';
+                    for (const line of lines) {
+                        if (line === previous) continue;
+                        if (/^(new chat|search chats|projects|settings|help|upgrade|reload|close|use current|pull now|push now)$/i.test(line)) continue;
+                        if (/^\\d{1,2}:\\d{2}(\\s?(am|pm))?$/i.test(line)) continue;
+                        kept.push(line);
+                        previous = line;
+                    }
+                    return clean(kept.join('\\n'));
+                };
+                const textFromNodes = (nodes) => {
+                    const parts = Array.from(nodes || [])
+                        .filter(visible)
+                        .map(cloneText)
+                        .filter((text) => text && text.length > 1);
+                    return compactLines(parts.join('\\n\\n'));
+                };
+                const lastUseful = (nodes) => {
+                    const values = Array.from(nodes || [])
+                        .filter(visible)
+                        .map(cloneText)
+                        .map(compactLines)
+                        .filter((text) => text && text.length > 12);
+                    return values.length ? values[values.length - 1] : '';
+                };
+                const bestTextFromNodes = (nodes, minLength) => {
+                    const values = Array.from(nodes || [])
+                        .filter(visible)
+                        .map(cloneText)
+                        .map(compactLines)
+                        .filter((text) => text && text.length >= minLength)
+                        .sort((a, b) => b.length - a.length);
+                    return values[0] || '';
+                };
+                if (selector) {
+                    try {
+                        const nodes = Array.from(document.querySelectorAll(selector));
+                        const text = textFromNodes(nodes);
+                        if (clean(text)) return clean(text);
+                    } catch (err) {}
+                }
+                if (host.includes('chatgpt.com')) {
+                    const memoryText = textFromNodes(document.querySelectorAll('[role="dialog"], main, [role="main"], section, article'));
+                    if (memoryText && /memory|memories|personalization|remember|记忆|メモリ/i.test(memoryText)) return memoryText;
+                    const answer = lastUseful(document.querySelectorAll('[data-message-author-role="assistant"], [data-testid*="assistant-message"], [data-testid*="conversation-turn"] div.markdown, article div.markdown'));
+                    if (answer) return answer;
+                }
+                if (host.includes('claude.ai')) {
+                    const isClaudeMemoryPage = window.location.pathname.includes('/settings/capabilities')
+                        && window.location.search.includes('modal=memory');
+                    if (isClaudeMemoryPage) {
+                        // Claude's memory modal stores the actual memory summary in a
+                        // standard-markdown block below "Manage memory"; extract that block
+                        // instead of the surrounding settings page chrome.
+                        const roots = Array.from(document.querySelectorAll('[role="dialog"], main, [role="main"], body'))
+                            .filter(visible);
+                        const memoryRoot = roots.find((node) => {
+                            const text = cloneText(node);
+                            return /Manage memory/i.test(text) && /Claude remembers/i.test(text);
+                        }) || document.body;
+                        const markdownText = bestTextFromNodes(
+                            memoryRoot ? memoryRoot.querySelectorAll('.standard-markdown, [class*="standard-markdown"]') : [],
+                            50
+                        );
+                        if (markdownText) return markdownText;
+                        const responseBoxText = bestTextFromNodes(
+                            memoryRoot ? memoryRoot.querySelectorAll('[class*="font-claude-response"], [class*="overflow-y-auto"]') : [],
+                            50
+                        );
+                        if (responseBoxText) return responseBoxText;
+                    }
+                    const memoryText = textFromNodes(document.querySelectorAll('[role="dialog"], main, [role="main"], section, article, [class*="modal"], [class*="memory"], [class*="capabilities"]'));
+                    if (memoryText && /memory|memories|preference|profile|記憶|メモリ/i.test(memoryText)) return memoryText;
+                    const answer = lastUseful(document.querySelectorAll('[data-testid*="message"], [data-testid*="assistant"], [class*="assistant"], [class*="message"], main div'));
+                    if (answer) return answer;
+                }
+                if (host.includes('gemini.google.com')) {
+                    const answer = lastUseful(document.querySelectorAll(
+                        'model-response, response-container, message-content, ' +
+                        '[class*="model-response"], [class*="response-container"], [class*="response-content"], [class*="message-content"]'
+                    ));
+                    if (answer) return answer;
+                }
+                const candidates = Array.from(document.querySelectorAll('main, [role="main"], [role="dialog"], article, section, [class*="content"], [class*="memory"], body'))
+                    .filter(visible)
+                    .map((node) => compactLines(cloneText(node)))
+                    .filter((text) => text && text.length > 10)
+                    .sort((a, b) => b.length - a.length);
+                return candidates[0] || '';
+            })()
+            """.replace('__SELECTOR__', selector_json)
+
+        def after(result):
+            if callback:
+                callback(str(result or '').strip())
+
+        try:
+            view.page().runJavaScript(js, after)
+        except Exception:
+            if callback:
+                callback('')
+
+    def _compose_online_memory_write_prompt(self, record: dict, memory_text: str) -> str:
+        template = str(record.get('write_prompt', '') or DEFAULT_ONLINE_MEMORY_WRITE_PROMPT)
+        text = str(memory_text or '').strip()
+        if '{memory}' in template:
+            return template.replace('{memory}', text)
+        return (template.rstrip() + '\n\n' + text).strip()
+
+    def _send_online_memory_prompt_to_view(self, view, prompt: str):
+        window = self.window()
+        if hasattr(window, '_inject_text_to_web_view'):
+            window._inject_text_to_web_view(view, prompt)
+        else:
+            self._inject_text_to_web_view(view, prompt)
+        QTimer.singleShot(900, lambda: (
+            window._wait_then_click_web_send_button(view, timeout_ms=12000)
+            if hasattr(window, '_wait_then_click_web_send_button')
+            else None
+        ))
+
+    def _read_online_memory_endpoint(self, endpoint_id: str, callback):
+        endpoint_id = str(endpoint_id or '').strip()
+        if endpoint_id == ONLINE_MEMORY_LOCAL_ID:
+            if callback:
+                QTimer.singleShot(0, lambda: callback(self.memory_text_edit.toPlainText()))
+            return
+        _row, record = self._online_memory_source_by_id(endpoint_id)
+        if record is None:
+            if callback:
+                QTimer.singleShot(0, lambda: callback(''))
+            return
+        if normalize_online_memory_endpoint_type(record.get('endpoint_type')) == 'local_file':
+            self._read_online_memory_file_async(endpoint_id, record, callback)
+            return
+        url = str(record.get('from_url', '') or '').strip()
+        if not url:
+            self._set_online_memory_status(endpoint_id, 'Read skipped: read URL is empty.')
+            if callback:
+                QTimer.singleShot(0, lambda: callback(''))
+            return
+        self._set_online_memory_status(endpoint_id, 'Opening read URL...')
+        view = self._ensure_online_memory_view(endpoint_id, 'from', record)
+
+        def after_load(ok):
+            if not ok:
+                self._set_online_memory_status(endpoint_id, 'Read failed: URL did not load.')
+                if callback:
+                    callback('')
+                return
+            method = normalize_online_memory_read_method(record.get('read_method'))
+            if method == 'chat_prompt':
+                prompt = str(record.get('read_prompt', '') or DEFAULT_ONLINE_MEMORY_READ_PROMPT).strip()
+                if prompt:
+                    self._set_online_memory_status(endpoint_id, 'Asking chat page for memory...')
+                    self._send_online_memory_prompt_to_view(view, prompt)
+                    self._set_online_memory_status(endpoint_id, 'Waiting for chat response...')
+                    self._wait_for_online_memory_chat_response(view, extract_now)
+                    return
+            if self._is_claude_memory_management_url(url):
+                self._set_online_memory_status(endpoint_id, 'Waiting for Claude memory page...')
+                QTimer.singleShot(3500, extract_now)
+                return
+            if self._is_chatgpt_memory_personalization_url(url):
+                self._set_online_memory_status(endpoint_id, 'Waiting for ChatGPT personalization page...')
+                QTimer.singleShot(3500, extract_now)
+                return
+            extract_now()
+
+        def extract_now():
+            self._set_online_memory_status(endpoint_id, 'Extracting read page text...')
+
+            def after_extract(raw_text: str):
+                def after_clean(cleaned: str):
+                    cleaned = str(cleaned or '').strip()
+                    if cleaned:
+                        self._set_online_memory_status(endpoint_id, 'Read complete.', pulled=True)
+                    else:
+                        self._set_online_memory_status(endpoint_id, 'Read failed: no memory text was extracted.')
+                    if callback:
+                        callback(cleaned)
+
+                self._clean_online_memory_text_async(raw_text, record, after_clean)
+
+            self._extract_online_memory_text_from_view(view, record, after_extract)
+
+        self._load_online_memory_view(view, url, after_load)
+
+    def _write_online_memory_endpoint(self, endpoint_id: str, memory_text: str):
+        endpoint_id = str(endpoint_id or '').strip()
+        memory_text = str(memory_text or '').strip()
+        if not memory_text:
+            return
+        if endpoint_id == ONLINE_MEMORY_LOCAL_ID:
+            self.memory_text_edit.setPlainText(memory_text)
+            return
+        _row, record = self._online_memory_source_by_id(endpoint_id)
+        if record is None:
+            return
+        endpoint_type = normalize_online_memory_endpoint_type(record.get('endpoint_type'))
+        write_method = normalize_online_memory_write_method(record.get('write_method'))
+        if write_method == 'disabled':
+            self._set_online_memory_status(endpoint_id, 'Write skipped: write method is disabled.')
+            return
+        if endpoint_type == 'local_file':
+            self._write_online_memory_file_async(endpoint_id, record, memory_text, write_method)
+            return
+        url = str(record.get('to_url', '') or '').strip()
+        if not url:
+            self._set_online_memory_status(endpoint_id, 'Write skipped: write URL is empty.')
+            return
+        view = self._ensure_online_memory_view(endpoint_id, 'to', record)
+        self._set_online_memory_status(endpoint_id, 'Opening write URL...')
+
+        def after_load(ok):
+            if not ok:
+                self._set_online_memory_status(endpoint_id, 'Write failed: URL did not load.')
+                return
+            prompt = self._compose_online_memory_write_prompt(record, memory_text)
+            self._set_online_memory_status(endpoint_id, 'Sending memory to write URL...')
+            self._send_online_memory_prompt_to_view(view, prompt)
+            self._set_online_memory_status(endpoint_id, 'Write sent. Check the web page if confirmation is needed.', pushed=True)
+            self._persist_online_memory_runtime_state()
+
+        self._load_online_memory_view(view, url, after_load)
+
+    def _sync_online_memory_route(self):
+        endpoints = self._current_online_memory_sources()
+        from_id = normalize_online_memory_route_from(self._online_memory_route_from, endpoints)
+        to_ids = normalize_online_memory_route_to(self._online_memory_route_to, endpoints)
+        if from_id in self._online_memory_syncing_ids:
+            return
+        self._online_memory_syncing_ids.add(from_id)
+        self.online_memory_status_label.setText(f'Syncing from {self._online_memory_route_label(from_id)}...')
+
+        def after_read(memory_text: str):
+            text = str(memory_text or '').strip()
+            if not text:
+                self.online_memory_status_label.setText('Sync failed: source returned no memory text.')
+                self._online_memory_syncing_ids.discard(from_id)
+                return
+
+            def finish_sync(text_to_write: str):
+                text_to_write = str(text_to_write or '').strip()
+                if not text_to_write:
+                    self.online_memory_status_label.setText('Sync failed: source returned no memory text.')
+                    self._online_memory_syncing_ids.discard(from_id)
+                    return
+                try:
+                    for to_id in to_ids:
+                        self._write_online_memory_endpoint(to_id, text_to_write)
+                    self.online_memory_status_label.setText(
+                        f'Synced {self._online_memory_route_label(from_id)} to '
+                        + ', '.join(self._online_memory_route_label(item) for item in to_ids)
+                        + '.'
+                    )
+                    self._persist_online_memory_runtime_state()
+                finally:
+                    self._online_memory_syncing_ids.discard(from_id)
+
+            if from_id != ONLINE_MEMORY_LOCAL_ID and ONLINE_MEMORY_LOCAL_ID in to_ids:
+                _row, merge_record = self._online_memory_source_by_id(from_id)
+                if merge_record is not None:
+                    self._merge_online_memory_text_async(
+                        self.memory_text_edit.toPlainText(),
+                        text,
+                        merge_record,
+                        finish_sync,
+                    )
+                    return
+            finish_sync(text)
+
+        self._read_online_memory_endpoint(from_id, after_read)
+
+    def _pull_online_memory_source(self, source_id: str):
+        if source_id in self._online_memory_syncing_ids:
+            self._set_online_memory_status(source_id, 'This source is already syncing.')
+            return
+        self._online_memory_syncing_ids.add(source_id)
+        def after_read(memory_text: str):
+            text = str(memory_text or '').strip()
+            if not text:
+                self._set_online_memory_status(source_id, 'Pull failed: no memory text was extracted.')
+                self._online_memory_syncing_ids.discard(source_id)
+                return
+
+            def finish_pull(text_to_apply: str):
+                text_to_apply = str(text_to_apply or '').strip()
+                if not text_to_apply:
+                    self._set_online_memory_status(source_id, 'Pull failed: no memory text was extracted.')
+                    self._online_memory_syncing_ids.discard(source_id)
+                    return
+                try:
+                    self.memory_text_edit.setPlainText(text_to_apply)
+                    self._set_online_memory_status(source_id, 'Pulled to local memory.', pulled=True)
+                    self._persist_online_memory_runtime_state()
+                finally:
+                    self._online_memory_syncing_ids.discard(source_id)
+
+            _row, merge_record = self._online_memory_source_by_id(source_id)
+            if merge_record is not None:
+                self._merge_online_memory_text_async(
+                    self.memory_text_edit.toPlainText(),
+                    text,
+                    merge_record,
+                    finish_pull,
+                )
+                return
+            finish_pull(text)
+        self._read_online_memory_endpoint(source_id, after_read)
+
+    def _push_online_memory_source(self, source_id: str, memory_text: str | None = None):
+        memory_text = self.memory_text_edit.toPlainText() if memory_text is None else str(memory_text or '')
+        if not memory_text.strip():
+            self._set_online_memory_status(source_id, 'Push skipped: local memory is empty.')
+            return
+        self._write_online_memory_endpoint(source_id, memory_text)
+
+    def _open_online_memory_status_dialog(self):
+        row = self.online_memory_source_list_widget.currentRow()
+        if not (0 <= row < len(self._online_memory_sources)):
+            return
+        if normalize_online_memory_endpoint_type(self._online_memory_sources[row].get('endpoint_type')) == 'local_file':
+            show_broccoli_message(self, 'Online memory', 'Local file endpoints do not have a web status page.')
+            return
+        dialog = OnlineMemoryStatusDialog(self, self._online_memory_sources[row], 'from')
+        dialog.fit_to_owner()
+        dialog.exec()
+
+    def _apply_online_memory_timer_settings(self):
+        if not hasattr(self, '_online_memory_timer'):
+            return
+        enabled = bool(getattr(self, 'online_memory_enabled_checkbox', None) and self.online_memory_enabled_checkbox.isChecked())
+        if enabled:
+            if not self._online_memory_timer.isActive():
+                self._online_memory_timer.start()
+        else:
+            self._online_memory_timer.stop()
+
+    def _run_due_online_memory_syncs(self):
+        if not self.online_memory_enabled_checkbox.isChecked():
+            return
+        now = datetime.datetime.now()
+        last = str(self.settings_store.get('globals', {}).get('online_memory_last_sync_at', '') or '').strip()
+        due = True
+        if last:
+            try:
+                last_dt = datetime.datetime.fromisoformat(last)
+                interval_hours = _coerce_int(self.online_memory_interval_input.text(), 1, 1, 8760)
+                due = (now - last_dt).total_seconds() >= interval_hours * 3600
+            except Exception:
+                due = True
+        if not due:
+            return
+        self.settings_store['globals']['online_memory_last_sync_at'] = now.isoformat(timespec='seconds')
+        self._sync_online_memory_route()
+
     def _apply_theme(self):
         if self._theme_updating:
             return
@@ -34053,6 +36492,9 @@ class SettingsPanel(QWidget):  # Customization settings
             self.external_context_list_widget.setStyleSheet(list_style)
             self.code_runner_list_widget.setStyleSheet(list_style)
             self.background_vision_profile_list_widget.setStyleSheet(list_style)
+            self.online_memory_source_list_widget.setStyleSheet(list_style)
+            self.online_memory_from_list_widget.setStyleSheet(list_style)
+            self.online_memory_to_list_widget.setStyleSheet(list_style)
             self.embedding_status_label.setStyleSheet(
                 f'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
                 f'font-size: 11px; color: {"#8E8E93" if dark else "#8E8E93"};'
@@ -34084,6 +36526,10 @@ class SettingsPanel(QWidget):  # Customization settings
                 self.le_same_position_screenshot,
                 self.webfetch_download_input,
                 self.annotation_pen_color_input,
+                self.online_memory_interval_input,
+                self.online_memory_name_input,
+                self.online_memory_from_url_input,
+                self.online_memory_to_url_input,
             ):
                 line_edit.setStyleSheet(lineedit_style)
             if hasattr(self, 'general_page_label'):
@@ -34091,10 +36537,21 @@ class SettingsPanel(QWidget):  # Customization settings
                     f'color: {"#A7AEB8" if dark else "#7A8391"}; '
                     'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 12px;'
                 )
+            if hasattr(self, 'memory_page_label'):
+                self.memory_page_label.setStyleSheet(
+                    f'color: {"#A7AEB8" if dark else "#7A8391"}; '
+                    'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 12px;'
+                )
+            if hasattr(self, 'online_memory_status_label'):
+                self.online_memory_status_label.setStyleSheet(
+                    f'color: {"#8E8E93" if dark else "#8E8E93"}; '
+                    'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 11px;'
+                )
             self.memory_text_edit.setStyleSheet(textedit_style)
             self.prompt_body_edit.setStyleSheet(textedit_style)
             self.skill_body_edit.setStyleSheet(textedit_style)
             self.background_vision_prompt_edit.setStyleSheet(textedit_style)
+            self.online_memory_rule_edit.setStyleSheet(textedit_style)
             frame_style = f'QFrame {{ color: {"#3A3A3A" if dark else "#ECECEC"}; background: transparent; }}'
             self.frame1.setStyleSheet(frame_style)
             self.frame2.setStyleSheet(frame_style)
@@ -35140,6 +37597,75 @@ class SettingsPanel(QWidget):  # Customization settings
             }
         ''')
 
+        self.online_memory_enabled_checkbox = QCheckBox('Enable online memory', self)
+        self.online_memory_snooze_checkbox = QCheckBox('Snooze hidden pages when idle', self)
+        self.online_memory_interval_input = QLineEdit(self)
+        self.online_memory_interval_input.setPlaceholderText('1')
+        self.online_memory_interval_input.setFixedHeight(22)
+        self.online_memory_interval_input.setFixedWidth(92)
+        self.online_memory_source_list_widget = QListWidget(self)
+        self.online_memory_source_list_widget.setStyleSheet(self.memory_list_widget.styleSheet())
+        self.online_memory_source_list_widget.currentItemChanged.connect(self._on_online_memory_selection_changed)
+        self.online_memory_source_list_widget.itemChanged.connect(self._on_online_memory_item_changed)
+        self.online_memory_new_button = MacNormalButton('Add web', self)
+        self.online_memory_file_button = MacNormalButton('Add file', self)
+        self.online_memory_import_button = MacNormalButton('Import URLs', self)
+        self.online_memory_delete_button = MacNormalButton('Delete', self)
+        self.online_memory_status_button = MacNormalButton('Open status', self)
+        self.online_memory_sync_button = MacNormalButton('Sync now', self)
+        self.online_memory_new_button.clicked.connect(self._add_online_memory_source)
+        self.online_memory_file_button.clicked.connect(self._add_online_memory_file_source)
+        self.online_memory_import_button.clicked.connect(self._import_online_memory_source_from_web_tabs)
+        self.online_memory_delete_button.clicked.connect(self._delete_online_memory_source)
+        self.online_memory_status_button.clicked.connect(self._open_online_memory_status_dialog)
+        self.online_memory_sync_button.clicked.connect(self._sync_online_memory_route)
+
+        self.online_memory_from_list_widget = QListWidget(self)
+        self.online_memory_from_list_widget.setStyleSheet(self.memory_list_widget.styleSheet())
+        self.online_memory_from_list_widget.itemChanged.connect(self._on_online_memory_route_from_changed)
+        self.online_memory_to_list_widget = QListWidget(self)
+        self.online_memory_to_list_widget.setStyleSheet(self.memory_list_widget.styleSheet())
+        self.online_memory_to_list_widget.itemChanged.connect(self._on_online_memory_route_to_changed)
+
+        self.online_memory_name_input = QLineEdit(self)
+        self.online_memory_name_input.setFixedHeight(22)
+        self.online_memory_name_input.setFixedWidth(300)
+        self.online_memory_endpoint_type_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.online_memory_endpoint_type_combo.setFixedWidth(300)
+        for value, label in ONLINE_MEMORY_ENDPOINT_TYPE_OPTIONS:
+            self.online_memory_endpoint_type_combo.addItem(label, value)
+        self.online_memory_from_url_input = QLineEdit(self)
+        self.online_memory_from_url_input.setFixedHeight(22)
+        self.online_memory_to_url_input = QLineEdit(self)
+        self.online_memory_to_url_input.setFixedHeight(22)
+        self.online_memory_from_file_button = MacNormalButton('Browse', self)
+        self.online_memory_to_file_button = MacNormalButton('Browse', self)
+        self.online_memory_from_file_button.clicked.connect(lambda: self._browse_online_memory_file_path('from_url'))
+        self.online_memory_to_file_button.clicked.connect(lambda: self._browse_online_memory_file_path('to_url'))
+
+        self.online_memory_template_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.online_memory_template_combo.setFixedWidth(300)
+        for value, label in ONLINE_MEMORY_TEMPLATE_OPTIONS:
+            self.online_memory_template_combo.addItem(label, value)
+        self.online_memory_read_method_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.online_memory_read_method_combo.setFixedWidth(146)
+        for value, label in ONLINE_MEMORY_READ_METHOD_OPTIONS:
+            self.online_memory_read_method_combo.addItem(label, value)
+        self.online_memory_write_method_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.online_memory_write_method_combo.setFixedWidth(146)
+        for value, label in ONLINE_MEMORY_WRITE_METHOD_OPTIONS:
+            self.online_memory_write_method_combo.addItem(label, value)
+        self.online_memory_rule_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.online_memory_rule_combo.setMinimumWidth(170)
+        for value, label in ONLINE_MEMORY_RULE_FIELDS:
+            self.online_memory_rule_combo.addItem(label, value)
+        self.online_memory_rule_combo.currentIndexChanged.connect(self._on_online_memory_rule_changed)
+        self.online_memory_rule_edit = QTextEdit(self)
+        self.online_memory_rule_edit.setAcceptRichText(False)
+        self.online_memory_rule_edit.setPlaceholderText('Edit the selected online memory rule here.')
+        self.online_memory_status_label = QLabel('No online memory source selected.', self)
+        self.online_memory_status_label.setWordWrap(True)
+
         self.prompt_list_widget = QListWidget(self)
         self.prompt_list_widget.setStyleSheet(self.memory_list_widget.styleSheet())
         self.prompt_list_widget.currentItemChanged.connect(self._on_prompt_selection_changed)
@@ -35768,8 +38294,12 @@ class SettingsPanel(QWidget):  # Customization settings
         memory_layout = QVBoxLayout()
         memory_layout.setContentsMargins(0, 8, 0, 0)
         memory_layout.setSpacing(12)
-        memory_layout.addWidget(QLabel('Permanent memory'))
-        memory_layout.addWidget(self.memory_text_edit, 1)
+        memory_page_1 = QWidget()
+        memory_page_1_layout = QVBoxLayout(memory_page_1)
+        memory_page_1_layout.setContentsMargins(0, 0, 0, 0)
+        memory_page_1_layout.setSpacing(12)
+        memory_page_1_layout.addWidget(QLabel('Permanent memory'))
+        memory_page_1_layout.addWidget(self.memory_text_edit, 1)
         memory_retention_row = QWidget()
         memory_retention_layout = QHBoxLayout()
         memory_retention_layout.setContentsMargins(0, 0, 0, 0)
@@ -35777,10 +38307,142 @@ class SettingsPanel(QWidget):  # Customization settings
         memory_retention_layout.addStretch()
         memory_retention_layout.addWidget(self.memory_retention_combo)
         memory_retention_row.setLayout(memory_retention_layout)
-        memory_layout.addWidget(memory_retention_row)
-        memory_layout.addWidget(QLabel('Memory notes'))
-        memory_layout.addWidget(self.memory_list_widget, 1)
+        memory_page_1_layout.addWidget(memory_retention_row)
+        memory_page_1_layout.addWidget(QLabel('Memory notes'))
+        memory_page_1_layout.addWidget(self.memory_list_widget, 1)
+
+        memory_page_2 = QWidget()
+        memory_page_2_layout = QVBoxLayout(memory_page_2)
+        memory_page_2_layout.setContentsMargins(0, 0, 0, 0)
+        memory_page_2_layout.setSpacing(8)
+        online_top_layout = QHBoxLayout()
+        online_top_layout.setContentsMargins(0, 0, 0, 0)
+        online_top_layout.setSpacing(6)
+        online_top_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        online_top_layout.addWidget(self.online_memory_enabled_checkbox)
+        online_top_layout.addSpacing(18)
+        online_top_layout.addWidget(QLabel('Every'))
+        online_top_layout.addWidget(self.online_memory_interval_input)
+        online_top_layout.addWidget(QLabel('hours'))
+        online_top_layout.addWidget(self.online_memory_sync_button)
+        online_top_layout.addStretch()
+        memory_page_2_layout.addLayout(online_top_layout)
+        online_snooze_layout = QHBoxLayout()
+        online_snooze_layout.setContentsMargins(0, 0, 0, 0)
+        online_snooze_layout.setSpacing(6)
+        online_snooze_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        online_snooze_layout.addWidget(self.online_memory_snooze_checkbox)
+        online_snooze_layout.addStretch()
+        memory_page_2_layout.addLayout(online_snooze_layout)
+        memory_page_2_layout.addSpacing(12)
+
+        route_row = QWidget()
+        route_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        route_layout = QHBoxLayout(route_row)
+        route_layout.setContentsMargins(0, 0, 0, 0)
+        route_layout.setSpacing(8)
+        route_from_col = QWidget()
+        route_from_col.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        route_from_layout = QVBoxLayout(route_from_col)
+        route_from_layout.setContentsMargins(0, 0, 0, 0)
+        route_from_layout.setSpacing(4)
+        route_from_layout.addWidget(QLabel('From'))
+        route_from_layout.addWidget(self.online_memory_from_list_widget, 1)
+        route_to_col = QWidget()
+        route_to_col.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        route_to_layout = QVBoxLayout(route_to_col)
+        route_to_layout.setContentsMargins(0, 0, 0, 0)
+        route_to_layout.setSpacing(4)
+        route_to_layout.addWidget(QLabel('To'))
+        route_to_layout.addWidget(self.online_memory_to_list_widget, 1)
+        route_layout.addWidget(route_from_col, 1)
+        route_layout.addWidget(route_to_col, 1)
+        memory_page_2_layout.addWidget(route_row, 1)
+
+        memory_page_3 = QWidget()
+        memory_page_3_layout = QVBoxLayout(memory_page_3)
+        memory_page_3_layout.setContentsMargins(0, 0, 0, 0)
+        memory_page_3_layout.setSpacing(8)
+        memory_page_3_layout.addWidget(QLabel('Memory endpoints'))
+        memory_page_3_layout.addWidget(self.online_memory_source_list_widget, 1)
+        online_source_actions = QWidget()
+        online_source_actions_layout = QHBoxLayout(online_source_actions)
+        online_source_actions_layout.setContentsMargins(0, 0, 0, 0)
+        online_source_actions_layout.setSpacing(4)
+        for button in (
+            self.online_memory_new_button,
+            self.online_memory_file_button,
+            self.online_memory_import_button,
+            self.online_memory_delete_button,
+            self.online_memory_status_button,
+        ):
+            online_source_actions_layout.addWidget(button)
+        online_source_actions_layout.addStretch()
+        memory_page_3_layout.addWidget(online_source_actions)
+
+        online_form = QFormLayout()
+        online_form.setContentsMargins(0, 0, 0, 0)
+        online_form.setSpacing(7)
+        online_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        online_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        online_form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        online_form.addRow('Name', self.online_memory_name_input)
+        online_form.addRow('Type', self.online_memory_endpoint_type_combo)
+        from_url_row = QWidget()
+        from_url_row.setFixedWidth(300)
+        from_url_layout = QHBoxLayout(from_url_row)
+        from_url_layout.setContentsMargins(0, 0, 0, 0)
+        from_url_layout.setSpacing(4)
+        from_url_layout.addWidget(self.online_memory_from_url_input, 1)
+        from_url_layout.addWidget(self.online_memory_from_file_button)
+        online_form.addRow('Read URL / file', from_url_row)
+        to_url_row = QWidget()
+        to_url_row.setFixedWidth(300)
+        to_url_layout = QHBoxLayout(to_url_row)
+        to_url_layout.setContentsMargins(0, 0, 0, 0)
+        to_url_layout.setSpacing(4)
+        to_url_layout.addWidget(self.online_memory_to_url_input, 1)
+        to_url_layout.addWidget(self.online_memory_to_file_button)
+        online_form.addRow('Write URL / file', to_url_row)
+        online_modes_row = QWidget()
+        online_modes_row.setFixedWidth(300)
+        online_modes_layout = QHBoxLayout(online_modes_row)
+        online_modes_layout.setContentsMargins(0, 0, 0, 0)
+        online_modes_layout.setSpacing(4)
+        online_modes_layout.addWidget(self.online_memory_read_method_combo, 1)
+        online_modes_layout.addWidget(self.online_memory_write_method_combo, 1)
+        online_form.addRow('Read / Write method', online_modes_row)
+        online_form.addRow('Rule preset', self.online_memory_template_combo)
+        memory_page_3_layout.addLayout(online_form)
+        memory_page_3_layout.addWidget(self.online_memory_rule_combo)
+        memory_page_3_layout.addWidget(self.online_memory_rule_edit, 1)
+        memory_page_3_layout.addWidget(self.online_memory_status_label)
+
+        self.memory_pages = QStackedWidget(self)
+        self.memory_pages.addWidget(memory_page_1)
+        self.memory_pages.addWidget(memory_page_2)
+        self.memory_pages.addWidget(memory_page_3)
+        self.memory_prev_button = MacNormalButton('‹', self)
+        self.memory_next_button = MacNormalButton('›', self)
+        self.memory_prev_button.setFixedWidth(44)
+        self.memory_next_button.setFixedWidth(44)
+        self.memory_prev_button.clicked.connect(lambda: self._set_memory_page(self.memory_pages.currentIndex() - 1))
+        self.memory_next_button.clicked.connect(lambda: self._set_memory_page(self.memory_pages.currentIndex() + 1))
+        self.memory_page_label = QLabel('1 / 3', self)
+        self.memory_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        memory_pager = QWidget()
+        memory_pager_layout = QHBoxLayout(memory_pager)
+        memory_pager_layout.setContentsMargins(0, 0, 0, 0)
+        memory_pager_layout.setSpacing(8)
+        memory_pager_layout.addStretch(1)
+        memory_pager_layout.addWidget(self.memory_prev_button)
+        memory_pager_layout.addWidget(self.memory_page_label)
+        memory_pager_layout.addWidget(self.memory_next_button)
+        memory_pager_layout.addStretch(1)
+        memory_layout.addWidget(self.memory_pages, 1)
+        memory_layout.addWidget(memory_pager)
         memory_tab.setLayout(memory_layout)
+        self._update_memory_page_controls()
 
         languages_tab = QWidget()
         languages_layout = QVBoxLayout()
@@ -35914,11 +38576,16 @@ class SettingsPanel(QWidget):  # Customization settings
             self.background_vision_max_history_input,
             self.background_vision_capture_dir_input,
             self.background_vision_max_records_input,
+            self.online_memory_interval_input,
         ]
         for widget in widgets:
             widget.textChanged.connect(self._mark_dirty_if_needed)
         for text_edit in (self.memory_text_edit, self.background_vision_prompt_edit):
             text_edit.textChanged.connect(self._mark_dirty_if_needed)
+        self.online_memory_name_input.textChanged.connect(self._on_online_memory_field_changed)
+        self.online_memory_from_url_input.textChanged.connect(self._on_online_memory_field_changed)
+        self.online_memory_to_url_input.textChanged.connect(self._on_online_memory_field_changed)
+        self.online_memory_rule_edit.textChanged.connect(self._on_online_memory_rule_edit_changed)
         self.language_list_widget.currentItemChanged.connect(self._mark_dirty_if_needed)
         self.language_list_widget.itemChanged.connect(self._mark_dirty_if_needed)
         self.profile_selector.currentIndexChanged.connect(self._mark_dirty_if_needed)
@@ -35981,6 +38648,13 @@ class SettingsPanel(QWidget):  # Customization settings
         self.background_vision_save_captures_checkbox.toggled.connect(self._update_background_vision_controls)
         self.annotation_pen_color_input.textChanged.connect(self._mark_dirty_if_needed)
         self.endpoint_v1_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.online_memory_enabled_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.online_memory_enabled_checkbox.toggled.connect(self._apply_online_memory_timer_settings)
+        self.online_memory_snooze_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.online_memory_template_combo.currentIndexChanged.connect(self._on_online_memory_template_changed)
+        self.online_memory_endpoint_type_combo.currentIndexChanged.connect(self._on_online_memory_field_changed)
+        self.online_memory_read_method_combo.currentIndexChanged.connect(self._on_online_memory_field_changed)
+        self.online_memory_write_method_combo.currentIndexChanged.connect(self._on_online_memory_field_changed)
 
     def _snapshot_form_state(self):
         return {
@@ -36018,6 +38692,18 @@ class SettingsPanel(QWidget):  # Customization settings
                 'memory_text': self.memory_text_edit.toPlainText(),
                 'memory_items': self._current_memory_items(),
                 'memory_retention_days': self.memory_retention_combo.currentData(),
+                'online_memory_enabled': self.online_memory_enabled_checkbox.isChecked(),
+                'online_memory_default_interval_minutes': online_memory_hours_to_minutes(self.online_memory_interval_input.text()),
+                'online_memory_snooze_when_idle': self.online_memory_snooze_checkbox.isChecked(),
+                'online_memory_sources': normalize_online_memory_sources(self._current_online_memory_sources()),
+                'online_memory_route_from': normalize_online_memory_route_from(
+                    self._online_memory_route_from,
+                    self._current_online_memory_sources(),
+                ),
+                'online_memory_route_to': normalize_online_memory_route_to(
+                    self._online_memory_route_to,
+                    self._current_online_memory_sources(),
+                ),
                 'ui_shortcut': self.le_ui.text().strip(),
                 'same_position_screenshot_shortcut': self.le_same_position_screenshot.text().strip(),
                 'pdf_max_pages': self.pdf_pages_combo.currentData(),

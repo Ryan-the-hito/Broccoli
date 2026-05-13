@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sys
 import traceback
 
@@ -14,6 +15,11 @@ def _vision_value(mode):
     if mode == 'off':
         return False
     return 'auto'
+
+
+def _cancel_requested(cfg):
+    cancel_path = str(cfg.get('cancel_path') or '').strip()
+    return bool(cancel_path and os.path.exists(cancel_path))
 
 
 async def _close_browser(browser):
@@ -83,26 +89,63 @@ async def main():
         browser_kwargs['ignore_default_args'] = ['--extensions-on-chrome-urls']
     browser = None
     try:
+        if _cancel_requested(cfg):
+            print(RESULT_PREFIX + json.dumps({
+                'ok': True,
+                'cancelled': True,
+                'answer': 'Browser Use task was stopped.',
+                'metadata': {},
+            }, ensure_ascii=False), flush=True)
+            return
+
         browser = Browser(**browser_kwargs)
         task = str(cfg.get('task') or '').strip()
+        stop_instruction = (
+            'When the requested objective is complete, when enough information has been gathered, '
+            'or when you cannot make useful progress, immediately use the done action and return the final result. '
+            'Do not keep exploring after the goal is satisfied. '
+        )
         if cfg.get('open_new_window', True):
             task = (
                 'Start this automation in a new browser tab or window. '
                 'Do not reuse unrelated existing tabs unless the user explicitly asks for it. '
-            ) + task
+            ) + stop_instruction + task
         else:
             task = (
                 'Use the currently active tab/page in the existing Browser Use Chrome window as the starting point. '
                 'Do not open a new tab or navigate away unless the user explicitly asks for it. '
-            ) + task
+            ) + stop_instruction + task
+
+        async def should_stop():
+            return _cancel_requested(cfg)
+
         agent = Agent(
             task=task,
             llm=llm,
             browser=browser,
             use_vision=_vision_value(cfg.get('use_vision')),
             directly_open_url=bool(cfg.get('open_new_window', True)),
+            register_should_stop_callback=should_stop,
+            enable_signal_handler=False,
         )
-        history = await agent.run(max_steps=int(cfg.get('max_steps') or 30))
+        try:
+            history = await agent.run(max_steps=int(cfg.get('max_steps') or 30))
+        except InterruptedError:
+            print(RESULT_PREFIX + json.dumps({
+                'ok': True,
+                'cancelled': True,
+                'answer': 'Browser Use task was stopped.',
+                'metadata': {},
+            }, ensure_ascii=False), flush=True)
+            return
+        if _cancel_requested(cfg):
+            print(RESULT_PREFIX + json.dumps({
+                'ok': True,
+                'cancelled': True,
+                'answer': 'Browser Use task was stopped.',
+                'metadata': {},
+            }, ensure_ascii=False), flush=True)
+            return
         final_result = ''
         method = getattr(history, 'final_result', None)
         if callable(method):
