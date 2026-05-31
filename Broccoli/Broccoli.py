@@ -10,11 +10,11 @@ from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QSizePolicy, QColorDialog,
                              QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QTreeView, QSplitter, QGraphicsView,
                              QGraphicsScene, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsLineItem)
-from PyQt6.QtCore import Qt, QRect, QRectF, QPropertyAnimation, QParallelAnimationGroup, QTimer, QThread, pyqtSignal, QObject, QEasingCurve, QPoint, QPointF, QUrl, QProcess, QEvent, QSize, QSignalBlocker
-from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem, QRegion, QLinearGradient
+from PyQt6.QtCore import Qt, QRect, QRectF, QPropertyAnimation, QParallelAnimationGroup, QVariantAnimation, QTimer, QThread, pyqtSignal, QObject, QEasingCurve, QPoint, QPointF, QUrl, QProcess, QEvent, QSize, QSignalBlocker
+from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem, QRegion, QLinearGradient, QShortcut, QKeySequence
 import PyQt6.QtGui
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript
+from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
 import codecs
 import os
 from pathlib import Path
@@ -79,6 +79,72 @@ from ctypes import c_void_p
 from io import BytesIO
 from urllib.parse import urljoin, urlparse
 try:
+    from smooth_widgets import smooth_round_rect_path
+except Exception:
+    def smooth_round_rect_path(rect: QRectF, radius: float, n: float = 5.0, seg: int | None = None) -> QPainterPath:
+        x, y, w, h = rect.left(), rect.top(), rect.width(), rect.height()
+        path = QPainterPath()
+        if w <= 0 or h <= 0:
+            return path
+        r = max(0.0, min(float(radius), min(w, h) / 2.0))
+        if r <= 0:
+            path.addRect(rect)
+            return path
+        if seg is None:
+            seg = max(12, int(r / 2))
+        else:
+            seg = max(1, int(seg))
+        e = 2.0 / max(0.001, float(n))
+        pts = [(x + r, y), (x + w - r, y)]
+        corners = [
+            (x + w - r, y + r, 1, -1, True),
+            (x + w - r, y + h - r, 1, 1, False),
+            (x + r, y + h - r, -1, 1, True),
+            (x + r, y + r, -1, -1, False),
+        ]
+        edge_end = [(x + w, y + h - r), (x + r, y + h), (x, y + r), None]
+        for (cx, cy, sx, sy, x_is_sin), nxt in zip(corners, edge_end):
+            for i in range(seg + 1):
+                t = math.pi / 2 * i / seg
+                a, b = (math.sin(t), math.cos(t)) if x_is_sin else (math.cos(t), math.sin(t))
+                a = max(0.0, float(a))
+                b = max(0.0, float(b))
+                pts.append((cx + sx * r * a ** e, cy + sy * r * b ** e))
+            if nxt:
+                pts.append(nxt)
+        path.moveTo(*pts[0])
+        for p in pts[1:]:
+            path.lineTo(*p)
+        path.closeSubpath()
+        return path
+
+# Smooth corner radius tiers
+# --------------------------
+# Original Broccoli surfaces used mechanical Qt radii from QSS
+# border-radius, painter.drawRoundedRect(), and
+# QPainterPath.addRoundedRect(). After switching window/panel surfaces to
+# smooth_round_rect_path(), the same numeric radius looks visually smaller
+# because the n=5 superellipse/squircle curve distributes curvature more
+# gradually than a circular arc.
+#
+# Preserve each component's original hierarchy tier, then convert only the
+# smooth drawing control radius with the calibrated coefficient below. Do not
+# apply this table to pill/capsule/semi-circle controls; those should remain
+# mechanical half-round shapes.
+#
+# Algorithm:
+#   smooth_control_radius = round(original_mechanical_radius * 59 / 26)
+#   smooth_round_rect_path(..., smooth_control_radius, n=5)
+#
+# Tier map:
+#   T1 outer/top-level window surface:        26 -> 59  (coef 2.269)
+#   T2 large floating panel/window surface:   20 -> 45  (coef 2.269)
+#   T3 secondary dialog/window surface:       16 -> 36  (coef 2.269)
+#   T4 small popup/window surface:             9 -> 20  (coef 2.269)
+#   T5 compact popup/window surface:           8 -> 18  (coef 2.269)
+#   T6 tiny floating/menu-like surface:        6 -> 14  (coef 2.269)
+#   T7 minimal small surface:                  4 ->  9  (coef 2.269)
+try:
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
     WATCHDOG_AVAILABLE = True
@@ -86,6 +152,96 @@ except Exception:
     Observer = None
     FileSystemEventHandler = object
     WATCHDOG_AVAILABLE = False
+
+
+TAB_API = 0
+TAB_WEB = 1
+TAB_LOCALHOST = 2
+TAB_TERMINAL = 3
+MAIN_TAB_LABELS = ['API', 'Web', 'Localhost', 'Terminal']
+EXTERNAL_PROMPT_TAB_INDICES = (TAB_WEB, TAB_LOCALHOST)
+
+
+class SmoothPanelWidget(QWidget):
+    """Root panel background drawn with continuous-curvature corners."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._smooth_panel_bg = QColor('#FFFFFF')
+        self._smooth_panel_border = QColor('#ECECEC')
+        self._smooth_panel_radius = 59.0
+        self._smooth_panel_border_width = 1.0
+
+    def set_smooth_panel_background(self, bg_color, border_color, radius=59, border_width=1.0):
+        bg = QColor(bg_color)
+        border = QColor(border_color)
+        if bg.isValid():
+            self._smooth_panel_bg = bg
+        if border.isValid():
+            self._smooth_panel_border = border
+        self._smooth_panel_radius = float(radius)
+        self._smooth_panel_border_width = float(border_width)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            bw = max(0.0, float(getattr(self, '_smooth_panel_border_width', 1.0)))
+            inset = bw / 2.0
+            rect = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
+            path = smooth_round_rect_path(rect, getattr(self, '_smooth_panel_radius', 59.0))
+            painter.fillPath(path, getattr(self, '_smooth_panel_bg', QColor('#FFFFFF')))
+            if bw > 0:
+                pen = QPen(getattr(self, '_smooth_panel_border', QColor('#ECECEC')), bw)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.strokePath(path, pen)
+        finally:
+            painter.end()
+
+
+def style_broccoli_context_menu(menu: QMenu) -> QMenu:
+    dark = is_dark_theme(app)
+    bg = '#2D2D2D' if dark else '#FFFFFF'
+    border = '#3A3A3A' if dark else '#E5E5EA'
+    text = '#F2F2F7' if dark else '#20242B'
+    hover = '#3A3A3A' if dark else '#F2F2F7'
+    separator = '#3A3A3A' if dark else '#E5E5EA'
+    menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+    menu.setStyleSheet(f"""
+        QMenu {{
+            background-color: {bg};
+            color: {text};
+            border: 1px solid {border};
+            border-radius: 12px;
+            padding: 6px;
+            font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+            font-size: 13px;
+        }}
+        QMenu::item {{
+            background: transparent;
+            border-radius: 8px;
+            padding: 7px 28px 7px 12px;
+            min-width: 120px;
+        }}
+        QMenu::item:selected {{
+            background: {hover};
+        }}
+        QMenu::item:disabled {{
+            color: {'#8E8E93' if dark else '#A0A0A6'};
+        }}
+        QMenu::separator {{
+            height: 1px;
+            background: {separator};
+            margin: 5px 8px;
+        }}
+        QMenu::right-arrow {{
+            width: 8px;
+            height: 8px;
+            padding-right: 8px;
+        }}
+    """)
+    return menu
 try:
     import AppKit
     from AppKit import NSApp, NSColor
@@ -153,7 +309,7 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.8'
+VERSION = '2.0.9'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
 BUNDLED_RESOURCES_DIR = _resolve_bundled_resources_dir()
@@ -906,16 +1062,30 @@ def normalize_online_memory_sources(records) -> list[dict]:
 ONLINE_MEMORY_LOCAL_ID = 'local_memory'
 
 
-def normalize_online_memory_route_from(value: str, endpoints: list[dict]) -> str:
-    candidate = str(value or '').strip()
-    allowed = {ONLINE_MEMORY_LOCAL_ID, *{str(item.get('id', '') or '') for item in endpoints}}
-    if candidate in allowed:
-        return candidate
-    return ONLINE_MEMORY_LOCAL_ID
+def normalize_online_memory_route_from(values, endpoints: list[dict], excluded=None) -> list[str]:
+    excluded = {str(item or '').strip() for item in (excluded or []) if str(item or '').strip()}
+    allowed = [ONLINE_MEMORY_LOCAL_ID] + [str(item.get('id', '') or '') for item in endpoints]
+    allowed_set = {item for item in allowed if item and item not in excluded}
+    if isinstance(values, str):
+        raw_values = [values]
+    elif isinstance(values, list):
+        raw_values = values
+    else:
+        raw_values = []
+    normalized = []
+    for value in raw_values:
+        candidate = str(value or '').strip()
+        if candidate and candidate in allowed_set and candidate not in normalized:
+            normalized.append(candidate)
+    if normalized:
+        return normalized
+    fallback = next((item for item in allowed if item and item not in excluded), ONLINE_MEMORY_LOCAL_ID)
+    return [fallback] if fallback else []
 
 
-def normalize_online_memory_route_to(values, endpoints: list[dict]) -> list[str]:
-    allowed = {ONLINE_MEMORY_LOCAL_ID, *{str(item.get('id', '') or '') for item in endpoints}}
+def normalize_online_memory_route_to(values, endpoints: list[dict], excluded=None, allow_empty: bool = False) -> list[str]:
+    excluded = {str(item or '').strip() for item in (excluded or []) if str(item or '').strip()}
+    allowed = {ONLINE_MEMORY_LOCAL_ID, *{str(item.get('id', '') or '') for item in endpoints}} - excluded
     normalized = []
     if isinstance(values, str):
         raw_values = [values]
@@ -927,7 +1097,11 @@ def normalize_online_memory_route_to(values, endpoints: list[dict]) -> list[str]
         candidate = str(value or '').strip()
         if candidate and candidate in allowed and candidate not in normalized:
             normalized.append(candidate)
-    return normalized or [ONLINE_MEMORY_LOCAL_ID]
+    if normalized:
+        return normalized
+    if allow_empty:
+        return []
+    return [ONLINE_MEMORY_LOCAL_ID] if ONLINE_MEMORY_LOCAL_ID in allowed else []
 
 
 def default_background_vision_settings() -> dict:
@@ -1784,7 +1958,7 @@ class BroccoliMessageDialog(QDialog):
         super().__init__(parent)
         self._theme_updating = False
         self._panel_margin = 16
-        self._panel_radius = 20
+        self._panel_radius = 45
         self.selected_button = ''
         self.setModal(True)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
@@ -1840,8 +2014,7 @@ class BroccoliMessageDialog(QDialog):
             self.width() - self._panel_margin * 2,
             self.height() - self._panel_margin * 2,
         )
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(panel_rect, self._panel_radius, self._panel_radius)
+        bg_path = smooth_round_rect_path(panel_rect, self._panel_radius)
         painter.fillPath(bg_path, QColor('#2D2D2D' if dark else '#FFFFFF'))
         painter.setPen(QPen(QColor('#3A3A3A' if dark else '#ECECEC'), 1))
         painter.drawPath(bg_path)
@@ -2051,7 +2224,7 @@ class MemoryEditDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(460, 280)
         self._panel_margin = 16
-        self._panel_radius = 20
+        self._panel_radius = 45
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(28, 28, 28, 28)
@@ -2070,9 +2243,9 @@ class MemoryEditDialog(QDialog):
         button_row.setSpacing(4)
         button_row.addStretch()
 
-        self.cancel_button = MacNormalButton('Cancel', self)
+        self.cancel_button = MacNormalButton('Cancel', self, always_dark=True)
         self.cancel_button.clicked.connect(self.reject)
-        self.save_button = MacNormalButton('Save', self)
+        self.save_button = MacNormalButton('Save', self, always_dark=True)
         self.save_button.clicked.connect(self.accept)
         btn_w = max(self.cancel_button.sizeHint().width(), self.save_button.sizeHint().width())
         self.cancel_button.setFixedWidth(btn_w)
@@ -2099,8 +2272,7 @@ class MemoryEditDialog(QDialog):
             self.height() - self._panel_margin * 2,
         )
 
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(panel_rect, self._panel_radius, self._panel_radius)
+        bg_path = smooth_round_rect_path(panel_rect, self._panel_radius)
         painter.fillPath(bg_path, QColor('#2D2D2D' if dark else '#FFFFFF'))
         painter.setPen(QPen(QColor('#3A3A3A' if dark else '#ECECEC'), 1))
         painter.drawPath(bg_path)
@@ -2162,7 +2334,7 @@ class ExternalMcpHttpDialog(QDialog):
         self.resize(560, 620)
         self._field_width = 310
         self._panel_margin = 18
-        self._panel_radius = 20
+        self._panel_radius = 45
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(40, 36, 40, 38)
@@ -2382,8 +2554,7 @@ class ExternalMcpHttpDialog(QDialog):
             self.width() - self._panel_margin * 2,
             self.height() - self._panel_margin * 2,
         )
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(panel_rect, self._panel_radius, self._panel_radius)
+        bg_path = smooth_round_rect_path(panel_rect, self._panel_radius)
         painter.fillPath(bg_path, QColor('#2D2D2D' if dark else '#FFFFFF'))
         painter.setPen(QPen(QColor('#3A3A3A' if dark else '#ECECEC'), 1))
         painter.drawPath(bg_path)
@@ -2438,7 +2609,7 @@ class ExternalMcpStdioDialog(QDialog):
         self.resize(560, 620)
         self._field_width = 310
         self._panel_margin = 18
-        self._panel_radius = 20
+        self._panel_radius = 45
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(40, 36, 40, 38)
@@ -2617,8 +2788,7 @@ class ExternalMcpStdioDialog(QDialog):
             self.width() - self._panel_margin * 2,
             self.height() - self._panel_margin * 2,
         )
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(panel_rect, self._panel_radius, self._panel_radius)
+        bg_path = smooth_round_rect_path(panel_rect, self._panel_radius)
         painter.fillPath(bg_path, QColor('#2D2D2D' if dark else '#FFFFFF'))
         painter.setPen(QPen(QColor('#3A3A3A' if dark else '#ECECEC'), 1))
         painter.drawPath(bg_path)
@@ -2773,8 +2943,7 @@ class DropdownPopup(QWidget):
         select_color = QColor(0, 122, 255, 100) if dark else QColor(17, 17, 17, 18)
         text_color = QColor(240, 240, 240) if dark else QColor(32, 36, 43)
 
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 8, 8)
+        bg_path = smooth_round_rect_path(QRectF(0, 0, self.width(), self.height()), 18)
         painter.fillPath(bg_path, bg_color)
         painter.setPen(QPen(border_color, 1))
         painter.drawPath(bg_path)
@@ -2787,12 +2956,10 @@ class DropdownPopup(QWidget):
             item = self.items[i]
             item_rect = QRectF(self.padding, y, self.width() - self.padding * 2, self.item_height)
             if i == self.hovered_index:
-                hover_path = QPainterPath()
-                hover_path.addRoundedRect(item_rect, 4, 4)
+                hover_path = smooth_round_rect_path(item_rect, 9)
                 painter.fillPath(hover_path, hover_color)
             elif i == self.current_index:
-                select_path = QPainterPath()
-                select_path.addRoundedRect(item_rect, 4, 4)
+                select_path = smooth_round_rect_path(item_rect, 9)
                 painter.fillPath(select_path, select_color)
             painter.setPen(text_color)
             text_rect = item_rect.adjusted(8, 0, -8, 0)
@@ -3186,8 +3353,7 @@ class TargetSelectorPopup(QWidget):
         muted_color = QColor(150, 150, 155) if dark else QColor(120, 126, 134)
         check_color = QColor(10, 132, 255)
 
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 8, 8)
+        bg_path = smooth_round_rect_path(QRectF(0, 0, self.width(), self.height()), 18)
         painter.fillPath(bg_path, bg_color)
         painter.setPen(QPen(border_color, 1))
         painter.drawPath(bg_path)
@@ -3205,13 +3371,11 @@ class TargetSelectorPopup(QWidget):
                 y += self.item_height
                 continue
             if i == self.hovered_index:
-                hover_path = QPainterPath()
-                hover_path.addRoundedRect(rect, 4, 4)
+                hover_path = smooth_round_rect_path(rect, 9)
                 painter.fillPath(hover_path, hover_color)
             selected = bool(row.get('checked', False))
             if selected:
-                select_path = QPainterPath()
-                select_path.addRoundedRect(rect, 4, 4)
+                select_path = smooth_round_rect_path(rect, 9)
                 painter.fillPath(select_path, selected_color)
 
             indicator = QRectF(rect.left() + 8, rect.top() + 7, 14, 14)
@@ -6152,7 +6316,7 @@ def default_global_settings() -> dict:
         'online_memory_default_interval_minutes': 60,
         'online_memory_snooze_when_idle': True,
         'online_memory_sources': [],
-        'online_memory_route_from': ONLINE_MEMORY_LOCAL_ID,
+        'online_memory_route_from': [ONLINE_MEMORY_LOCAL_ID],
         'online_memory_route_to': [ONLINE_MEMORY_LOCAL_ID],
         'skills': [],
         'specialized_profiles': default_specialized_profiles(),
@@ -12345,7 +12509,7 @@ tray.setIcon(icon)
 tray.setVisible(True)
 
 # Create the menu
-menu = QMenu()
+menu = style_broccoli_context_menu(QMenu())
 
 action3 = QAction("🥦 Start Broccoli!")
 menu.addAction(action3)
@@ -12400,15 +12564,17 @@ tray.setContextMenu(menu)
 # create a system menu
 btna4 = QAction("&Pin!")
 btna4.setCheckable(True)
+btna_same_position_screenshot = QAction("Same-position screenshot")
 sysmenu = QMenuBar()
 file_menu = sysmenu.addMenu("&Actions")
 file_menu.addAction(btna4)
+file_menu.addAction(btna_same_position_screenshot)
 
 
 class window_about(QWidget):  # 增加说明页面(About)
     def __init__(self):
         super().__init__()
-        self.radius = 16
+        self.radius = 36
         self.drag_pos = None
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -12431,8 +12597,7 @@ class window_about(QWidget):  # 增加说明页面(About)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         rect = QRectF(self.rect())
-        path = QPainterPath()
-        path.addRoundedRect(rect, self.radius, self.radius)
+        path = smooth_round_rect_path(rect, self.radius)
         painter.setClipPath(path)
         bg_color = self.palette().color(QPalette.ColorRole.Window)
         painter.fillPath(path, bg_color)
@@ -12714,7 +12879,7 @@ class CustomDialog4(_DonationDialog):  # (About4)
 class window_update(QWidget):  # 增加更新页面（Check for Updates）
     def __init__(self):
         super().__init__()
-        self.radius = 16
+        self.radius = 36
         self.drag_pos = None
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -12737,8 +12902,7 @@ class window_update(QWidget):  # 增加更新页面（Check for Updates）
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         rect = QRectF(self.rect())
-        path = QPainterPath()
-        path.addRoundedRect(rect, self.radius, self.radius)
+        path = smooth_round_rect_path(rect, self.radius)
         painter.setClipPath(path)
         bg_color = self.palette().color(QPalette.ColorRole.Window)
         painter.fillPath(path, bg_color)
@@ -13358,7 +13522,7 @@ class NavSitePill(QWidget):
 
     def contextMenuEvent(self, event):
         from PyQt6.QtWidgets import QMenu
-        menu = QMenu(self)
+        menu = style_broccoli_context_menu(QMenu(self))
         back_act    = menu.addAction('← Back')
         fwd_act     = menu.addAction('→ Forward')
         menu.addSeparator()
@@ -13403,6 +13567,14 @@ class NavSitePill(QWidget):
 
         icon_size = 20
         icon_y    = (self.HEIGHT - icon_size) // 2
+        bg_size = 26
+        bg_x = (self.CIRCLE_SIZE - bg_size) / 2.0
+        bg_y = (self.HEIGHT - bg_size) / 2.0
+        circle_bg = QColor('#3A3A3A' if dark else '#FFFFFF')
+        circle_rect = QRectF(bg_x, bg_y, bg_size, bg_size)
+        painter.setBrush(QBrush(circle_bg))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(circle_rect)
 
         if self._icon and not self._icon.isNull():
             if expanded and self._cur_w > self.CIRCLE_SIZE + 4:
@@ -13868,6 +14040,133 @@ _WEB_CONVERSATION_CAPTURE_JS = r"""
 })()
 """
 
+_WEB_LATEST_REPLY_CAPTURE_JS = r"""
+(() => {
+  const clean = (value) => String(value || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  const host = String(window.location.hostname || '').toLowerCase();
+  const serviceName = (() => {
+    if (host.includes('claude.ai')) return 'Claude';
+    if (host.includes('chatgpt.com') || host.includes('openai.com')) return 'ChatGPT';
+    if (host.includes('gemini.google.com')) return 'Gemini';
+    if (host.includes('chat.z.ai') || host === 'z.ai' || host.endsWith('.z.ai')) return 'Z.ai';
+    if (host.includes('kimi.com')) return 'Kimi';
+    if (host.includes('qwen')) return 'Qwen';
+    if (host.includes('perplexity')) return 'Perplexity';
+    if (host.includes('grok')) return 'Grok';
+    return 'Web';
+  })();
+  const visible = (el) => {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 20 || rect.height < 10) return false;
+    const style = window.getComputedStyle(el);
+    return style && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || 1) > 0.05;
+  };
+  const cloneText = (el) => {
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('button, nav, menu, svg, style, script, textarea, input, [aria-hidden="true"]').forEach((node) => node.remove());
+    return clean(clone.innerText || clone.textContent || '');
+  };
+  const compactLines = (text) => {
+    const lines = clean(text).split('\n').map((line) => line.trim()).filter(Boolean);
+    const kept = [];
+    let previous = '';
+    for (const line of lines) {
+      if (/^\d{1,2}:\d{2}(\s?(am|pm))?$/i.test(line)) continue;
+      if (/^\d+\s+lines?$/i.test(line)) continue;
+      if (/^(copy|copied|retry|share|edit|good response|bad response)$/i.test(line)) continue;
+      if (line === previous) continue;
+      kept.push(line);
+      previous = line;
+    }
+    return clean(kept.join('\n'));
+  };
+  const normalizedKey = (value) => compactLines(value).toLowerCase().replace(/\s+/g, ' ');
+  const addCompactValue = (values, text) => {
+    text = compactLines(text);
+    if (!text || text.length < 12) return;
+    const key = normalizedKey(text);
+    if (!key) return;
+    for (let idx = 0; idx < values.length; idx += 1) {
+      const existingKey = normalizedKey(values[idx]);
+      if (existingKey === key) return;
+      if (existingKey.includes(key) && key.length > 20) return;
+      if (key.includes(existingKey) && existingKey.length > 20) {
+        values[idx] = text;
+        return;
+      }
+    }
+    values.push(text);
+  };
+  const latestFromSelectors = (selectors) => {
+    const values = [];
+    for (const selector of selectors) {
+      let nodes = [];
+      try {
+        nodes = Array.from(document.querySelectorAll(selector));
+      } catch (err) {
+        nodes = [];
+      }
+      nodes.filter(visible).forEach((node) => addCompactValue(values, cloneText(node)));
+    }
+    return values.length ? values[values.length - 1] : '';
+  };
+
+  let selectors = [];
+  if (host.includes('chatgpt.com') || host.includes('openai.com')) {
+    selectors = [
+      '[data-message-author-role="assistant"] .markdown',
+      '[data-message-author-role="assistant"] [class*="markdown"]',
+      '[data-message-author-role="assistant"]',
+      '[data-testid*="assistant-message"]',
+      '[data-testid*="conversation-turn"] div.markdown',
+      'article div.markdown'
+    ];
+  } else if (host.includes('claude.ai')) {
+    selectors = [
+      '[data-testid*="message"] [class*="font-claude-response"]',
+      '[data-testid*="assistant"] [class*="font-claude-response"]',
+      '[class*="font-claude-response"]',
+      '[data-testid*="message"] .standard-markdown',
+      '[data-testid*="message"] [class*="standard-markdown"]',
+      '[data-testid*="assistant"] .standard-markdown',
+      '[data-testid*="assistant"] [class*="standard-markdown"]',
+      'main [class*="prose"]'
+    ];
+  } else if (host.includes('gemini.google.com')) {
+    selectors = [
+      'model-response',
+      'response-container',
+      'message-content',
+      '[class*="model-response"]',
+      '[class*="response-container"]',
+      '[class*="response-content"]',
+      '[class*="message-content"]'
+    ];
+  } else if (host.includes('perplexity')) {
+    selectors = [
+      '[data-testid*="answer"]',
+      '[class*="answer"]',
+      '[class*="prose"]',
+      'main article'
+    ];
+  }
+
+  return {
+    url: String(window.location.href || ''),
+    title: clean(document.title || ''),
+    source: serviceName,
+    content: latestFromSelectors(selectors),
+    fallback: false
+  };
+})()
+"""
+
 WEB_REPLY_FORWARD_SOURCE_CHAR_LIMIT = 6000
 WEB_REPLY_FORWARD_TOTAL_CHAR_LIMIT = 18000
 
@@ -13947,7 +14246,36 @@ class BroccoliWebPage(QWebEnginePage):
     """
     def __init__(self, profile, parent):
         super().__init__(profile, parent)
+        self._enable_web_clipboard_access()
         self.newWindowRequested.connect(self._on_new_window)
+        try:
+            self.featurePermissionRequested.connect(self._on_feature_permission_requested)
+        except Exception:
+            pass
+
+    def _enable_web_clipboard_access(self):
+        """Allow in-page copy/paste APIs for Web and Localhost tabs."""
+        try:
+            settings = self.settings()
+            for attr_name in ('JavascriptCanAccessClipboard', 'JavascriptCanPaste'):
+                attr = getattr(QWebEngineSettings.WebAttribute, attr_name, None)
+                if attr is not None:
+                    settings.setAttribute(attr, True)
+        except Exception:
+            pass
+
+    def _on_feature_permission_requested(self, security_origin, feature):
+        """Grant only clipboard permission; leave camera/location/etc. untouched."""
+        try:
+            clipboard_feature = getattr(QWebEnginePage.Feature, 'ClipboardReadWrite', None)
+            if clipboard_feature is not None and feature == clipboard_feature:
+                self.setFeaturePermission(
+                    security_origin,
+                    feature,
+                    QWebEnginePage.PermissionPolicy.PermissionGrantedByUser,
+                )
+        except Exception:
+            pass
 
     def _on_new_window(self, request):
         """Load the requested URL in the existing view instead of a new window."""
@@ -13998,7 +14326,12 @@ class WebNavBar(QWidget):
         self._active_bg = QColor('#DEDEDE')
         self._layout_margin = 3
         self._layout_spacing = 4
+        self._min_expanded_width = 190
         self._expanded_index = 0
+        self._scroll_offset = 0
+        self._max_scroll_offset = 0
+        self._content_width = 0
+        self._ensure_active_on_next_layout = True
         self._hover_timer = QTimer(self)
         self._hover_timer.setSingleShot(True)
         self._hover_timer.setInterval(180)
@@ -14032,6 +14365,7 @@ class WebNavBar(QWidget):
         QTimer.singleShot(80, lambda: self._relayout_pills(animated=False))
 
     def _sync_active_pill_width(self, animated: bool = False):
+        self._ensure_active_on_next_layout = True
         self._relayout_pills(animated=animated)
 
     def _valid_url_area_width(self) -> int:
@@ -14039,10 +14373,6 @@ class WebNavBar(QWidget):
         return max(0, self.width() - self._layout_margin * 2 - plus_w - self._layout_spacing)
 
     def _expanded_pill_index(self, overlap_mode: bool) -> int:
-        if 0 <= self._hovered < len(self._pills):
-            return self._hovered
-        if overlap_mode:
-            return -1
         return self._active if 0 <= self._active < len(self._pills) else -1
 
     def _relayout_pills(self, animated: bool = False):
@@ -14064,37 +14394,96 @@ class WebNavBar(QWidget):
             self.update()
             return
 
-        min_total = count * circle + max(0, count - 1) * spacing
-        overlap_mode = min_total > available
-        expanded_index = self._expanded_pill_index(overlap_mode)
+        expanded_index = self._expanded_pill_index(False)
         self._expanded_index = expanded_index
+        min_expanded_w = min(max(circle, int(getattr(self, '_min_expanded_width', 190))), max(circle, available))
 
         widths = [circle for _ in self._pills]
+        if expanded_index >= 0:
+            left_reserved = (circle + spacing) if expanded_index > 0 else 0
+            right_reserved = (circle + spacing) if expanded_index < count - 1 else 0
+            reserved = left_reserved + right_reserved
+            widths[expanded_index] = min(min_expanded_w, max(circle, available - reserved))
+
+        logical_positions = []
+        x = 0
+        for index, width in enumerate(widths):
+            logical_positions.append(x)
+            x += width + (spacing if index < count - 1 else 0)
+        self._content_width = max(0, x)
+        self._max_scroll_offset = max(0, self._content_width - available)
+        self._scroll_offset = max(0, min(int(self._scroll_offset), self._max_scroll_offset))
+        if self._ensure_active_on_next_layout and 0 <= expanded_index < count:
+            item_left = logical_positions[expanded_index]
+            item_right = item_left + widths[expanded_index]
+            if item_left < self._scroll_offset:
+                self._scroll_offset = item_left
+            elif item_right > self._scroll_offset + available:
+                self._scroll_offset = item_right - available
+            self._scroll_offset = max(0, min(int(self._scroll_offset), self._max_scroll_offset))
+            self._ensure_active_on_next_layout = False
+
         positions = []
-        if overlap_mode:
-            if count == 1:
-                step = 0
-            else:
-                step = max(0, (available - circle) / max(1, count - 1))
-            if expanded_index >= 0:
-                expanded_w = min(max(circle, int(available * 0.62)), max(circle, available), 260)
-                widths[expanded_index] = expanded_w
-            for index in range(count):
-                base_x = int(round(url_left + index * step))
-                width = widths[index]
-                if width > circle:
-                    base_x = min(max(url_left, base_x), max(url_left, url_right - width))
-                positions.append(base_x)
+        left_stack = []
+        right_stack = []
+        active_x = None
+        active_w = widths[expanded_index] if 0 <= expanded_index < count else circle
+        if 0 <= expanded_index < count:
+            raw_active_x = url_left + logical_positions[expanded_index] - self._scroll_offset
+            min_active_x = url_left + ((circle + spacing) if expanded_index > 0 else 0)
+            max_active_x = url_right - active_w - ((circle + spacing) if expanded_index < count - 1 else 0)
+            if max_active_x < min_active_x:
+                min_active_x = url_left
+                max_active_x = max(url_left, url_right - active_w)
+            active_x = int(round(max(min_active_x, min(max_active_x, raw_active_x))))
+
+        left_edge_stack = []
+        active_left_stack = []
+        active_right_stack = []
+        right_edge_stack = []
+        for index, width in enumerate(widths):
+            raw_x = url_left + logical_positions[index] - self._scroll_offset
+            if index == expanded_index and active_x is not None:
+                positions.append(active_x)
+                continue
+            if active_x is not None and index < expanded_index:
+                left_slot = max(url_left, active_x - spacing - circle)
+                if raw_x + width > active_x - spacing:
+                    active_left_stack.append(index)
+                    positions.append(left_slot)
+                elif raw_x < url_left:
+                    left_edge_stack.append(index)
+                    positions.append(url_left)
+                else:
+                    positions.append(int(round(max(url_left, min(max(url_left, active_x - spacing - width), raw_x)))))
+                continue
+            if active_x is not None and index > expanded_index:
+                right_slot = min(max(url_left, url_right - width), active_x + active_w + spacing)
+                if raw_x < active_x + active_w + spacing:
+                    active_right_stack.append(index)
+                    positions.append(right_slot)
+                elif raw_x + width > url_right:
+                    right_edge_stack.append(index)
+                    positions.append(max(url_left, url_right - width))
+                else:
+                    positions.append(int(round(max(active_x + active_w + spacing, min(max(url_left, url_right - width), raw_x)))))
+                continue
+            positions.append(int(round(max(url_left, min(max(url_left, url_right - width), raw_x)))))
+
+        if active_x is not None:
+            active_left_slot = max(url_left, active_x - spacing - circle)
+            active_right_slot = min(max(url_left, url_right - circle), active_x + active_w + spacing)
         else:
-            expanded_w = circle
-            if expanded_index >= 0:
-                inactive_total = max(0, count - 1) * (circle + spacing)
-                expanded_w = max(circle, available - inactive_total)
-                widths[expanded_index] = expanded_w
-            x = url_left
-            for index, width in enumerate(widths):
-                positions.append(x)
-                x += width + spacing
+            active_left_slot = url_left
+            active_right_slot = max(url_left, url_right - circle)
+        for index in left_edge_stack:
+            positions[index] = url_left
+        for index in active_left_stack:
+            positions[index] = active_left_slot
+        for index in active_right_stack:
+            positions[index] = active_right_slot
+        for index in right_edge_stack:
+            positions[index] = max(url_left, url_right - circle)
 
         for index, pill in enumerate(self._pills):
             pill._active = (index == self._active)
@@ -14103,14 +14492,53 @@ class WebNavBar(QWidget):
             pill.move(int(positions[index]), y)
             pill.show()
 
-        for pill in self._pills:
-            pill.raise_()
-        if not overlap_mode and 0 <= self._active < len(self._pills):
-            self._pills[self._active].raise_()
-        if 0 <= self._hovered < len(self._pills):
-            self._pills[self._hovered].raise_()
+        if self._content_width > available and 0 <= expanded_index < len(self._pills):
+            for index in left_edge_stack:
+                self._pills[index].raise_()
+            for index in active_left_stack:
+                self._pills[index].raise_()
+            for index in reversed(right_edge_stack):
+                self._pills[index].raise_()
+            for index in active_right_stack:
+                self._pills[index].raise_()
+            for index in range(count):
+                if (
+                    index not in left_edge_stack
+                    and index not in active_left_stack
+                    and index not in active_right_stack
+                    and index not in right_edge_stack
+                    and index != expanded_index
+                ):
+                    self._pills[index].raise_()
+            self._pills[expanded_index].raise_()
+        else:
+            for pill in self._pills:
+                pill.raise_()
+            if 0 <= self._active < len(self._pills):
+                self._pills[self._active].raise_()
         self._plus_btn.raise_()
         self.update()
+
+    def wheelEvent(self, event):
+        delta = 0
+        try:
+            pixel = event.pixelDelta()
+            angle = event.angleDelta()
+            if not pixel.isNull() and pixel.x():
+                delta = pixel.x()
+            elif angle.x():
+                delta = int(angle.x() / 3)
+            elif event.modifiers() & Qt.KeyboardModifier.ShiftModifier and angle.y():
+                delta = int(angle.y() / 3)
+        except Exception:
+            delta = 0
+        if not delta or self._max_scroll_offset <= 0:
+            super().wheelEvent(event)
+            return
+        self._ensure_active_on_next_layout = False
+        self._scroll_offset = max(0, min(self._max_scroll_offset, int(self._scroll_offset - delta)))
+        self._relayout_pills(animated=False)
+        event.accept()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -14119,6 +14547,7 @@ class WebNavBar(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._ensure_active_on_next_layout = True
         self._relayout_pills(animated=False)
 
     def _apply_theme(self):
@@ -14164,6 +14593,7 @@ class WebNavBar(QWidget):
             self._apply_theme()
 
     def _connect_pill(self, pill, idx):
+        pill.installEventFilter(self)
         pill.clicked_sig.connect(lambda p=pill: self._select_pill(p))
         pill.delete_requested.connect(lambda p=pill: self._delete_pill(p))
         pill.refresh_requested.connect(lambda p=pill: self._refresh_pill(p))
@@ -14175,6 +14605,12 @@ class WebNavBar(QWidget):
         pill.url_submitted.connect(lambda url, p=pill: self._on_url_submitted(p, url))
         pill.hover_entered.connect(lambda p=pill: self._on_pill_hovered(p))
         pill.hover_left.connect(lambda p=pill: self._on_pill_unhovered(p))
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel and obj in self._pills:
+            self.wheelEvent(event)
+            return event.isAccepted()
+        return super().eventFilter(obj, event)
 
     def _move_pill(self, pill, delta: int):
         if pill not in self._pills:
@@ -14199,25 +14635,20 @@ class WebNavBar(QWidget):
             self._hovered += 1
         for index, item in enumerate(self._pills):
             item._active = (index == self._active)
+        self._ensure_active_on_next_layout = True
         self._relayout_pills(animated=True)
         self.site_move_requested.emit(old_idx, new_idx)
 
     def _on_pill_hovered(self, pill):
-        if pill not in self._pills:
-            return
-        self._hover_candidate = self._pills.index(pill)
+        self._hover_candidate = -1
+        self._hover_timer.stop()
         self._hover_clear_timer.stop()
-        self._hover_timer.start()
 
     def _on_pill_unhovered(self, pill):
-        if pill not in self._pills:
-            return
-        idx = self._pills.index(pill)
-        if self._hover_candidate == idx:
-            self._hover_candidate = -1
-            self._hover_timer.stop()
-        if self._hovered == idx:
-            self._hover_clear_timer.start()
+        self._hover_candidate = -1
+        self._hovered = -1
+        self._hover_timer.stop()
+        self._hover_clear_timer.stop()
 
     def _pointer_inside_pill(self, pill, pad: int = 8) -> bool:
         try:
@@ -14260,6 +14691,7 @@ class WebNavBar(QWidget):
         self._active = idx
         self._pills[idx]._active = True
         self._hovered = -1
+        self._ensure_active_on_next_layout = True
         self._relayout_pills(animated=True)
         self.view_selected.emit(idx)
 
@@ -14283,6 +14715,7 @@ class WebNavBar(QWidget):
         self._active = new_idx
         self._hovered = -1
         pill.show()
+        self._ensure_active_on_next_layout = True
         self._relayout_pills(animated=True)
         QTimer.singleShot(80, pill.enter_edit_mode)
 
@@ -14303,6 +14736,7 @@ class WebNavBar(QWidget):
         self._hovered = -1
         for index, item in enumerate(self._pills):
             item._active = (index == self._active)
+        self._ensure_active_on_next_layout = True
         self._relayout_pills(animated=True)
         self.view_selected.emit(self._active)
         self.site_deleted.emit(idx)
@@ -14325,6 +14759,7 @@ class WebNavBar(QWidget):
         self._active = new_idx
         self._hovered = -1
         pill.show()
+        self._ensure_active_on_next_layout = True
         self._relayout_pills(animated=True)
 
     # ── 绘制：白色圆角 bar + 激活 pill 高亮 ─────────────────
@@ -14368,6 +14803,8 @@ class WebViewPanel(QWidget):
         sites_path: 持久化存储路径（JSON），None 表示不持久化
         """
         super().__init__(parent)
+        self.setObjectName('WebViewPanel')
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._profile    = profile
         self._sites_path = sites_path
         self._sites      = self._load_sites(sites)   # 优先读文件
@@ -14423,6 +14860,8 @@ class WebViewPanel(QWidget):
 
         # ── 每个 site 一个独立 view，全部预加载 ──
         self._stack = QStackedWidget()
+        self._stack.setObjectName('WebViewStack')
+        self._stack.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         for i, site in enumerate(self._sites):
             view = QWebEngineView()
             view.setPage(BroccoliWebPage(self._profile, view))
@@ -14449,13 +14888,38 @@ class WebViewPanel(QWidget):
         self._nav.site_move_requested.connect(self._on_site_moved)
 
         nav_wrap = QWidget()
+        nav_wrap.setObjectName('WebNavWrap')
+        nav_wrap.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         nwl = QHBoxLayout(nav_wrap)
         nwl.setContentsMargins(10, 10, 10, 10)   # 最小 padding，bar 贴近底部
         nwl.setSpacing(0)
         nwl.addWidget(self._nav, 1)
         self._nav_wrap = nav_wrap
         layout.addWidget(nav_wrap)
+        self.set_panel_background('#FFFFFF')
         self._refresh_lifecycle_states()
+
+    def set_panel_background(self, color_css: str):
+        color_css = str(color_css or '').strip() or '#FFFFFF'
+        if color_css in ('rgba(0, 0, 0, 0)', 'transparent'):
+            color_css = '#FFFFFF'
+        for widget in (self, getattr(self, '_stack', None), getattr(self, '_nav_wrap', None)):
+            if widget is None:
+                continue
+            try:
+                widget.setAutoFillBackground(True)
+                palette = widget.palette()
+                palette.setColor(widget.backgroundRole(), QColor(color_css))
+                palette.setColor(QPalette.ColorRole.Window, QColor(color_css))
+                widget.setPalette(palette)
+                object_name = widget.objectName()
+                if object_name:
+                    widget.setStyleSheet(
+                        f'QWidget#{object_name}, QStackedWidget#{object_name} {{ background: {color_css}; border: none; }}'
+                    )
+                widget.update()
+            except Exception:
+                pass
 
     @staticmethod
     def _page_lifecycle_state(name: str):
@@ -15174,7 +15638,7 @@ class TerminalWidget(QWidget):
         self._attachment_tray_wrap.setMinimumHeight(0)
         self._attachment_tray_wrap.hide()
         tray_layout = QHBoxLayout(self._attachment_tray_wrap)
-        tray_layout.setContentsMargins(10, 4, 10, 4)
+        tray_layout.setContentsMargins(4, 4, 4, 4)
         tray_layout.setSpacing(0)
         tray_layout.addWidget(self.attachment_tray, 1)
         self._tray_wrap_h = AttachmentTray.TRAY_H + 8
@@ -16284,9 +16748,11 @@ class AssistantPromptPopup(QFrame):
         self._hide_after_anim = False
         self._panel_h = 132
         self._panel_min_w = 220
+        self._panel_radius = 36
+        self._panel_bg = QColor('#FFFFFF')
 
         self.setObjectName('AssistantPromptPopup')
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.hide()
 
         shadow = QGraphicsDropShadowEffect(self)
@@ -16312,8 +16778,9 @@ class AssistantPromptPopup(QFrame):
         self._theme_updating = True
         dark = is_dark_theme(app)
         try:
+            self._panel_bg = QColor('#2D2D2D' if dark else '#FFFFFF')
             self.setStyleSheet(
-                f"QFrame#AssistantPromptPopup {{ background: {'#2D2D2D' if dark else '#FFFFFF'}; border-radius: 16px; }}"
+                "QFrame#AssistantPromptPopup { background: transparent; border: none; }"
             )
             self.edit.setStyleSheet(f"""
                 QPlainTextEdit {{
@@ -16328,6 +16795,16 @@ class AssistantPromptPopup(QFrame):
             self.edit.viewport().setAutoFillBackground(False)
         finally:
             self._theme_updating = False
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillPath(
+            smooth_round_rect_path(QRectF(self.rect()), self._panel_radius),
+            self._panel_bg,
+        )
+        painter.end()
 
     def target_geometry_for(self, anchor_widget: QWidget) -> QRect:
         win = self.window()
@@ -16398,8 +16875,10 @@ class SlashCommandPopup(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._theme_updating = False
+        self._panel_radius = 32
+        self._panel_bg = QColor('#FFFFFF')
         self.setObjectName('SlashCommandPopup')
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.hide()
 
         shadow = QGraphicsDropShadowEffect(self)
@@ -16462,8 +16941,9 @@ class SlashCommandPopup(QFrame):
         self._theme_updating = True
         dark = is_dark_theme(app)
         try:
+            self._panel_bg = QColor('#2D2D2D' if dark else '#FFFFFF')
             self.setStyleSheet(
-                f"QFrame#SlashCommandPopup {{ background: {'#2D2D2D' if dark else '#FFFFFF'}; border-radius: 14px; }}"
+                "QFrame#SlashCommandPopup { background: transparent; border: none; }"
             )
             self.list_widget.setStyleSheet(f"""
                 QListWidget {{
@@ -16485,6 +16965,16 @@ class SlashCommandPopup(QFrame):
             """)
         finally:
             self._theme_updating = False
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillPath(
+            smooth_round_rect_path(QRectF(self.rect()), self._panel_radius),
+            self._panel_bg,
+        )
+        painter.end()
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -17122,8 +17612,7 @@ class _DropHintCard(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         dark = is_dark_theme(app)
-        path = QPainterPath()
-        path.addRoundedRect(1.5, 1.5, self.W - 3, self.H - 3, 8, 8)
+        path = smooth_round_rect_path(QRectF(1.5, 1.5, self.W - 3, self.H - 3), 18)
         pen = QPen(QColor('#6C6C70' if dark else '#BBBBBB'))
         pen.setStyle(Qt.PenStyle.DashLine)
         pen.setWidthF(1.5)
@@ -17171,7 +17660,7 @@ class AttachmentCard(QWidget):
             self._icon = '💻'
         name = os.path.basename(path)
         self._label = name if len(name) <= 11 else name[:9] + '…'
-        self._embed_checkbox = QCheckBox('Use embedding', self)
+        self._embed_checkbox = QCheckBox('Embed', self)
         self._embed_checkbox.setVisible(self._supports_embedding)
         self._embed_checkbox.setChecked(bool(use_embedding and self._supports_embedding))
         self._apply_theme()
@@ -17184,15 +17673,15 @@ class AttachmentCard(QWidget):
         dark = self._force_dark or is_dark_theme(app)
         try:
             self._embed_checkbox.setStyleSheet(
-                f"QCheckBox {{ color: {'#D1D1D6' if dark else '#555555'}; font-size: 9px; spacing: 4px; background: transparent; }}"
-                "QCheckBox::indicator { width: 11px; height: 11px; }"
+                f"QCheckBox {{ color: {'#D1D1D6' if dark else '#555555'}; font-size: 9px; spacing: 2px; background: transparent; }}"
+                "QCheckBox::indicator { width: 16px; height: 16px; }"
             )
         finally:
             self._theme_updating = False
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._embed_checkbox.setGeometry(8, self.CH - 20, self.CW - 16, 16)
+        self._embed_checkbox.setGeometry(15, 77, self.CW - 30, 18)
 
     def mouseDoubleClickEvent(self, event):
         from PyQt6.QtGui import QDesktopServices
@@ -17200,7 +17689,7 @@ class AttachmentCard(QWidget):
 
     def contextMenuEvent(self, event):
         from PyQt6.QtWidgets import QMenu
-        menu = QMenu(self)
+        menu = style_broccoli_context_menu(QMenu(self))
         del_act = menu.addAction('Delete')
         act = menu.exec(event.globalPos())
         if act == del_act:
@@ -17224,17 +17713,15 @@ class AttachmentCard(QWidget):
         dark = self._force_dark or is_dark_theme(app)
 
         # Card background
-        bg = QPainterPath()
-        bg.addRoundedRect(0, 0, self.CW, self.CH, 9, 9)
+        bg = smooth_round_rect_path(QRectF(0, 0, self.CW, self.CH), 20)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(QColor('#3A3A3A' if dark else '#F2F2F7')))
         p.drawPath(bg)
 
         tx = (self.CW - self.THUMB) // 2
-        ty = 8
+        ty = 4
         if self._thumb and not self._thumb.isNull():
-            clip = QPainterPath()
-            clip.addRoundedRect(tx, ty, self.THUMB, self.THUMB, 6, 6)
+            clip = smooth_round_rect_path(QRectF(tx, ty, self.THUMB, self.THUMB), 14)
             p.setClipPath(clip)
             # Centre-crop: source offset into the scaled pixmap
             sx = (self._thumb.width()  - self.THUMB) // 2
@@ -17250,7 +17737,7 @@ class AttachmentCard(QWidget):
         # Filename label
         f2 = p.font(); f2.setPixelSize(10); p.setFont(f2)
         p.setPen(QPen(QColor('#D1D1D6' if dark else '#555555')))
-        ly = ty + self.THUMB + 5
+        ly = 62 if self._supports_embedding else ty + self.THUMB + 7
         label_h = 14 if self._supports_embedding else self.CH - ly - 3
         p.drawText(QRect(3, ly, self.CW - 6, label_h),
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
@@ -17300,7 +17787,7 @@ class AttachmentTray(QWidget):
 
         self._inner = QWidget()
         self._row = QHBoxLayout(self._inner)
-        self._row.setContentsMargins(6, 0, 6, 0)
+        self._row.setContentsMargins(0, 0, 0, 0)
         self._row.setSpacing(8)
 
         # Drop hint — always in layout at pos 0, toggled visible during drag
@@ -17337,7 +17824,7 @@ class AttachmentTray(QWidget):
     # ── geometry ───────────────────────────────────────────────────────────
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        pad = 10
+        pad = 8
         self._scroll.setGeometry(pad, 8, max(0, self.width() - 2 * pad), self.TRAY_H - 16)
         self._inner.setFixedHeight(self.TRAY_H - 16)
         self._sync_inner_width()
@@ -17348,7 +17835,7 @@ class AttachmentTray(QWidget):
         m      = self._row.contentsMargins()
         need   = n * card_w + m.left() + m.right()
         vp     = self._scroll.viewport()
-        self._inner.setFixedWidth(max(vp.width() if vp else 300, need + 16))
+        self._inner.setFixedWidth(max(vp.width() if vp else 300, need))
 
     # ── drop hint ──────────────────────────────────────────────────────────
     def show_drop_hint(self, visible: bool):
@@ -17532,7 +18019,7 @@ class ExternalPromptDock(QWidget):
         self._tray_wrap.setMinimumHeight(0)
         self._tray_wrap.hide()
         tray_layout = QHBoxLayout(self._tray_wrap)
-        tray_layout.setContentsMargins(10, 4, 10, 4)
+        tray_layout.setContentsMargins(4, 4, 4, 4)
         tray_layout.setSpacing(0)
         tray_layout.addWidget(self.attachment_tray, 1)
         self.attachment_tray.became_empty.connect(self.hide_tray)
@@ -18295,7 +18782,7 @@ class TranslationPopupWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setBrush(QColor(0, 0, 0, 1))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(self.rect(), 26, 26)
+        painter.drawPath(smooth_round_rect_path(QRectF(self.rect()), 59))
 
     def show_centered(self):
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
@@ -18827,7 +19314,7 @@ class TerminalFavoriteEditDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(520, 320)
         self._panel_margin = 16
-        self._panel_radius = 20
+        self._panel_radius = 45
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(28, 28, 28, 28)
@@ -18884,8 +19371,7 @@ class TerminalFavoriteEditDialog(QDialog):
             self.width() - self._panel_margin * 2,
             self.height() - self._panel_margin * 2,
         )
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(panel_rect, self._panel_radius, self._panel_radius)
+        bg_path = smooth_round_rect_path(panel_rect, self._panel_radius)
         painter.fillPath(bg_path, QColor('#2D2D2D'))
         painter.setPen(QPen(QColor('#3A3A3A'), 1))
         painter.drawPath(bg_path)
@@ -18917,8 +19403,9 @@ class TerminalFavoriteEditDialog(QDialog):
             self._apply_theme()
 
 
-class TerminalHistoryPanel(QWidget):
+class TerminalHistoryPanel(SmoothPanelWidget):
     copy_requested = pyqtSignal(str)
+    terminal_input_requested = pyqtSignal(str, bool)
     delete_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
@@ -18965,7 +19452,8 @@ class TerminalHistoryPanel(QWidget):
         self._apply_theme()
 
     def _apply_theme(self):
-        self.setStyleSheet('QWidget#TerminalHistoryPanel { border: 1px solid #2D2D2D; background: #2D2D2D; border-radius: 26px; }')
+        self.set_smooth_panel_background('#2D2D2D', '#2D2D2D', 59)
+        self.setStyleSheet('QWidget#TerminalHistoryPanel { border: none; background: transparent; }')
         self.search_input.setStyleSheet(_search_input_stylesheet(True))
         self.meta_lbl.setStyleSheet(
             'color: #A7AEB8; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 11px;'
@@ -19039,23 +19527,33 @@ class TerminalHistoryPanel(QWidget):
             self.copy_requested.emit(command)
 
     def _show_context_menu(self, pos):
-        if str(self.source_combo.currentData() or 'shell') != 'broccoli':
-            return
         item = self.list_widget.itemAt(pos)
         if item is None:
             return
-        record_id = str(item.data(Qt.ItemDataRole.UserRole - 1) or '').strip()
-        if not record_id:
+        command = str(item.data(Qt.ItemDataRole.UserRole) or '').strip()
+        if not command:
             return
-        menu = QMenu(self)
-        delete_action = menu.addAction('Delete')
+        record_id = str(item.data(Qt.ItemDataRole.UserRole - 1) or '').strip()
+        is_broccoli = str(self.source_combo.currentData() or 'shell') == 'broccoli'
+        menu = style_broccoli_context_menu(QMenu(self))
+        replace_action = menu.addAction('Replace terminal input')
+        append_action = menu.addAction('Append to terminal input')
+        delete_action = None
+        if is_broccoli and record_id:
+            menu.addSeparator()
+            delete_action = menu.addAction('Delete')
         chosen = menu.exec(self.list_widget.mapToGlobal(pos))
-        if chosen == delete_action:
+        if chosen == replace_action:
+            self.terminal_input_requested.emit(command, False)
+        elif chosen == append_action:
+            self.terminal_input_requested.emit(command, True)
+        elif delete_action is not None and chosen == delete_action:
             self.delete_requested.emit(record_id)
 
 
-class TerminalFavoritesPanel(QWidget):
+class TerminalFavoritesPanel(SmoothPanelWidget):
     copy_requested = pyqtSignal(str)
+    terminal_input_requested = pyqtSignal(str, bool)
     delete_requested = pyqtSignal(str)
     edit_requested = pyqtSignal(str)
 
@@ -19096,7 +19594,8 @@ class TerminalFavoritesPanel(QWidget):
         self._apply_theme()
 
     def _apply_theme(self):
-        self.setStyleSheet('QWidget#TerminalFavoritesPanel { border: 1px solid #2D2D2D; background: #2D2D2D; border-radius: 26px; }')
+        self.set_smooth_panel_background('#2D2D2D', '#2D2D2D', 59)
+        self.setStyleSheet('QWidget#TerminalFavoritesPanel { border: none; background: transparent; }')
         self.search_input.setStyleSheet(_search_input_stylesheet(True))
         self.meta_lbl.setStyleSheet(
             'color: #A7AEB8; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 11px;'
@@ -19167,16 +19666,26 @@ class TerminalFavoritesPanel(QWidget):
         record_id = str(item.data(Qt.ItemDataRole.UserRole) or '').strip()
         if not record_id:
             return
-        menu = QMenu(self)
+        command = str(item.data(Qt.ItemDataRole.UserRole + 1) or '').strip()
+        if not command:
+            return
+        menu = style_broccoli_context_menu(QMenu(self))
+        replace_action = menu.addAction('Replace terminal input')
+        append_action = menu.addAction('Append to terminal input')
+        menu.addSeparator()
         edit_action = menu.addAction('Modify')
         delete_action = menu.addAction('Delete')
         chosen = menu.exec(self.list_widget.mapToGlobal(pos))
-        if chosen == edit_action:
+        if chosen == replace_action:
+            self.terminal_input_requested.emit(command, False)
+        elif chosen == append_action:
+            self.terminal_input_requested.emit(command, True)
+        elif chosen == edit_action:
             self.edit_requested.emit(record_id)
         elif chosen == delete_action:
             self.delete_requested.emit(record_id)
 
-class WebFetchPanel(QWidget):
+class WebFetchPanel(SmoothPanelWidget):
     close_requested = pyqtSignal()
     selection_changed = pyqtSignal()
     collapse_toggled = pyqtSignal(bool)
@@ -19239,10 +19748,14 @@ class WebFetchPanel(QWidget):
         self._theme_updating = True
         dark = is_dark_theme(app)
         try:
-            radius = self.COLLAPSED_D // 2 if self._collapsed else 26
+            radius = self.COLLAPSED_D // 2 if self._collapsed else 59
+            self.set_smooth_panel_background(
+                "#2D2D2D" if dark else "#FFFFFF",
+                "#2D2D2D" if dark else "#ECECEC",
+                radius,
+            )
             self.setStyleSheet(
-                f'QWidget#WebFetchPanel {{ border: 1px solid {"#2D2D2D" if dark else "#ECECEC"}; '
-                f'background: {"#2D2D2D" if dark else "#FFFFFF"}; border-radius: {radius}px; }}'
+                'QWidget#WebFetchPanel { border: none; background: transparent; }'
             )
             self.title_lbl.setStyleSheet(
                 f'color: {"#F2F2F7" if dark else "#20242B"}; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
@@ -19617,7 +20130,7 @@ class BranchGraphWidget(QWidget):
         return x
 
 
-class BranchPanel(QWidget):
+class BranchPanel(SmoothPanelWidget):
     close_requested = pyqtSignal()
     branch_changed = pyqtSignal(dict)
     jump_requested = pyqtSignal(int)
@@ -19677,9 +20190,13 @@ class BranchPanel(QWidget):
         self._theme_updating = True
         dark = is_dark_theme(app)
         try:
+            self.set_smooth_panel_background(
+                "#2D2D2D" if dark else "#FFFFFF",
+                "#2D2D2D" if dark else "#ECECEC",
+                59,
+            )
             self.setStyleSheet(
-                f'QWidget#BranchPanel {{ border: 1px solid {"#2D2D2D" if dark else "#ECECEC"}; '
-                f'background: {"#2D2D2D" if dark else "#FFFFFF"}; border-radius: 26px; }}'
+                'QWidget#BranchPanel { border: none; background: transparent; }'
             )
             self.title_lbl.setStyleSheet(
                 f'color: {"#F2F2F7" if dark else "#20242B"}; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
@@ -19957,7 +20474,7 @@ class BranchPanel(QWidget):
             checked_node_ids,
         )
 
-class HistoryPanel(QWidget):
+class HistoryPanel(SmoothPanelWidget):
     load_requested = pyqtSignal(str)
     rename_requested = pyqtSignal(str, str)
     delete_requested = pyqtSignal(str)
@@ -20003,9 +20520,13 @@ class HistoryPanel(QWidget):
         self._theme_updating = True
         dark = is_dark_theme(app)
         try:
+            self.set_smooth_panel_background(
+                "#2D2D2D" if dark else "#FFFFFF",
+                "#2D2D2D" if dark else "#ECECEC",
+                59,
+            )
             self.setStyleSheet(
-                f'QWidget#HistoryPanel {{ border: 1px solid {"#2D2D2D" if dark else "#ECECEC"}; '
-                f'background: {"#2D2D2D" if dark else "#FFFFFF"}; border-radius: 26px; }}'
+                'QWidget#HistoryPanel { border: none; background: transparent; }'
             )
             self.search_input.setStyleSheet(_search_input_stylesheet(dark))
             if dark:
@@ -20109,7 +20630,7 @@ class HistoryPanel(QWidget):
         path = item.data(Qt.ItemDataRole.UserRole)
         if not path:
             return
-        menu = QMenu(self)
+        menu = style_broccoli_context_menu(QMenu(self))
         delete_action = menu.addAction('Delete')
         chosen = menu.exec(self.list_widget.mapToGlobal(pos))
         if chosen == delete_action:
@@ -20181,7 +20702,7 @@ class AnnotatedTextPreview(QPlainTextEdit):
         self.customContextMenuRequested.connect(self._show_context_menu)
 
     def _show_context_menu(self, pos):
-        menu = self.createStandardContextMenu()
+        menu = style_broccoli_context_menu(self.createStandardContextMenu())
         cursor = self.textCursor()
         if cursor.hasSelection():
             action = menu.addAction('Add Comment')
@@ -20349,7 +20870,7 @@ class AnnotatableImageLabel(QWidget):
         return result
 
 
-class LinksPanel(QWidget):
+class LinksPanel(SmoothPanelWidget):
     open_requested = pyqtSignal(str)
     open_all_requested = pyqtSignal(list)
 
@@ -20396,9 +20917,13 @@ class LinksPanel(QWidget):
         self._theme_updating = True
         dark = is_dark_theme(app)
         try:
+            self.set_smooth_panel_background(
+                "#2D2D2D" if dark else "#FFFFFF",
+                "#2D2D2D" if dark else "#ECECEC",
+                59,
+            )
             self.setStyleSheet(
-                f'QWidget#LinksPanel {{ border: 1px solid {"#2D2D2D" if dark else "#ECECEC"}; '
-                f'background: {"#2D2D2D" if dark else "#FFFFFF"}; border-radius: 26px; }}'
+                'QWidget#LinksPanel { border: none; background: transparent; }'
             )
             self.search_input.setStyleSheet(_search_input_stylesheet(dark))
             self.open_all_button.setStyleSheet(_secondary_capsule_stylesheet(dark))
@@ -20495,7 +21020,7 @@ class LinksPanel(QWidget):
             self.open_all_requested.emit(urls)
 
 
-class OutputsPanel(QWidget):
+class OutputsPanel(SmoothPanelWidget):
     copy_requested = pyqtSignal(dict)
     save_requested = pyqtSignal(dict)
     context_requested = pyqtSignal(dict)
@@ -20620,9 +21145,13 @@ class OutputsPanel(QWidget):
         fg = '#F2F2F7' if dark else '#20242B'
         muted = '#A7AEB8' if dark else '#7A8391'
         try:
+            self.set_smooth_panel_background(
+                panel_bg,
+                "#2D2D2D" if dark else "#ECECEC",
+                59,
+            )
             self.setStyleSheet(
-                f'QWidget#OutputsPanel {{ border: 1px solid {"#2D2D2D" if dark else "#ECECEC"}; '
-                f'background: {panel_bg}; border-radius: 26px; }}'
+                'QWidget#OutputsPanel { border: none; background: transparent; }'
             )
             self.title_lbl.setStyleSheet(
                 f'color: {fg}; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
@@ -20760,7 +21289,7 @@ class OutputsPanel(QWidget):
         annotation_id = str(item.data(Qt.ItemDataRole.UserRole) or '').strip()
         if not annotation_id:
             return
-        menu = QMenu(self)
+        menu = style_broccoli_context_menu(QMenu(self))
         delete_action = menu.addAction('Delete')
         chosen = menu.exec(self.comment_list.mapToGlobal(pos))
         if chosen != delete_action:
@@ -20981,7 +21510,7 @@ class ShareTextDialog(QDialog):
         self.owner = owner
         self._theme_updating = False
         self._panel_margin = 14
-        self._panel_radius = 26
+        self._panel_radius = 59
         self.setWindowTitle(str(title or 'Share Text'))
         self.setModal(False)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
@@ -20997,10 +21526,10 @@ class ShareTextDialog(QDialog):
 
         self.destination_combo = DropdownButton(self, compact_light=True)
         self.destination_combo.setFixedWidth(180)
-        self.destination_combo.addItem('API', 1)
-        self.destination_combo.addItem('Web', 0)
-        self.destination_combo.addItem('Localhost', 2)
-        self.destination_combo.addItem('Terminal', 3)
+        self.destination_combo.addItem('API', TAB_API)
+        self.destination_combo.addItem('Web', TAB_WEB)
+        self.destination_combo.addItem('Localhost', TAB_LOCALHOST)
+        self.destination_combo.addItem('Terminal', TAB_TERMINAL)
         self.destination_combo.currentIndexChanged.connect(self._refresh_target_controls)
 
         self.mode_combo = DropdownButton(self, compact_light=True)
@@ -21061,8 +21590,7 @@ class ShareTextDialog(QDialog):
             self.width() - self._panel_margin * 2,
             self.height() - self._panel_margin * 2,
         )
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(panel_rect, self._panel_radius, self._panel_radius)
+        bg_path = smooth_round_rect_path(panel_rect, self._panel_radius)
         painter.fillPath(bg_path, QColor('#2D2D2D' if dark else '#FFFFFF'))
         painter.setPen(QPen(QColor('#3A3A3A' if dark else '#ECECEC'), 1))
         painter.drawPath(bg_path)
@@ -21101,10 +21629,10 @@ class ShareTextDialog(QDialog):
             'text': text,
             'target_index': target_index,
             'append': mode == 'append',
-            'new_conversation': bool(self.api_new_checkbox.isChecked()) if target_index == 1 else False,
+            'new_conversation': bool(self.api_new_checkbox.isChecked()) if target_index == TAB_API else False,
             'site_index': None,
         }
-        if target_index in (0, 2) and self.url_combo.count():
+        if target_index in EXTERNAL_PROMPT_TAB_INDICES and self.url_combo.count():
             site_data = self.url_combo.currentData()
             try:
                 payload['site_index'] = int(site_data)
@@ -21117,9 +21645,9 @@ class ShareTextDialog(QDialog):
         try:
             target_index = int(self.destination_combo.currentData())
         except (TypeError, ValueError):
-            target_index = 1
-        is_api = target_index == 1
-        is_external = target_index in (0, 2)
+            target_index = TAB_API
+        is_api = target_index == TAB_API
+        is_external = target_index in EXTERNAL_PROMPT_TAB_INDICES
         self.api_new_checkbox.setVisible(is_api)
         self.url_label.setVisible(is_external)
         self.url_combo.setVisible(is_external)
@@ -21187,7 +21715,7 @@ class OnlineMemoryStatusDialog(QDialog):
         self.role = role if role in {'from', 'to'} else 'from'
         self._theme_updating = False
         self._panel_margin = 14
-        self._panel_radius = 26
+        self._panel_radius = 59
         self._view = None
         self.setWindowTitle('Online Memory Source')
         self.setModal(False)
@@ -21351,8 +21879,7 @@ class OnlineMemoryStatusDialog(QDialog):
             self.width() - self._panel_margin * 2,
             self.height() - self._panel_margin * 2,
         )
-        bg_path = QPainterPath()
-        bg_path.addRoundedRect(panel_rect, self._panel_radius, self._panel_radius)
+        bg_path = smooth_round_rect_path(panel_rect, self._panel_radius)
         painter.fillPath(bg_path, QColor('#2D2D2D' if dark else '#FFFFFF'))
         painter.setPen(QPen(QColor('#3A3A3A' if dark else '#ECECEC'), 1))
         painter.drawPath(bg_path)
@@ -21373,7 +21900,7 @@ class OnlineMemoryStatusDialog(QDialog):
                 f'font-size: 11px; color: {"#A7AEB8" if dark else "#7A8391"};'
             )
             if self._view is not None:
-                self._view.setStyleSheet(webview_stylesheet(dark))
+                self._view.setStyleSheet(_assistant_webview_stylesheet(dark))
             for widget in self.findChildren(DropdownButton):
                 widget._force_dark = dark
                 widget._update_style()
@@ -21385,7 +21912,7 @@ class OnlineMemoryStatusDialog(QDialog):
             self._theme_updating = False
 
 
-class SharePanel(QWidget):
+class SharePanel(SmoothPanelWidget):
     copy_requested = pyqtSignal()
     save_requested = pyqtSignal()
 
@@ -21438,9 +21965,13 @@ class SharePanel(QWidget):
         fg = '#F2F2F7' if dark else '#20242B'
         muted = '#A7AEB8' if dark else '#7A8391'
         try:
+            self.set_smooth_panel_background(
+                "#2D2D2D" if dark else "#FFFFFF",
+                "#2D2D2D" if dark else "#ECECEC",
+                59,
+            )
             self.setStyleSheet(
-                f'QWidget#SharePanel {{ border: 1px solid {"#2D2D2D" if dark else "#ECECEC"}; '
-                f'background: {"#2D2D2D" if dark else "#FFFFFF"}; border-radius: 26px; }}'
+                'QWidget#SharePanel { border: none; background: transparent; }'
             )
             self.title_lbl.setStyleSheet(
                 f'color: {fg}; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
@@ -21507,13 +22038,13 @@ class BackgroundVisionToast(QFrame):
         self._ttl_timer.setSingleShot(True)
         self._ttl_timer.timeout.connect(self.fade_out)
 
-        card = QFrame(self)
+        card = SmoothPanelWidget(self)
         card.setObjectName('BackgroundVisionToastCard')
+        card.set_smooth_panel_background(QColor('#FFFFFF'), QColor(0, 0, 0, 24), 41)
         card.setStyleSheet('''
-            QFrame#BackgroundVisionToastCard {
-                background: #FFFFFF;
-                border: 1px solid rgba(0, 0, 0, 24);
-                border-radius: 18px;
+            QWidget#BackgroundVisionToastCard {
+                background: transparent;
+                border: none;
             }
             QLabel#BackgroundVisionToastTitle {
                 color: #20242B;
@@ -21984,6 +22515,8 @@ class BackgroundVisionToastManager(QObject):
 class MyWidget(QWidget):  # 主窗口
     silent_screenshot_finished = pyqtSignal(object)
     EDGE_AUTO_HIDE_PEEK_PX = 2
+    EDGE_AUTO_HIDE_HOVER_BUFFER_MS = 650
+    EDGE_AUTO_HIDE_CURSOR_BUFFER_PX = 12
 
     def __init__(self):
         super().__init__()
@@ -22108,6 +22641,7 @@ class MyWidget(QWidget):  # 主窗口
         else:
             if not bool(getattr(self, '_window_position_pinned', False)):
                 self._schedule_edge_auto_hide_check()
+        self._refresh_pin_tab_edge_state(animated=True)
 
     def _screen_for_window_edge(self):
         center = self.frameGeometry().center()
@@ -22145,6 +22679,13 @@ class MyWidget(QWidget):  # 主窗口
         if timer is not None:
             timer.start()
 
+    def _cursor_in_edge_auto_hide_buffer(self) -> bool:
+        try:
+            pad = max(0, int(getattr(self, 'EDGE_AUTO_HIDE_CURSOR_BUFFER_PX', 12)))
+            return self.frameGeometry().adjusted(-pad, -pad, pad, pad).contains(QCursor.pos())
+        except Exception:
+            return False
+
     def _check_edge_auto_hide(self):
         if not bool(getattr(self, '_edge_auto_hide_enabled', False)):
             return
@@ -22157,6 +22698,9 @@ class MyWidget(QWidget):  # 主窗口
         if bool(getattr(self, '_edge_auto_hide_animating', False)) or bool(getattr(self, '_edge_auto_showing', False)):
             return
         if getattr(self, '_edge_auto_hidden_side', ''):
+            return
+        if self._cursor_in_edge_auto_hide_buffer():
+            self._schedule_edge_auto_hide_check()
             return
         screen_geo = self._edge_auto_hide_screen_geometry()
         if screen_geo is None:
@@ -22190,6 +22734,7 @@ class MyWidget(QWidget):  # 主窗口
         self._edge_auto_hidden_screen_geo = QRect(screen_geo)
         self._edge_auto_hide_suspended = False
         self._edge_auto_hide_animating = True
+        self._refresh_pin_tab_edge_state(animated=True)
         self._animate_main_window_geometry(target, duration=180)
 
     def _show_window_from_screen_edge(self):
@@ -22235,6 +22780,7 @@ class MyWidget(QWidget):  # 主窗口
         self._edge_auto_showing = False
         self._edge_auto_hidden_screen_geo = None
         self.raise_()
+        self._refresh_pin_tab_edge_state(animated=True)
 
     def _animate_main_window_geometry(self, target: QRect, duration: int = 220, finished_callback=None):
         main_anim = getattr(self, '_main_window_animation', None)
@@ -22268,9 +22814,13 @@ class MyWidget(QWidget):  # 主窗口
         self._edge_auto_hide_animation = None
         self._main_window_animation = None
         self._window_position_pinned = False
+        self._last_normal_window_geometry = None
+        self._pin_tab_force_center_until_move_finish = False
         self._edge_auto_hide_check_timer = QTimer(self)
         self._edge_auto_hide_check_timer.setSingleShot(True)
-        self._edge_auto_hide_check_timer.setInterval(140)
+        self._edge_auto_hide_check_timer.setInterval(
+            max(0, int(getattr(self, 'EDGE_AUTO_HIDE_HOVER_BUFFER_MS', 650)))
+        )
         self._edge_auto_hide_check_timer.timeout.connect(self._check_edge_auto_hide)
         self._apply_window_flags()
         QTimer.singleShot(0, self._apply_mac_space_behavior)
@@ -22335,14 +22885,23 @@ class MyWidget(QWidget):  # 主窗口
         self.window_close_button = MainWindowChromeButton('', self, diameter=12)
         self.window_close_button.setToolTip('Close main window')
         self.window_close_button.clicked.connect(self.close_main_window_to_tray)
+        self._pin_tab_edge_state = 'center'
+        self._pin_tab_side_button_anims = []
+        self._pin_tab_position_opacity = QGraphicsOpacityEffect(self.window_position_pin_button)
+        self._pin_tab_close_opacity = QGraphicsOpacityEffect(self.window_close_button)
+        self.window_position_pin_button.setGraphicsEffect(self._pin_tab_position_opacity)
+        self.window_close_button.setGraphicsEffect(self._pin_tab_close_opacity)
         self.pin_tab_row = QWidget(self)
         self.pin_tab_row.setFixedHeight(12)
         pin_tab_layout = QHBoxLayout(self.pin_tab_row)
+        self._pin_tab_layout = pin_tab_layout
         pin_tab_layout.setContentsMargins(0, 0, 0, 0)
-        pin_tab_layout.setSpacing(2)
+        pin_tab_layout.setSpacing(0)
         pin_tab_layout.addWidget(self.window_position_pin_button, 0, Qt.AlignmentFlag.AlignVCenter)
         pin_tab_layout.addWidget(self.btn_00, 1)
         pin_tab_layout.addWidget(self.window_close_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._set_pin_tab_side_button_collapsed(self.window_position_pin_button, self._pin_tab_position_opacity)
+        self._set_pin_tab_side_button_collapsed(self.window_close_button, self._pin_tab_close_opacity)
         self.i = 1
 
         self.real1 = QTextEdit(self)
@@ -22385,7 +22944,6 @@ class MyWidget(QWidget):  # 主窗口
 
         self.btn_sub1 = AssistantCapsuleButton('🔺 Send', self)
         self.btn_sub1.clicked.connect(self.SendX)
-        self.btn_sub1.setShortcut("Ctrl+Return")
         self.btn_sub4 = self.btn_sub1   # btn_sub4 removed; alias keeps old references working
 
         # self.btn_sub4 = AssistantCapsuleButton('🔹 Again', self)
@@ -22595,7 +23153,7 @@ class MyWidget(QWidget):  # 主窗口
         _tray_wrap.setMaximumHeight(0)   # hidden via height, not visibility
         self._attachment_tray_wrap = _tray_wrap
         _tray_wl = QHBoxLayout(_tray_wrap)
-        _tray_wl.setContentsMargins(10, 4, 10, 4)
+        _tray_wl.setContentsMargins(4, 4, 4, 4)
         _tray_wl.setSpacing(0)
         _tray_wl.addWidget(self._attachment_tray, 1)
         ap_layout.addWidget(_tray_wrap)
@@ -22615,7 +23173,7 @@ class MyWidget(QWidget):  # 主窗口
         # Auto-hide when tray reports it became empty
         self._attachment_tray.became_empty.connect(self._hide_tray_animated)
 
-        # --- Tab 0: AI Web ---
+        # --- Tab 1: AI Web ---
         # 持久化 Profile：cookies / localStorage / 登录态在重启后保留
         _profile_path = os.path.join(self.fulldir1, 'web_profile')
         self._web_profile = QWebEngineProfile('BroccoliWebProfile')
@@ -22624,7 +23182,7 @@ class MyWidget(QWidget):  # 主窗口
             QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
         )
 
-        # --- Tab 0: AI Web（WebViewPanel 管理 Claude / ChatGPT / Gemini，全部预加载）---
+        # --- Tab 1: AI Web（WebViewPanel 管理 Claude / ChatGPT / Gemini，全部预加载）---
         _ai_sites_path = os.path.join(self.fulldir1, 'ai_web_sites.json')
         self.ai_web_panel = WebViewPanel(
             sites=[                             # 首次启动默认值；此后从文件读取
@@ -22637,13 +23195,13 @@ class MyWidget(QWidget):  # 主窗口
             parent=self,
         )
         self.ai_web_panel.active_load_finished.connect(
-            lambda ok: self._on_web_loaded(ok, self.ai_web_panel, 0)
+            lambda ok: self._on_web_loaded(ok, self.ai_web_panel, TAB_WEB)
         )
         self.ai_web_panel.view_switched.connect(
-            lambda: self._on_web_loaded(True, self.ai_web_panel, 0)
+            lambda: self._on_web_loaded(True, self.ai_web_panel, TAB_WEB)
         )
         self.ai_web_panel.prompt_dock_visibility_changed.connect(
-            lambda _visible: self._update_web_conversation_sync_button_geometry()
+            lambda _visible: self._on_external_prompt_dock_visibility_changed()
         )
 
         # --- Tab 2: Localhost（WebViewPanel，单个 view，可通过"+"扩展）---
@@ -22655,22 +23213,22 @@ class MyWidget(QWidget):  # 主窗口
             parent=self,
         )
         self.localhost_panel.active_load_finished.connect(
-            lambda ok: self._on_web_loaded(ok, self.localhost_panel, 2)
+            lambda ok: self._on_web_loaded(ok, self.localhost_panel, TAB_LOCALHOST)
         )
         self.localhost_panel.view_switched.connect(
-            lambda: self._on_web_loaded(True, self.localhost_panel, 2)
+            lambda: self._on_web_loaded(True, self.localhost_panel, TAB_LOCALHOST)
         )
         self.localhost_panel.prompt_dock_visibility_changed.connect(
-            lambda _visible: self._update_web_conversation_sync_button_geometry()
+            lambda _visible: self._on_external_prompt_dock_visibility_changed()
         )
 
         self.web_prompt_dock = ExternalPromptDock('Web', self.ai_web_panel)
-        self.web_prompt_dock.send_requested.connect(lambda: self.SendExternalPromptDockX(0))
-        self.web_prompt_dock.screenshot_requested.connect(lambda: self.start_region_capture_for_external_prompt(0))
+        self.web_prompt_dock.send_requested.connect(lambda: self.SendExternalPromptDockX(TAB_WEB))
+        self.web_prompt_dock.screenshot_requested.connect(lambda: self.start_region_capture_for_external_prompt(TAB_WEB))
         self.ai_web_panel.attach_prompt_dock(self.web_prompt_dock)
         self.localhost_prompt_dock = ExternalPromptDock('Localhost', self.localhost_panel)
-        self.localhost_prompt_dock.send_requested.connect(lambda: self.SendExternalPromptDockX(2))
-        self.localhost_prompt_dock.screenshot_requested.connect(lambda: self.start_region_capture_for_external_prompt(2))
+        self.localhost_prompt_dock.send_requested.connect(lambda: self.SendExternalPromptDockX(TAB_LOCALHOST))
+        self.localhost_prompt_dock.screenshot_requested.connect(lambda: self.start_region_capture_for_external_prompt(TAB_LOCALHOST))
         self.localhost_panel.attach_prompt_dock(self.localhost_prompt_dock)
 
         # --- Tab 3: Terminal ---
@@ -22678,23 +23236,30 @@ class MyWidget(QWidget):  # 主窗口
 
         # --- QStackedWidget ---
         self.stacked_widget = QStackedWidget()
-        self.stacked_widget.addWidget(self.ai_web_panel)       # index 0
-        self.stacked_widget.addWidget(self.assistant_page)     # index 1
+        self.stacked_widget.addWidget(self.assistant_page)     # index 0
+        self.stacked_widget.addWidget(self.ai_web_panel)       # index 1
         self.stacked_widget.addWidget(self.localhost_panel)    # index 2
         self.stacked_widget.addWidget(self.terminal_widget)    # index 3
-        self.stacked_widget.setCurrentIndex(1)
+        self.stacked_widget.setCurrentIndex(TAB_API)
 
-        # --- 药丸导航栏（从 index=1 开始）---
+        # --- 药丸导航栏（从 API 开始）---
         self.pill_nav = PillNavBar(
-            ['Web', 'API', 'Localhost', 'Terminal'],
-            initial_index=1
+            MAIN_TAB_LABELS,
+            initial_index=TAB_API
         )
         self.pill_nav.tab_changed.connect(self.stacked_widget.setCurrentIndex)
-        self.pill_nav.tab_changed.connect(self._on_tab_changed)
+        self.stacked_widget.currentChanged.connect(self._on_tab_changed)
+        self._install_send_shortcuts()
+        self._update_send_shortcut_enabled()
 
         # --- 主容器 qw3 ---
-        self.qw3 = QWidget()
+        self.qw3 = SmoothPanelWidget()
         self.qw3.setObjectName("Main-1")
+        self.qw3.set_smooth_panel_background(
+            '#2D2D2D' if is_dark_theme(app) else '#FFFFFF',
+            '#2D2D2D' if is_dark_theme(app) else '#ECECEC',
+            59,
+        )
         qw3_layout = QVBoxLayout(self.qw3)
         qw3_layout.setContentsMargins(20, 20, 20, 20)
         qw3_layout.setSpacing(10)
@@ -22843,6 +23408,7 @@ class MyWidget(QWidget):  # 主窗口
         self.terminal_history_panel = TerminalHistoryPanel(self.qw3)
         self.terminal_history_panel.hide()
         self.terminal_history_panel.copy_requested.connect(self._copy_plain_text_to_clipboard)
+        self.terminal_history_panel.terminal_input_requested.connect(self._set_terminal_input_from_panel)
         self.terminal_history_panel.delete_requested.connect(self._delete_terminal_history_record)
         self._terminal_history_panel_visible = False
         self._terminal_history_panel_anim = None
@@ -22863,6 +23429,7 @@ class MyWidget(QWidget):  # 主窗口
         self.terminal_favorites_panel = TerminalFavoritesPanel(self.qw3)
         self.terminal_favorites_panel.hide()
         self.terminal_favorites_panel.copy_requested.connect(self._copy_plain_text_to_clipboard)
+        self.terminal_favorites_panel.terminal_input_requested.connect(self._set_terminal_input_from_panel)
         self.terminal_favorites_panel.delete_requested.connect(self._delete_terminal_favorite)
         self.terminal_favorites_panel.edit_requested.connect(self._edit_terminal_favorite)
         self._terminal_favorites_panel_visible = False
@@ -22963,13 +23530,13 @@ class MyWidget(QWidget):  # 主窗口
         self.drawing_layer_2.raise_()
         self._settings_trigger_btn.show()
         self._settings_trigger_btn.raise_()
-        if self.stacked_widget.currentIndex() == 1:
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
             self._raise_webfetch_panel_if_visible()
         else:
             self._branch_trigger_btn.hide()
-        if self.stacked_widget.currentIndex() == 1:
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._history_trigger_btn.show()
             self._history_trigger_btn.raise_()
             self._links_trigger_btn.show()
@@ -22977,7 +23544,7 @@ class MyWidget(QWidget):  # 主窗口
         else:
             self._history_trigger_btn.hide()
             self._links_trigger_btn.hide()
-        if self.stacked_widget.currentIndex() == 3:
+        if self.stacked_widget.currentIndex() == TAB_TERMINAL:
             self._show_terminal_side_triggers()
         else:
             self._hide_terminal_side_triggers()
@@ -22998,6 +23565,10 @@ class MyWidget(QWidget):  # 主窗口
         self._active_browser_use_signals = None
         self._active_browser_use_thread = None
         self._mcp_conversation_allowlist = set()
+        self._external_tab_backgrounds = {
+            TAB_WEB: '#FFFFFF',
+            TAB_LOCALHOST: '#FFFFFF',
+        }
         self._active_render_request_id = 0
         self._active_render_signals = None
         self._active_render_thread = None
@@ -23128,7 +23699,7 @@ class MyWidget(QWidget):  # 主窗口
         query = self._current_slash_query()
         focus_widget = QApplication.focusWidget()
         focus_ok = focus_widget is self.text1 or focus_widget is popup.list_widget
-        if query and focus_ok and self.stacked_widget.currentIndex() == 1:
+        if query and focus_ok and self.stacked_widget.currentIndex() == TAB_API:
             popup.show_for_anchor(self.text1, query)
         else:
             popup.hide()
@@ -23217,16 +23788,16 @@ class MyWidget(QWidget):  # 主窗口
         if isinstance(obj, QWebEngineView):
             if not selected_text:
                 return True
-            menu = QMenu(self)
+            menu = style_broccoli_context_menu(QMenu(self))
             copy_action = menu.addAction('Copy')
             copy_action.triggered.connect(
                 lambda _checked=False, view=obj: view.page().triggerAction(QWebEnginePage.WebAction.Copy)
             )
         else:
             try:
-                menu = obj.createStandardContextMenu()
+                menu = style_broccoli_context_menu(obj.createStandardContextMenu())
             except Exception:
-                menu = QMenu(self)
+                menu = style_broccoli_context_menu(QMenu(self))
             if not selected_text:
                 if menu is not None:
                     menu.exec(global_pos)
@@ -23237,10 +23808,10 @@ class MyWidget(QWidget):  # 主窗口
         replace_menu = menu.addMenu('Replace prompt with selection')
         append_menu = menu.addMenu('Append selection to prompt')
         targets = [
-            ('Web', 0),
-            ('API', 1),
-            ('Localhost', 2),
-            ('Terminal', 3),
+            ('API', TAB_API),
+            ('Web', TAB_WEB),
+            ('Localhost', TAB_LOCALHOST),
+            ('Terminal', TAB_TERMINAL),
         ]
         for label, target in targets:
             replace_action = replace_menu.addAction(label)
@@ -23298,7 +23869,7 @@ class MyWidget(QWidget):  # 主窗口
             return
         if new_conversation:
             self.ClearX()
-        self._select_main_tab(1)
+        self._select_main_tab(TAB_API)
         self._set_plain_text_prompt(self.text1, text, append)
         self.text1.setFocus()
         self._refresh_text1_popup_visibility()
@@ -23325,7 +23896,7 @@ class MyWidget(QWidget):  # 主窗口
         text = str(text or '').strip()
         if not text:
             return
-        self._select_main_tab(3)
+        self._select_main_tab(TAB_TERMINAL)
         terminal = getattr(self, 'terminal_widget', None)
         if terminal is not None:
             self._set_plain_text_prompt(terminal.input_line, text, append)
@@ -23336,16 +23907,13 @@ class MyWidget(QWidget):  # 主窗口
         if not text:
             return
         target_index = int(target_index)
-        if target_index == 0:
-            self._route_text_to_external_prompt(0, text, append)
-            return
-        if target_index == 1:
+        if target_index == TAB_API:
             self._route_text_to_api_prompt(text, append)
             return
-        if target_index == 2:
-            self._route_text_to_external_prompt(2, text, append)
+        if target_index in EXTERNAL_PROMPT_TAB_INDICES:
+            self._route_text_to_external_prompt(target_index, text, append)
             return
-        if target_index == 3:
+        if target_index == TAB_TERMINAL:
             self._route_text_to_terminal_prompt(text, append)
 
     def _add_selected_text_output(self, text: str):
@@ -23356,7 +23924,7 @@ class MyWidget(QWidget):  # 主窗口
         snippet = re.sub(r'\s+', ' ', text).strip()
         if len(snippet) > 48:
             snippet = snippet[:48].rstrip() + '...'
-        tab_labels = ['Web', 'API', 'Localhost', 'Terminal']
+        tab_labels = MAIN_TAB_LABELS
         current_index = self.stacked_widget.currentIndex()
         tab_label = tab_labels[current_index] if 0 <= current_index < len(tab_labels) else 'Selection'
         scope_key = self._tab_output_scope_key(current_index)
@@ -23871,7 +24439,7 @@ class MyWidget(QWidget):  # 主窗口
             self.share_panel.setGeometry(self._share_panel_hidden_rect())
 
     def show_branch_panel(self):
-        if self.stacked_widget.currentIndex() != 1 or self._branch_panel_visible:
+        if self.stacked_widget.currentIndex() != TAB_API or self._branch_panel_visible:
             return
         if self._settings_panel_visible:
             self.hide_settings_panel()
@@ -23945,7 +24513,7 @@ class MyWidget(QWidget):  # 主窗口
     def _finish_hide_branch_panel(self):
         self.branch_panel.hide()
         self._branch_scrim.hide()
-        if self.stacked_widget.currentIndex() == 1:
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
             self._raise_webfetch_panel_if_visible()
@@ -23953,7 +24521,7 @@ class MyWidget(QWidget):  # 主窗口
         self._outputs_trigger_btn.raise_()
         self._settings_trigger_btn.show()
         self._settings_trigger_btn.raise_()
-        if self.stacked_widget.currentIndex() == 1:
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._history_trigger_btn.show()
             self._history_trigger_btn.raise_()
             self._links_trigger_btn.show()
@@ -23974,7 +24542,7 @@ class MyWidget(QWidget):  # 主窗口
             self.hide_terminal_history_panel()
         if self._terminal_favorites_panel_visible:
             self.hide_terminal_favorites_panel()
-        self.outputs_panel.set_force_dark(self.stacked_widget.currentIndex() == 3)
+        self.outputs_panel.set_force_dark(self.stacked_widget.currentIndex() == TAB_TERMINAL)
         self._refresh_outputs_panel(prefer_latest=True)
         self._branch_trigger_btn.hide()
         self._outputs_trigger_btn.hide()
@@ -24038,7 +24606,7 @@ class MyWidget(QWidget):  # 主窗口
     def _finish_hide_outputs_panel(self):
         self.outputs_panel.hide()
         self._outputs_scrim.hide()
-        if self.stacked_widget.currentIndex() == 1:
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
             self._raise_webfetch_panel_if_visible()
@@ -24050,7 +24618,7 @@ class MyWidget(QWidget):  # 主窗口
         self._outputs_trigger_btn.raise_()
         self._settings_trigger_btn.show()
         self._settings_trigger_btn.raise_()
-        if self.stacked_widget.currentIndex() == 3:
+        if self.stacked_widget.currentIndex() == TAB_TERMINAL:
             self._show_terminal_side_triggers()
 
     def show_share_panel(self, pixmap: QPixmap):
@@ -24126,7 +24694,7 @@ class MyWidget(QWidget):  # 主窗口
     def _finish_hide_share_panel(self):
         self.share_panel.hide()
         self._share_scrim.hide()
-        if self.stacked_widget.currentIndex() == 1:
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
             self._raise_webfetch_panel_if_visible()
@@ -24154,7 +24722,7 @@ class MyWidget(QWidget):  # 主窗口
             pixmap.save(target, 'PNG')
 
     def ShareX(self):
-        if self.stacked_widget.currentIndex() != 1:
+        if self.stacked_widget.currentIndex() != TAB_API:
             return
         choice = ask_broccoli_message(
             self,
@@ -24294,28 +24862,28 @@ class MyWidget(QWidget):  # 主窗口
         if not text:
             return
         try:
-            target_index = int(payload.get('target_index', 1))
+            target_index = int(payload.get('target_index', TAB_API))
         except (TypeError, ValueError):
-            target_index = 1
+            target_index = TAB_API
         append = bool(payload.get('append', False))
         new_conversation = bool(payload.get('new_conversation', False))
         site_index = payload.get('site_index', None)
 
         def apply_payload():
-            if target_index == 1:
+            if target_index == TAB_API:
                 self._route_text_to_api_prompt(
                     text,
                     append=append,
                     new_conversation=new_conversation,
                 )
-            elif target_index in (0, 2):
+            elif target_index in EXTERNAL_PROMPT_TAB_INDICES:
                 self._route_text_to_external_prompt(
                     target_index,
                     text,
                     append=append,
                     site_index=site_index,
                 )
-            elif target_index == 3:
+            elif target_index == TAB_TERMINAL:
                 self._route_text_to_terminal_prompt(text, append=append)
 
         QTimer.singleShot(0, apply_payload)
@@ -25393,11 +25961,62 @@ class MyWidget(QWidget):  # 主窗口
         self._finalize_share_image_async(canvas, callback)
 
     def _external_prompt_panel_for_index(self, index: int):
-        if index == 0:
+        if index == TAB_WEB:
             return getattr(self, 'ai_web_panel', None), getattr(self, 'web_prompt_dock', None)
-        if index == 2:
+        if index == TAB_LOCALHOST:
             return getattr(self, 'localhost_panel', None), getattr(self, 'localhost_prompt_dock', None)
         return None, None
+
+    def _install_send_shortcuts(self):
+        if hasattr(self, '_send_shortcuts'):
+            return
+        self._send_shortcuts = []
+        for sequence in ('Ctrl+Return', 'Ctrl+Enter', 'Meta+Return', 'Meta+Enter'):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(self._handle_send_shortcut)
+            self._send_shortcuts.append(shortcut)
+
+    def _on_external_prompt_dock_visibility_changed(self):
+        self._update_web_conversation_sync_button_geometry()
+        self._update_send_shortcut_enabled()
+
+    def _update_send_shortcut_enabled(self):
+        shortcuts = getattr(self, '_send_shortcuts', None)
+        if not shortcuts or not hasattr(self, 'stacked_widget'):
+            return
+        enabled = False
+        try:
+            current_index = int(self.stacked_widget.currentIndex())
+        except Exception:
+            current_index = -1
+        if current_index == TAB_API:
+            enabled = True
+        elif current_index in EXTERNAL_PROMPT_TAB_INDICES:
+            panel, _dock = self._external_prompt_panel_for_index(current_index)
+            enabled = bool(panel is not None and panel.is_prompt_dock_visible())
+        for shortcut in shortcuts:
+            shortcut.setEnabled(enabled)
+
+    def _handle_send_shortcut(self):
+        if not hasattr(self, 'stacked_widget'):
+            return
+        try:
+            current_index = int(self.stacked_widget.currentIndex())
+        except Exception:
+            return
+        if current_index == TAB_API:
+            button = getattr(self, 'btn_sub1', None)
+            button_text = str(button.text()) if button is not None else ''
+            if button is None or not button.isEnabled() or button_text.startswith('⛔'):
+                return
+            self.SendX()
+            return
+        if current_index in EXTERNAL_PROMPT_TAB_INDICES:
+            panel, dock = self._external_prompt_panel_for_index(current_index)
+            if panel is None or dock is None or not panel.is_prompt_dock_visible():
+                return
+            self.SendExternalPromptDockX(current_index)
 
     def _current_external_prompt_pair(self):
         return self._external_prompt_panel_for_index(self.stacked_widget.currentIndex())
@@ -25428,7 +26047,7 @@ class MyWidget(QWidget):  # 主窗口
         if not hasattr(self, '_external_prompt_trigger_btn'):
             return
         index = self.stacked_widget.currentIndex() if hasattr(self, 'stacked_widget') else -1
-        if index not in (0, 2):
+        if index not in EXTERNAL_PROMPT_TAB_INDICES:
             self._external_prompt_trigger_btn.hide()
             return
         try:
@@ -25461,7 +26080,7 @@ class MyWidget(QWidget):  # 主窗口
         if not hasattr(self, 'web_conversation_sync_button'):
             return
         index = self.stacked_widget.currentIndex() if hasattr(self, 'stacked_widget') else -1
-        if index not in (0, 2):
+        if index not in EXTERNAL_PROMPT_TAB_INDICES:
             self.web_conversation_sync_button.hide()
             return
         panel, _dock = self._external_prompt_panel_for_index(index)
@@ -25490,7 +26109,7 @@ class MyWidget(QWidget):  # 主窗口
         panel, dock = self._external_prompt_panel_for_index(index)
         if panel is None or dock is None:
             return
-        menu = QMenu(self)
+        menu = style_broccoli_context_menu(QMenu(self))
         sync_action = menu.addAction('Save current page to API history')
         forward_action = menu.addAction("Send selected tabs' latest replies here")
         forward_action.setEnabled(bool(self._selected_non_active_web_views(panel, dock)))
@@ -25521,7 +26140,7 @@ class MyWidget(QWidget):  # 主窗口
 
     def _web_conversation_source_key(self, tab_index: int) -> str:
         panel, _dock = self._external_prompt_panel_for_index(tab_index)
-        scope = 'web' if tab_index == 0 else 'localhost' if tab_index == 2 else 'unknown'
+        scope = 'web' if tab_index == TAB_WEB else 'localhost' if tab_index == TAB_LOCALHOST else 'unknown'
         try:
             active_idx = int(panel.active_index()) if panel is not None else 0
         except Exception:
@@ -25664,7 +26283,7 @@ class MyWidget(QWidget):  # 主窗口
             selected_views = []
         selected_views = [view for view in selected_views if view is not None]
 
-        menu = QMenu(self)
+        menu = style_broccoli_context_menu(QMenu(self))
         title_text = f"{len(messages)} messages detected" if messages else 'No current page messages detected'
         title_action = QAction(title_text, menu)
         title_action.setEnabled(False)
@@ -25764,7 +26383,8 @@ class MyWidget(QWidget):  # 主窗口
             source = self._web_view_label(view)
         messages = [msg for msg in capture.get('messages', []) if isinstance(msg, dict)]
         latest_assistant = ''
-        use_structured_latest_reply = raw_source and raw_source != 'Web'
+        has_user_message = any(str(message.get('role', '')).strip().lower() == 'user' for message in messages)
+        use_structured_latest_reply = raw_source and raw_source != 'Web' and has_user_message
         if use_structured_latest_reply:
             for message in reversed(messages):
                 if str(message.get('role', '')).strip().lower() == 'assistant':
@@ -25801,6 +26421,51 @@ class MyWidget(QWidget):  # 主窗口
             ),
             'fallback': True,
         }
+
+    def _forward_record_from_latest_payload(self, payload: dict, view: QWebEngineView) -> dict | None:
+        payload = payload if isinstance(payload, dict) else {}
+        content = str(payload.get('content', '') or '').strip()
+        if not content:
+            return None
+        raw_source = str(payload.get('source', '') or '').strip()
+        source = raw_source or self._web_view_label(view)
+        if source == 'Web':
+            source = self._web_view_label(view)
+        return {
+            'source': source,
+            'url': str(payload.get('url', '') or '').strip(),
+            'content': self._truncate_forward_text(
+                content,
+                WEB_REPLY_FORWARD_SOURCE_CHAR_LIMIT,
+                from_tail=False,
+            ),
+            'fallback': bool(payload.get('fallback')),
+        }
+
+    def _capture_forward_record_from_view(self, view: QWebEngineView, callback):
+        def finish_with_full_capture():
+            try:
+                view.page().runJavaScript(
+                    _WEB_CONVERSATION_CAPTURE_JS,
+                    lambda payload, v=view: callback(
+                        v,
+                        self._forward_record_from_capture(payload if isinstance(payload, dict) else {}, v),
+                    ),
+                )
+            except Exception:
+                callback(view, None)
+
+        def after_latest(payload):
+            record = self._forward_record_from_latest_payload(payload if isinstance(payload, dict) else {}, view)
+            if record is not None:
+                callback(view, record)
+                return
+            finish_with_full_capture()
+
+        try:
+            view.page().runJavaScript(_WEB_LATEST_REPLY_CAPTURE_JS, after_latest)
+        except Exception:
+            finish_with_full_capture()
 
     def _build_forwarded_web_replies_prompt(self, records: list[dict], *, cross_send: bool = False) -> str:
         blocks = []
@@ -25867,8 +26532,7 @@ class MyWidget(QWidget):  # 主窗口
             self._inject_text_to_web_view(target_view, prompt)
             QTimer.singleShot(850, lambda v=target_view: self._wait_then_click_web_send_button(v, timeout_ms=8000))
 
-        def after_capture(view, payload):
-            record = self._forward_record_from_capture(payload if isinstance(payload, dict) else {}, view)
+        def after_capture(view, record):
             if record is not None:
                 state['records'].append(record)
             state['remaining'] = max(0, int(state.get('remaining', 0)) - 1)
@@ -25876,13 +26540,7 @@ class MyWidget(QWidget):  # 主窗口
                 finish()
 
         def capture_one(view):
-            try:
-                view.page().runJavaScript(
-                    _WEB_CONVERSATION_CAPTURE_JS,
-                    lambda payload, v=view: after_capture(v, payload),
-                )
-            except Exception:
-                after_capture(view, {})
+            self._capture_forward_record_from_view(view, after_capture)
 
         for offset, view in enumerate(source_views):
             QTimer.singleShot(activation_delay + offset * 120, lambda v=view: capture_one(v))
@@ -25926,8 +26584,7 @@ class MyWidget(QWidget):  # 主窗口
                 QTimer.singleShot(delay, lambda v=target_view, p=prompt: self._inject_text_to_web_view(v, p))
                 QTimer.singleShot(delay + 900, lambda v=target_view: self._wait_then_click_web_send_button(v, timeout_ms=8000))
 
-        def after_capture(view, payload):
-            record = self._forward_record_from_capture(payload if isinstance(payload, dict) else {}, view)
+        def after_capture(view, record):
             if record is not None:
                 state['records_by_view'][view] = record
             state['remaining'] = max(0, int(state.get('remaining', 0)) - 1)
@@ -25935,13 +26592,7 @@ class MyWidget(QWidget):  # 主窗口
                 finish()
 
         def capture_one(view):
-            try:
-                view.page().runJavaScript(
-                    _WEB_CONVERSATION_CAPTURE_JS,
-                    lambda payload, v=view: after_capture(v, payload),
-                )
-            except Exception:
-                after_capture(view, {})
+            self._capture_forward_record_from_view(view, after_capture)
 
         for offset, view in enumerate(selected_views):
             QTimer.singleShot(activation_delay + offset * 120, lambda v=view: capture_one(v))
@@ -27325,7 +27976,7 @@ class MyWidget(QWidget):  # 主窗口
                 current_index = self.stacked_widget.currentIndex()
             except Exception:
                 current_index = -1
-        for tab_index, attr in ((0, 'ai_web_panel'), (2, 'localhost_panel')):
+        for tab_index, attr in ((TAB_WEB, 'ai_web_panel'), (TAB_LOCALHOST, 'localhost_panel')):
             panel = getattr(self, attr, None)
             if panel is not None and hasattr(panel, 'set_panel_visible'):
                 panel.set_panel_visible(int(current_index) == tab_index)
@@ -27343,14 +27994,15 @@ class MyWidget(QWidget):  # 主窗口
     def _on_tab_changed(self, index):
         """Tab 切换时更新 DrawingLayer 可见性和 qw3 背景色。"""
         self._install_selection_context_menus()
-        is_assistant = (index == 1)
-        is_terminal = (index == 3)
-        is_external_prompt_tab = index in (0, 2)
+        self._update_send_shortcut_enabled()
+        is_assistant = (index == TAB_API)
+        is_terminal = (index == TAB_TERMINAL)
+        is_external_prompt_tab = index in EXTERNAL_PROMPT_TAB_INDICES
         self._refresh_web_lifecycle_visibility(index)
-        self.pill_nav.set_theme('dark' if (index == 3 or is_dark_theme(app)) else 'light')
-        self._set_top_chrome_button_theme(index == 3 or is_dark_theme(app))
-        self.settings_panel.set_force_dark(index == 3)
-        self.outputs_panel.set_force_dark(index == 3)
+        self.pill_nav.set_theme('dark' if (index == TAB_TERMINAL or is_dark_theme(app)) else 'light')
+        self._set_top_chrome_button_theme(index == TAB_TERMINAL or is_dark_theme(app))
+        self.settings_panel.set_force_dark(index == TAB_TERMINAL)
+        self.outputs_panel.set_force_dark(index == TAB_TERMINAL)
         if not is_assistant:
             self._history_trigger_btn.hide()
             self._links_trigger_btn.hide()
@@ -27416,36 +28068,71 @@ class MyWidget(QWidget):  # 主窗口
             is_html_view = (trans % 2 == 0)
             self.drawing_layer.setVisible(is_expanded and is_html_view)
 
-        if index == 0:   # AI Web
-            self.ai_web_panel.active_view().page().runJavaScript(self._BG_JS, self._apply_web_bg)
-        elif index == 1:  # Assistant
+        if index == TAB_API:  # Assistant
             self._set_qw3_bg('#2D2D2D' if is_dark_theme(app) else '#FFFFFF')
-        elif index == 2:  # Localhost
-            self.localhost_panel.active_view().page().runJavaScript(self._BG_JS, self._apply_web_bg)
-        elif index == 3:  # Terminal
+        elif index == TAB_WEB:   # AI Web
+            self._prime_external_tab_background(TAB_WEB)
+            self.ai_web_panel.active_view().page().runJavaScript(
+                self._BG_JS,
+                lambda color, tab_index=TAB_WEB: self._apply_web_bg(color, tab_index),
+            )
+        elif index == TAB_LOCALHOST:  # Localhost
+            self._prime_external_tab_background(TAB_LOCALHOST)
+            self.localhost_panel.active_view().page().runJavaScript(
+                self._BG_JS,
+                lambda color, tab_index=TAB_LOCALHOST: self._apply_web_bg(color, tab_index),
+            )
+        elif index == TAB_TERMINAL:  # Terminal
             self._set_qw3_bg('#2D2D2D', border='#2D2D2D')
 
-    # JS 取背景色：按优先级检查多个候选元素，跳过透明色，回退白色
+    # JS 取背景色：采样 viewport 内可见点，向上寻找最近的不透明背景色。
     _BG_JS = (
         "(function(){"
-        "  function isOpaque(c){"
-        "    if(!c||c==='transparent') return false;"
-        "    if(c.startsWith('rgba')){"
-        "      var a=parseFloat(c.split(',')[3]);"
-        "      return !isNaN(a)&&a>0.1;"
+        "  function opaque(c){"
+        "    if(!c||c==='transparent'||c==='rgba(0, 0, 0, 0)') return false;"
+        "    var m=c.match(/^rgba\\(([^,]+),([^,]+),([^,]+),([^\\)]+)\\)$/);"
+        "    if(m) return parseFloat(m[4])>0.12;"
+        "    return true;"
+        "  }"
+        "  function normalize(c){"
+        "    if(!c) return '';"
+        "    var m=c.match(/^rgb\\((\\d+),\\s*(\\d+),\\s*(\\d+)\\)$/);"
+        "    if(m){"
+        "      function hx(n){return Math.max(0,Math.min(255,parseInt(n,10))).toString(16).padStart(2,'0');}"
+        "      return '#'+hx(m[1])+hx(m[2])+hx(m[3]);"
         "    }"
-        "    return c!=='rgba(0, 0, 0, 0)';"
+        "    return c;"
         "  }"
-        "  var candidates=["
-        "    document.documentElement,"
-        "    document.body,"
-        "    document.querySelector('main,#root,#app,[data-theme],#__next,.app-container')"
+        "  function bgAt(x,y){"
+        "    var el=document.elementFromPoint(x,y);"
+        "    while(el){"
+        "      var c=getComputedStyle(el).backgroundColor;"
+        "      if(opaque(c)) return normalize(c);"
+        "      el=el.parentElement;"
+        "    }"
+        "    return '';"
+        "  }"
+        "  var w=Math.max(1,window.innerWidth||document.documentElement.clientWidth||1);"
+        "  var h=Math.max(1,window.innerHeight||document.documentElement.clientHeight||1);"
+        "  var points=["
+        "    [0.04,0.04],[0.5,0.04],[0.96,0.04],"
+        "    [0.04,0.18],[0.5,0.18],[0.96,0.18],"
+        "    [0.04,0.5],[0.5,0.5],[0.96,0.5],"
+        "    [0.04,0.82],[0.5,0.82],[0.96,0.82],"
+        "    [0.04,0.96],[0.5,0.96],[0.96,0.96]"
         "  ];"
-        "  for(var el of candidates){"
-        "    if(!el) continue;"
-        "    var c=getComputedStyle(el).backgroundColor;"
-        "    if(isOpaque(c)) return c;"
+        "  var counts={};"
+        "  for(var i=0;i<points.length;i++){"
+        "    var c=bgAt(Math.round((w-1)*points[i][0]),Math.round((h-1)*points[i][1]));"
+        "    if(c) counts[c]=(counts[c]||0)+1;"
         "  }"
+        "  var best='',bestCount=0;"
+        "  Object.keys(counts).forEach(function(c){if(counts[c]>bestCount){best=c;bestCount=counts[c];}});"
+        "  if(best) return best;"
+        "  var body=getComputedStyle(document.body||document.documentElement).backgroundColor;"
+        "  if(opaque(body)) return normalize(body);"
+        "  var root=getComputedStyle(document.documentElement).backgroundColor;"
+        "  if(opaque(root)) return normalize(root);"
         "  return '#FFFFFF';"
         "})()"
     )
@@ -27453,22 +28140,55 @@ class MyWidget(QWidget):  # 主窗口
     def _on_web_loaded(self, ok, panel, tab_index):
         """活跃 view 加载完成后，若该 tab 正在显示则更新背景色。"""
         if ok and self.stacked_widget.currentIndex() == tab_index:
-            panel.active_view().page().runJavaScript(self._BG_JS, self._apply_web_bg)
+            panel.active_view().page().runJavaScript(
+                self._BG_JS,
+                lambda color, tab_index=tab_index: self._apply_web_bg(color, tab_index),
+            )
 
-    def _apply_web_bg(self, color_str):
+    def _apply_web_bg(self, color_str, tab_index=None):
         """将 JS 返回的颜色应用到 qw3；透明/空时回退白色。"""
+        if tab_index is not None:
+            try:
+                if self.stacked_widget.currentIndex() != int(tab_index):
+                    return
+            except Exception:
+                return
         if not color_str or color_str.strip() in ('rgba(0, 0, 0, 0)', 'transparent', ''):
             color_str = '#FFFFFF'
+        if tab_index in EXTERNAL_PROMPT_TAB_INDICES:
+            try:
+                self._external_tab_backgrounds[int(tab_index)] = color_str
+            except Exception:
+                pass
+        self._set_external_tab_background(tab_index, color_str)
+
+    def _set_external_tab_background(self, tab_index, color_str: str):
+        color_str = str(color_str or '').strip() or '#FFFFFF'
+        if tab_index == TAB_WEB:
+            panel = getattr(self, 'ai_web_panel', None)
+        elif tab_index == TAB_LOCALHOST:
+            panel = getattr(self, 'localhost_panel', None)
+        else:
+            panel = None
+        if panel is not None and hasattr(panel, 'set_panel_background'):
+            panel.set_panel_background(color_str)
         self._set_qw3_bg(color_str)
+
+    def _prime_external_tab_background(self, tab_index: int):
+        try:
+            tab_index = int(tab_index)
+        except Exception:
+            return
+        cached = getattr(self, '_external_tab_backgrounds', {}).get(tab_index, '#FFFFFF')
+        self._set_external_tab_background(tab_index, cached or '#FFFFFF')
 
     def _set_qw3_bg(self, bg_css, border='#ECECEC'):
         """动态覆盖 qw3 的背景色（保留其他样式属性）。"""
         if border == '#ECECEC' and is_dark_theme(app):
             border = '#2D2D2D'
-        self.qw3.setStyleSheet(
-            f"QWidget#Main-1 {{ border: 1px solid {border};"
-            f" background: {bg_css}; border-radius: 26px; }}"
-        )
+        if hasattr(self.qw3, 'set_smooth_panel_background'):
+            self.qw3.set_smooth_panel_background(bg_css, border, 59)
+        self.qw3.setStyleSheet("QWidget#Main-1 { border: none; background: transparent; }")
 
     def _apply_assistant_surfaces_theme(self, dark_mode: bool):
         self.real1.setStyleSheet(_assistant_readonly_text_stylesheet(dark_mode))
@@ -27499,19 +28219,27 @@ class MyWidget(QWidget):  # 主窗口
 
     def _refresh_current_tab_background(self):
         current_index = self.stacked_widget.currentIndex()
-        if current_index == 0:
+        if current_index == TAB_WEB:
+            self._prime_external_tab_background(TAB_WEB)
             try:
-                self.ai_web_panel.active_view().page().runJavaScript(self._BG_JS, self._apply_web_bg)
+                self.ai_web_panel.active_view().page().runJavaScript(
+                    self._BG_JS,
+                    lambda color, tab_index=TAB_WEB: self._apply_web_bg(color, tab_index),
+                )
             except Exception:
                 pass
-        elif current_index == 1:
+        elif current_index == TAB_API:
             self._set_qw3_bg('#2D2D2D' if is_dark_theme(app) else '#FFFFFF')
-        elif current_index == 2:
+        elif current_index == TAB_LOCALHOST:
+            self._prime_external_tab_background(TAB_LOCALHOST)
             try:
-                self.localhost_panel.active_view().page().runJavaScript(self._BG_JS, self._apply_web_bg)
+                self.localhost_panel.active_view().page().runJavaScript(
+                    self._BG_JS,
+                    lambda color, tab_index=TAB_LOCALHOST: self._apply_web_bg(color, tab_index),
+                )
             except Exception:
                 pass
-        elif current_index == 3:
+        elif current_index == TAB_TERMINAL:
             self._set_qw3_bg('#2D2D2D', border='#2D2D2D')
 
     def _refresh_web_surfaces_for_theme(self):
@@ -27521,8 +28249,8 @@ class MyWidget(QWidget):  # 主窗口
 
     def apply_theme(self, dark_mode: bool):
         current_index = self.stacked_widget.currentIndex()
-        self.pill_nav.set_theme('dark' if (current_index == 3 or dark_mode) else 'light')
-        self._set_top_chrome_button_theme(current_index == 3 or dark_mode)
+        self.pill_nav.set_theme('dark' if (current_index == TAB_TERMINAL or dark_mode) else 'light')
+        self._set_top_chrome_button_theme(current_index == TAB_TERMINAL or dark_mode)
         self._apply_assistant_surfaces_theme(dark_mode)
         self._refresh_web_surfaces_for_theme()
         _apply_window_palette(self, dark_mode)
@@ -27861,12 +28589,12 @@ class MyWidget(QWidget):  # 主窗口
             return
         use_embedding = self._generated_output_context_use_embedding_enabled()
         current_index = self.stacked_widget.currentIndex()
-        if current_index == 1:
+        if current_index == TAB_API:
             for path in paths:
                 self._attachment_tray.add_file(path, use_embedding=use_embedding)
             self._show_tray_animated()
             return
-        if current_index in (0, 2):
+        if current_index in EXTERNAL_PROMPT_TAB_INDICES:
             panel, dock = self._external_prompt_panel_for_index(current_index)
             if panel is not None and dock is not None:
                 dock.add_files_instant(paths, use_embedding=use_embedding)
@@ -27874,7 +28602,7 @@ class MyWidget(QWidget):  # 主窗口
                 QTimer.singleShot(0, lambda p=panel, d=dock: self._sync_external_prompt_dock_height(p, d))
                 QTimer.singleShot(240, lambda p=panel, d=dock: self._sync_external_prompt_dock_height(p, d))
             return
-        if current_index == 3:
+        if current_index == TAB_TERMINAL:
             terminal = getattr(self, 'terminal_widget', None)
             if terminal is not None and hasattr(terminal, 'add_context_files'):
                 terminal.add_context_files(paths, use_embedding=use_embedding)
@@ -28880,7 +29608,7 @@ class MyWidget(QWidget):  # 主窗口
                     records.append(loaded)
         self._webfetch_records = records
         self.webfetch_panel.set_export_records(records)
-        if records and self.stacked_widget.currentIndex() == 1:
+        if records and self.stacked_widget.currentIndex() == TAB_API:
             self.webfetch_panel.set_collapsed(True)
             self._show_webfetch_panel()
         else:
@@ -29467,7 +30195,7 @@ class MyWidget(QWidget):  # 主窗口
         self.webfetch_panel.append_export_record(record)
         current_index = self.stacked_widget.currentIndex()
         panel, _dock = self._external_prompt_panel_for_index(current_index)
-        if current_index == 1 or (panel is not None and panel.is_prompt_dock_visible()):
+        if current_index == TAB_API or (panel is not None and panel.is_prompt_dock_visible()):
             self.webfetch_panel.set_collapsed(False)
             self._show_webfetch_panel()
 
@@ -29533,7 +30261,7 @@ class MyWidget(QWidget):  # 主窗口
             return
         current_index = self.stacked_widget.currentIndex()
         panel, _dock = self._external_prompt_panel_for_index(current_index)
-        if current_index != 1 and not (panel is not None and panel.is_prompt_dock_visible()):
+        if current_index != TAB_API and not (panel is not None and panel.is_prompt_dock_visible()):
             return
         target = self._webfetch_panel_rect()
         if not self.webfetch_panel.isVisible():
@@ -29635,32 +30363,52 @@ class MyWidget(QWidget):  # 主窗口
     def _check_daily_memory_rollup_on_startup(self):
         store = load_settings_store()
         globals_store = store.get('globals', {})
-        today = datetime.date.today().isoformat()
         now = datetime.datetime.now()
+        today = now.date()
+        yesterday = today - datetime.timedelta(days=1)
+        last = str(globals_store.get('memory_last_rollup_date', '')).strip()
+        if not last or last < yesterday.isoformat():
+            logging.info('Daily memory rollup missed previous day; catching up for %s.', yesterday.isoformat())
+            self._start_daily_memory_rollup(force=True, target_date=yesterday.isoformat())
+            return
         if now.hour > 23 or (now.hour == 23 and now.minute >= 30):
-            if str(globals_store.get('memory_last_rollup_date', '')).strip() != today:
-                self._start_daily_memory_rollup(force=True)
+            if last != today.isoformat():
+                logging.info('Daily memory rollup catching up for current day %s after cutoff.', today.isoformat())
+                self._start_daily_memory_rollup(force=True, target_date=today.isoformat())
 
-    def _start_daily_memory_rollup(self, force: bool = False):
+    def _start_daily_memory_rollup(self, force: bool = False, target_date: str | datetime.date | None = None):
         if getattr(self, '_daily_memory_rollup_running', False):
+            logging.info('Daily memory rollup skipped: another rollup is already running.')
             return
         self._schedule_daily_memory_rollup()
         self._daily_memory_rollup_running = True
         threading.Thread(
             target=self._run_daily_memory_rollup_worker,
-            args=(force,),
+            args=(force, target_date),
             daemon=True,
         ).start()
 
-    def _run_daily_memory_rollup_worker(self, force: bool = False):
+    def _run_daily_memory_rollup_worker(self, force: bool = False, target_date: str | datetime.date | None = None):
         try:
             now = datetime.datetime.now()
-            today = now.date().isoformat()
+            rollup_date = now.date()
+            if target_date is not None:
+                try:
+                    rollup_date = target_date if isinstance(target_date, datetime.date) else datetime.date.fromisoformat(str(target_date))
+                except Exception:
+                    logging.warning('Daily memory rollup received invalid target date: %r', target_date)
+                    rollup_date = now.date()
+            if rollup_date > now.date():
+                logging.info('Daily memory rollup skipped: target date %s is in the future.', rollup_date.isoformat())
+                return
+            rollup_day = rollup_date.isoformat()
             store = load_settings_store()
             globals_store = store.get('globals', {})
-            if not force and (now.hour < 23 or (now.hour == 23 and now.minute < 30)):
+            if rollup_date == now.date() and not force and (now.hour < 23 or (now.hour == 23 and now.minute < 30)):
+                logging.info('Daily memory rollup skipped: current day cutoff has not been reached.')
                 return
-            if str(globals_store.get('memory_last_rollup_date', '')).strip() == today:
+            if str(globals_store.get('memory_last_rollup_date', '')).strip() == rollup_day:
+                logging.info('Daily memory rollup skipped: %s already processed.', rollup_day)
                 return
 
             retention_days = int(globals_store.get('memory_retention_days', 30) or 30)
@@ -29675,11 +30423,19 @@ class MyWidget(QWidget):  # 主窗口
                     updated_dt = datetime.datetime.fromisoformat(updated_at)
                 except Exception:
                     continue
-                if updated_dt.date().isoformat() != today:
+                if updated_dt.date().isoformat() != rollup_day:
                     continue
                 summary = str(record.get('memory', {}).get('running_summary', '')).strip()
+                if not summary:
+                    messages = record.get('messages', []) if isinstance(record.get('messages', []), list) else []
+                    if messages:
+                        try:
+                            summary = render_chat_history_plaintext(messages[-8:]).strip()[:4000]
+                        except Exception:
+                            summary = ''
                 if summary:
                     summaries.append(summary)
+            logging.info('Daily memory rollup %s found %d conversation summaries.', rollup_day, len(summaries))
 
             profile = load_active_settings_profile()
             api_key = str(profile.get('api_key', '')).strip()
@@ -29725,7 +30481,7 @@ class MyWidget(QWidget):  # 主窗口
 
             updated_items = []
             for item in memory_items:
-                if item.get('kind') == 'daily' and str(item.get('source_date', '')).strip() == today:
+                if item.get('kind') == 'daily' and str(item.get('source_date', '')).strip() == rollup_day:
                     continue
                 updated_items.append(item)
             if daily_note:
@@ -29734,13 +30490,16 @@ class MyWidget(QWidget):  # 主窗口
                         'text': daily_note,
                         'created_at': now.isoformat(timespec='seconds'),
                         'kind': 'daily',
-                        'source_date': today,
+                        'source_date': rollup_day,
                     }
                 )
+                logging.info('Daily memory rollup %s wrote a daily note.', rollup_day)
+            else:
+                logging.info('Daily memory rollup %s completed with no daily note.', rollup_day)
             updated_items = prune_memory_item_records(updated_items, retention_days, now=now)
 
             globals_store['memory_items'] = updated_items
-            globals_store['memory_last_rollup_date'] = today
+            globals_store['memory_last_rollup_date'] = rollup_day
             store['globals'] = globals_store
             save_settings_store(store)
         finally:
@@ -29839,7 +30598,7 @@ class MyWidget(QWidget):  # 主窗口
 
     def _can_show_terminal_side_triggers(self) -> bool:
         return (
-            self.stacked_widget.currentIndex() == 3
+            self.stacked_widget.currentIndex() == TAB_TERMINAL
             and not self._settings_panel_visible
             and not self._outputs_panel_visible
             and not self._terminal_history_panel_visible
@@ -29901,6 +30660,34 @@ class MyWidget(QWidget):  # 主窗口
         value = str(text or '')
         if value:
             QApplication.clipboard().setText(value)
+
+    def _set_terminal_input_from_panel(self, command: str, append: bool = False):
+        command = str(command or '').strip()
+        if not command:
+            return
+        self._select_main_tab(TAB_TERMINAL)
+        terminal = getattr(self, 'terminal_widget', None)
+        input_line = getattr(terminal, 'input_line', None) if terminal is not None else None
+        if input_line is None:
+            return
+        if append:
+            current = str(input_line.text() or '')
+            cursor_pos = max(0, input_line.cursorPosition())
+            prefix = current[:cursor_pos]
+            suffix = current[cursor_pos:]
+            sep_left = ' ' if prefix and not prefix[-1].isspace() else ''
+            sep_right = ' ' if suffix and not suffix[:1].isspace() else ''
+            merged = prefix + sep_left + command + sep_right + suffix
+            input_line.setText(merged)
+            input_line.setCursorPosition(len(prefix + sep_left + command))
+        else:
+            input_line.setText(command)
+            input_line.end(False)
+        input_line.setFocus()
+        if self._terminal_history_panel_visible:
+            self.hide_terminal_history_panel()
+        if self._terminal_favorites_panel_visible:
+            self.hide_terminal_favorites_panel()
 
     def _refresh_terminal_history_panel(self):
         if hasattr(self, 'terminal_history_panel'):
@@ -29973,7 +30760,7 @@ class MyWidget(QWidget):  # 主窗口
         self._refresh_terminal_favorites_panel()
 
     def show_terminal_history_panel(self):
-        if self.stacked_widget.currentIndex() != 3 or self._terminal_history_panel_visible:
+        if self.stacked_widget.currentIndex() != TAB_TERMINAL or self._terminal_history_panel_visible:
             return
         if self._settings_panel_visible:
             self.hide_settings_panel()
@@ -30041,7 +30828,7 @@ class MyWidget(QWidget):  # 主窗口
     def _finish_hide_terminal_history_panel(self):
         self.terminal_history_panel.hide()
         self._terminal_history_scrim.hide()
-        if self.stacked_widget.currentIndex() == 3:
+        if self.stacked_widget.currentIndex() == TAB_TERMINAL:
             self._outputs_trigger_btn.show()
             self._outputs_trigger_btn.raise_()
             self._settings_trigger_btn.show()
@@ -30049,7 +30836,7 @@ class MyWidget(QWidget):  # 主窗口
             self._show_terminal_side_triggers()
 
     def show_terminal_favorites_panel(self):
-        if self.stacked_widget.currentIndex() != 3 or self._terminal_favorites_panel_visible:
+        if self.stacked_widget.currentIndex() != TAB_TERMINAL or self._terminal_favorites_panel_visible:
             return
         if self._settings_panel_visible:
             self.hide_settings_panel()
@@ -30117,7 +30904,7 @@ class MyWidget(QWidget):  # 主窗口
     def _finish_hide_terminal_favorites_panel(self):
         self.terminal_favorites_panel.hide()
         self._terminal_favorites_scrim.hide()
-        if self.stacked_widget.currentIndex() == 3:
+        if self.stacked_widget.currentIndex() == TAB_TERMINAL:
             self._outputs_trigger_btn.show()
             self._outputs_trigger_btn.raise_()
             self._settings_trigger_btn.show()
@@ -30137,7 +30924,7 @@ class MyWidget(QWidget):  # 主窗口
             self.hide_terminal_history_panel()
         if self._terminal_favorites_panel_visible:
             self.hide_terminal_favorites_panel()
-        self.settings_panel.set_force_dark(self.stacked_widget.currentIndex() == 3)
+        self.settings_panel.set_force_dark(self.stacked_widget.currentIndex() == TAB_TERMINAL)
         self._branch_trigger_btn.hide()
         self._outputs_trigger_btn.hide()
         self._settings_trigger_btn.hide()
@@ -30213,8 +31000,8 @@ class MyWidget(QWidget):  # 主窗口
         self._settings_scrim.hide()
         self.settings_panel.reset_record_buttons()
         self.settings_panel.reload_from_store()
-        self.settings_panel.set_force_dark(self.stacked_widget.currentIndex() == 3)
-        if self.stacked_widget.currentIndex() == 1:
+        self.settings_panel.set_force_dark(self.stacked_widget.currentIndex() == TAB_TERMINAL)
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
             self._raise_webfetch_panel_if_visible()
@@ -30222,16 +31009,16 @@ class MyWidget(QWidget):  # 主窗口
         self._outputs_trigger_btn.raise_()
         self._settings_trigger_btn.show()
         self._settings_trigger_btn.raise_()
-        if self.stacked_widget.currentIndex() == 1:
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._history_trigger_btn.show()
             self._history_trigger_btn.raise_()
             self._links_trigger_btn.show()
             self._links_trigger_btn.raise_()
-        elif self.stacked_widget.currentIndex() == 3:
+        elif self.stacked_widget.currentIndex() == TAB_TERMINAL:
             self._show_terminal_side_triggers()
 
     def show_history_panel(self):
-        if self.stacked_widget.currentIndex() != 1:
+        if self.stacked_widget.currentIndex() != TAB_API:
             return
         if self._history_panel_visible:
             return
@@ -30310,7 +31097,7 @@ class MyWidget(QWidget):  # 主窗口
     def _finish_hide_history_panel(self):
         self.history_panel.hide()
         self._history_scrim.hide()
-        if self.stacked_widget.currentIndex() == 1:
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
             self._raise_webfetch_panel_if_visible()
@@ -30324,7 +31111,7 @@ class MyWidget(QWidget):  # 主窗口
             self._links_trigger_btn.raise_()
 
     def show_links_panel(self):
-        if self.stacked_widget.currentIndex() != 1:
+        if self.stacked_widget.currentIndex() != TAB_API:
             return
         if self._links_panel_visible:
             return
@@ -30403,7 +31190,7 @@ class MyWidget(QWidget):  # 主窗口
     def _finish_hide_links_panel(self):
         self.links_panel.hide()
         self._links_scrim.hide()
-        if self.stacked_widget.currentIndex() == 1:
+        if self.stacked_widget.currentIndex() == TAB_API:
             self._branch_trigger_btn.show()
             self._branch_trigger_btn.raise_()
             self._raise_webfetch_panel_if_visible()
@@ -30438,6 +31225,11 @@ class MyWidget(QWidget):  # 主窗口
         new_pos = QRect(width, height, self.width(), self.height())
         animation.setEndValue(new_pos)
         self._main_window_animation = animation
+        def finish_move():
+            self._pin_tab_force_center_until_move_finish = False
+            self._refresh_pin_tab_edge_state(animated=True)
+            self._remember_normal_window_geometry()
+        animation.finished.connect(finish_move)
         animation.start()
         self.i += 1
 
@@ -30450,16 +31242,12 @@ class MyWidget(QWidget):  # 主窗口
         new_pos = QRect(width, height, self.width(), self.height())
         animation.setEndValue(new_pos)
         self._main_window_animation = animation
+        animation.finished.connect(lambda: (self._refresh_pin_tab_edge_state(animated=True), self._remember_normal_window_geometry()))
         animation.start()
 
     def _set_window_position_pin_state(self, enabled: bool):
         enabled = bool(enabled)
         self._window_position_pinned = enabled
-        btn = getattr(self, 'window_position_pin_button', None)
-        if btn is not None:
-            with QSignalBlocker(btn):
-                btn.setChecked(enabled)
-            btn.setToolTip('Unpin window position' if enabled else 'Pin window position')
         if enabled:
             edge_anim = getattr(self, '_edge_auto_hide_animation', None)
             if edge_anim is not None:
@@ -30470,9 +31258,277 @@ class MyWidget(QWidget):  # 主窗口
         else:
             self._edge_auto_hide_suspended = False
             self._schedule_edge_auto_hide_check()
+        self._bind_pin_tab_side_buttons_for_state(getattr(self, '_pin_tab_edge_state', 'center'))
+        self._refresh_pin_tab_edge_state(animated=True)
 
     def _toggle_window_position_pin(self, checked: bool):
         self._set_window_position_pin_state(bool(checked))
+
+    @staticmethod
+    def _disconnect_button_clicked(button):
+        if button is None:
+            return
+        try:
+            button.clicked.disconnect()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _set_pin_tab_side_button_width(button, width: int):
+        if button is None:
+            return
+        width = max(0, int(width))
+        button.setMinimumWidth(width)
+        button.setMaximumWidth(width)
+
+    def _set_pin_tab_side_button_collapsed(self, button, opacity_effect=None):
+        if button is None:
+            return
+        self._set_pin_tab_side_button_width(button, 0)
+        button.setVisible(False)
+        if opacity_effect is not None:
+            opacity_effect.setOpacity(0.0)
+
+    def _collapse_pin_tab_side_buttons(self, animated: bool = True):
+        if not hasattr(self, 'window_position_pin_button') or not hasattr(self, 'window_close_button'):
+            return
+        for anim in list(getattr(self, '_pin_tab_side_button_anims', [])):
+            try:
+                anim.stop()
+            except Exception:
+                pass
+        self._pin_tab_side_button_anims = []
+        self._pin_tab_edge_state = 'center'
+        self._bind_pin_tab_side_buttons_for_state('center')
+        self._animate_pin_tab_spacing(False, animated)
+        self._animate_pin_tab_side_button(
+            self.window_position_pin_button,
+            getattr(self, '_pin_tab_position_opacity', None),
+            False,
+            animated,
+        )
+        self._animate_pin_tab_side_button(
+            self.window_close_button,
+            getattr(self, '_pin_tab_close_opacity', None),
+            False,
+            animated,
+        )
+
+    def _animate_pin_tab_spacing(self, expanded: bool, animated: bool):
+        layout = getattr(self, '_pin_tab_layout', None)
+        if layout is None:
+            return
+        target = 4 if expanded else 0
+        if not animated:
+            layout.setSpacing(target)
+            return
+        start = int(layout.spacing())
+        if start == target:
+            return
+        spacing_anim = QVariantAnimation(self)
+        spacing_anim.setDuration(180)
+        spacing_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        spacing_anim.setStartValue(start)
+        spacing_anim.setEndValue(target)
+        spacing_anim.valueChanged.connect(lambda value, lay=layout: lay.setSpacing(int(value)))
+        self._pin_tab_side_button_anims.append(spacing_anim)
+        spacing_anim.finished.connect(
+            lambda anim=spacing_anim: self._pin_tab_side_button_anims.remove(anim)
+            if anim in self._pin_tab_side_button_anims else None
+        )
+        spacing_anim.start()
+
+    def _animate_pin_tab_side_button(self, button, opacity_effect, expanded: bool, animated: bool):
+        if button is None:
+            return
+        target_width = 12 if expanded else 0
+        start_width = max(0, int(button.maximumWidth()))
+        if expanded:
+            button.show()
+        if not animated:
+            self._set_pin_tab_side_button_width(button, target_width)
+            if opacity_effect is not None:
+                opacity_effect.setOpacity(1.0 if expanded else 0.0)
+            button.setVisible(expanded)
+            return
+        width_anim = QPropertyAnimation(button, b'maximumWidth', self)
+        width_anim.setDuration(180)
+        width_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        width_anim.setStartValue(start_width)
+        width_anim.setEndValue(target_width)
+        width_anim.valueChanged.connect(lambda value, btn=button: btn.setMinimumWidth(max(0, int(value))))
+        opacity_anim = None
+        if opacity_effect is not None:
+            opacity_anim = QPropertyAnimation(opacity_effect, b'opacity', self)
+            opacity_anim.setDuration(160)
+            opacity_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            opacity_anim.setStartValue(float(opacity_effect.opacity()))
+            opacity_anim.setEndValue(1.0 if expanded else 0.0)
+            opacity_anim.start()
+
+        def finish(btn=button, visible=expanded):
+            self._set_pin_tab_side_button_width(btn, target_width)
+            btn.setVisible(visible)
+
+        width_anim.finished.connect(finish)
+        self._pin_tab_side_button_anims.append(width_anim)
+        if opacity_anim is not None:
+            self._pin_tab_side_button_anims.append(opacity_anim)
+            opacity_anim.finished.connect(
+                lambda anim=opacity_anim: self._pin_tab_side_button_anims.remove(anim)
+                if anim in self._pin_tab_side_button_anims else None
+            )
+        width_anim.finished.connect(
+            lambda anim=width_anim: self._pin_tab_side_button_anims.remove(anim)
+            if anim in self._pin_tab_side_button_anims else None
+        )
+        width_anim.start()
+
+    def _detect_pin_tab_edge_state(self) -> str:
+        if bool(getattr(self, '_pin_tab_force_center_until_move_finish', False)):
+            return 'center'
+        if self._is_main_window_pinned_collapsed():
+            return 'center'
+        hidden_side = str(getattr(self, '_edge_auto_hidden_side', '') or '').strip().lower()
+        if hidden_side in {'left', 'right'}:
+            return hidden_side
+        screen_geo = self._edge_auto_hide_screen_geometry()
+        if screen_geo is None:
+            return 'center'
+        geom = self.geometry()
+        tolerance = max(12, int(getattr(self, 'EDGE_AUTO_HIDE_PEEK_PX', 2)) + 10)
+        if geom.left() <= screen_geo.left() + tolerance:
+            return 'left'
+        if geom.right() >= screen_geo.right() - tolerance:
+            return 'right'
+        return 'center'
+
+    def _geometry_horizontal_edge_state(self, geometry: QRect | None = None) -> str:
+        geom = QRect(geometry) if isinstance(geometry, QRect) else self.geometry()
+        screen = QGuiApplication.screenAt(geom.center()) or self._screen_for_window_edge()
+        screen_geo = screen.geometry() if screen is not None else None
+        if screen_geo is None:
+            return 'center'
+        tolerance = max(24, int(getattr(self, 'EDGE_AUTO_HIDE_PEEK_PX', 2)) + 18)
+        if geom.left() <= screen_geo.left() + tolerance:
+            return 'left'
+        if geom.right() >= screen_geo.right() - tolerance:
+            return 'right'
+        return 'center'
+
+    def _remember_normal_window_geometry(self):
+        if self._is_main_window_pinned_collapsed():
+            return
+        if getattr(self, '_edge_auto_hidden_side', ''):
+            return
+        if bool(getattr(self, '_edge_auto_hide_animating', False)) or bool(getattr(self, '_edge_auto_showing', False)):
+            return
+        main_anim = getattr(self, '_main_window_animation', None)
+        if main_anim is not None and main_anim.state() == QPropertyAnimation.State.Running:
+            return
+        geom = QRect(self.geometry())
+        if self._geometry_horizontal_edge_state(geom) != 'center':
+            return
+        self._last_normal_window_geometry = geom
+
+    def _default_normal_window_geometry(self) -> QRect:
+        screen = self._screen_for_window_edge()
+        screen_geo = screen.availableGeometry() if screen is not None else self.screen().availableGeometry()
+        width = 540
+        height = 960
+        x = screen_geo.left() + max(0, (screen_geo.width() - width) // 2)
+        y = screen_geo.top() + max(0, (screen_geo.height() - height) // 2)
+        max_x = screen_geo.right() - width + 1
+        max_y = screen_geo.bottom() - height + 1
+        x = min(max(x, screen_geo.left()), max(screen_geo.left(), max_x))
+        y = min(max(y, screen_geo.top()), max(screen_geo.top(), max_y))
+        return QRect(int(x), int(y), width, height)
+
+    def _normal_window_restore_geometry(self) -> QRect:
+        stored = getattr(self, '_last_normal_window_geometry', None)
+        if isinstance(stored, QRect) and stored.width() > 100 and stored.height() > 100:
+            screen = QGuiApplication.screenAt(stored.center()) or self._screen_for_window_edge()
+            if screen is not None:
+                screen_geo = screen.availableGeometry()
+                if screen_geo.intersects(stored) and self._geometry_horizontal_edge_state(stored) == 'center':
+                    return QRect(stored)
+        return self._default_normal_window_geometry()
+
+    def _bind_pin_tab_side_buttons_for_state(self, state: str):
+        left_btn = getattr(self, 'window_position_pin_button', None)
+        right_btn = getattr(self, 'window_close_button', None)
+        self._disconnect_button_clicked(left_btn)
+        self._disconnect_button_clicked(right_btn)
+        if state == 'left':
+            if left_btn is not None:
+                with QSignalBlocker(left_btn):
+                    left_btn.setChecked(False)
+                left_btn.setCheckable(False)
+                left_btn.setToolTip('Hide main window')
+                left_btn.clicked.connect(self.close_main_window_to_tray)
+            if right_btn is not None:
+                right_btn.setCheckable(True)
+                with QSignalBlocker(right_btn):
+                    right_btn.setChecked(bool(getattr(self, '_window_position_pinned', False)))
+                right_btn.setToolTip('Resume edge auto-hide' if getattr(self, '_window_position_pinned', False) else 'Stop edge auto-hide')
+                right_btn.clicked.connect(self._toggle_window_position_pin)
+            return
+        if state == 'right':
+            if left_btn is not None:
+                left_btn.setCheckable(True)
+                with QSignalBlocker(left_btn):
+                    left_btn.setChecked(bool(getattr(self, '_window_position_pinned', False)))
+                left_btn.setToolTip('Resume edge auto-hide' if getattr(self, '_window_position_pinned', False) else 'Stop edge auto-hide')
+                left_btn.clicked.connect(self._toggle_window_position_pin)
+            if right_btn is not None:
+                with QSignalBlocker(right_btn):
+                    right_btn.setChecked(False)
+                right_btn.setCheckable(False)
+                right_btn.setToolTip('Hide main window')
+                right_btn.clicked.connect(self.close_main_window_to_tray)
+            return
+        if left_btn is not None:
+            left_btn.setCheckable(True)
+            with QSignalBlocker(left_btn):
+                left_btn.setChecked(bool(getattr(self, '_window_position_pinned', False)))
+            left_btn.setToolTip('Unpin window position' if getattr(self, '_window_position_pinned', False) else 'Pin window position')
+            left_btn.clicked.connect(self._toggle_window_position_pin)
+        if right_btn is not None:
+            with QSignalBlocker(right_btn):
+                right_btn.setChecked(False)
+            right_btn.setCheckable(False)
+            right_btn.setToolTip('Close main window')
+            right_btn.clicked.connect(self.close_main_window_to_tray)
+
+    def _refresh_pin_tab_edge_state(self, animated: bool = True):
+        if not hasattr(self, 'window_position_pin_button') or not hasattr(self, 'window_close_button'):
+            return
+        state = self._detect_pin_tab_edge_state()
+        is_expanded_window = not self._is_main_window_pinned_collapsed()
+        if state == getattr(self, '_pin_tab_edge_state', 'center') and is_expanded_window:
+            return
+        self._pin_tab_edge_state = state
+        self._bind_pin_tab_side_buttons_for_state(state)
+        expanded = state in {'left', 'right'} and is_expanded_window
+        for anim in list(getattr(self, '_pin_tab_side_button_anims', [])):
+            try:
+                anim.stop()
+            except Exception:
+                pass
+        self._pin_tab_side_button_anims = []
+        self._animate_pin_tab_spacing(expanded, animated)
+        self._animate_pin_tab_side_button(
+            self.window_position_pin_button,
+            getattr(self, '_pin_tab_position_opacity', None),
+            expanded,
+            animated,
+        )
+        self._animate_pin_tab_side_button(
+            self.window_close_button,
+            getattr(self, '_pin_tab_close_opacity', None),
+            expanded,
+            animated,
+        )
 
     def _set_top_chrome_button_theme(self, force_dark: bool):
         for btn in (
@@ -30515,8 +31571,21 @@ class MyWidget(QWidget):  # 主窗口
         self.hide()
 
     def show_main_window_from_tray(self):
+        edge_anim = getattr(self, '_edge_auto_hide_animation', None)
+        if edge_anim is not None:
+            edge_anim.stop()
+        main_anim = getattr(self, '_main_window_animation', None)
+        if main_anim is not None:
+            main_anim.stop()
+        self._edge_auto_hidden_side = ''
+        self._edge_auto_hidden_screen_geo = None
+        self._edge_auto_hide_animating = False
+        self._edge_auto_showing = False
+        self._edge_auto_hide_suspended = False
+        self._collapse_pin_tab_side_buttons(animated=True)
+        self._pin_tab_force_center_until_move_finish = True
         self.i = 1
-        self.pin_a_tab()
+        self.pin_a_tab(target_geometry=self._normal_window_restore_geometry())
 
     def assigntoall(self):
         cmd = """osascript -e '''
@@ -30565,10 +31634,15 @@ end run'''"""
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragPosition = None
+            self._refresh_pin_tab_edge_state(animated=True)
+            self._remember_normal_window_geometry()
             self._schedule_edge_auto_hide_check()
         super().mouseReleaseEvent(event)
 
     def enterEvent(self, event):
+        timer = getattr(self, '_edge_auto_hide_check_timer', None)
+        if timer is not None:
+            timer.stop()
         if getattr(self, '_edge_auto_hidden_side', ''):
             self._show_window_from_screen_edge()
         super().enterEvent(event)
@@ -30601,6 +31675,8 @@ end run'''"""
     def moveEvent(self, event):
         super().moveEvent(event)
         self._relayout_background_vision_toasts()
+        self._refresh_pin_tab_edge_state(animated=True)
+        self._remember_normal_window_geometry()
         if (
             not bool(getattr(self, '_edge_auto_hide_animating', False))
             and not bool(getattr(self, '_window_position_pinned', False))
@@ -30639,7 +31715,7 @@ end run'''"""
     # QWebEngineView's Chromium layer intercepts drags before child-level event
     # filters can see them, so we catch everything here on the top-level window.
     def _is_assistant_tab(self) -> bool:
-        return self.stacked_widget.currentIndex() == 1
+        return self.stacked_widget.currentIndex() == TAB_API
 
     def _is_external_prompt_drop_target(self) -> bool:
         panel, _dock = self._current_external_prompt_pair() if hasattr(self, 'stacked_widget') else (None, None)
@@ -30774,7 +31850,7 @@ end run'''"""
         self.real2.setHtml(self.welcome_html())
         self.real1.setVisible(False)
         self.real2.setVisible(True)
-        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
 
     def render_stream_preview(self, text: str):
         self._reset_structured_transfer_state()
@@ -30852,7 +31928,7 @@ end run'''"""
         self.real1.clear()
         self.real1.setVisible(False)
         self.real2.setVisible(True)
-        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
         return True
 
     def flush_chat_stream_preview(self):
@@ -31435,7 +32511,6 @@ end run'''"""
             pass
         self.btn_sub1.setText('🔺 Send')
         self.btn_sub1.clicked.connect(self.SendX)
-        self.btn_sub1.setShortcut("Ctrl+Return")
         self.btn_sub1.setDisabled(False)
 
     def StopX(self):
@@ -31638,14 +32713,14 @@ end run'''"""
 
     def _attach_screenshot_to_current_tab_and_send(self, path: str):
         current_index = self.stacked_widget.currentIndex()
-        if current_index == 1:
+        if current_index == TAB_API:
             self._attachment_tray.add_file(path)
             self._attachment_tray.show_drop_hint(False)
             self._show_tray_animated()
             self._force_send_blank_prompt_once = True
             QTimer.singleShot(0, self.SendX)
             return
-        if current_index in (0, 2):
+        if current_index in EXTERNAL_PROMPT_TAB_INDICES:
             panel, dock = self._external_prompt_panel_for_index(current_index)
             if panel is not None and dock is not None:
                 dock.add_files_instant([path])
@@ -31654,7 +32729,7 @@ end run'''"""
                 self._force_web_auto_send_once = True
                 QTimer.singleShot(180, lambda tab=current_index: self.SendWebX(tab_index=tab))
             return
-        if current_index == 3:
+        if current_index == TAB_TERMINAL:
             terminal = getattr(self, 'terminal_widget', None)
             if terminal is not None and hasattr(terminal, 'add_context_files'):
                 terminal.add_context_files([path])
@@ -31748,7 +32823,7 @@ end run'''"""
         self.real1.clear()
         self.real1.setVisible(False)
         self.real2.setVisible(True)
-        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
 
     def on_async_render_failed(self, payload: dict):
         request_id = int(payload.get('request_id', 0) or 0)
@@ -31772,7 +32847,7 @@ end run'''"""
         self.real1.clear()
         self.real1.setVisible(False)
         self.real2.setVisible(True)
-        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
 
     def on_async_chat_finished(self, payload: dict):
         if not self._active_chat_request:
@@ -31991,10 +33066,10 @@ end run'''"""
         self.activateWindow()
         self.raise_()
         tab = self.stacked_widget.currentIndex()
-        if tab == 1:
+        if tab == TAB_API:
             self.text1.setPlainText(composed)
             self.SendX()
-        elif tab in (0, 2):
+        elif tab in EXTERNAL_PROMPT_TAB_INDICES:
             _panel, dock = self._external_prompt_panel_for_index(tab)
             if dock is not None:
                 dock.prompt_edit.setPlainText(composed)
@@ -32083,7 +33158,6 @@ end run'''"""
         # Switch btn_sub1 to Stop mode while generating
         self.btn_sub1.clicked.disconnect()
         self.btn_sub1.setText('⛔️ Stop')
-        self.btn_sub1.setShortcut("")          # clear shortcut — Ctrl+Return shouldn't send again
         self.btn_sub1.clicked.connect(self.StopX)
         # btn_sub1 stays enabled so the user can click to stop at any time
 
@@ -32481,7 +33555,7 @@ end run'''"""
             display_prefix_map=display_prefix_map,
         )
 
-    def pin_a_tab(self):
+    def pin_a_tab(self, target_geometry: QRect | None = None):
         SCREEN_WEIGHT = int(self.screen().availableGeometry().width())
         SCREEN_HEIGHT = int(self.screen().availableGeometry().height())
         x_center = 0
@@ -32489,9 +33563,7 @@ end run'''"""
         if self.i % 2 == 1:
             accent = get_accent_color_hex()
             btna4.setChecked(True)
-            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
-            self.window_position_pin_button.show()
-            self.window_close_button.show()
+            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
             self.pin_tab_row.setFixedHeight(12)
             self.pin_tab_row.setMaximumWidth(16777215)
             self.window_position_pin_button.set_diameter(12)
@@ -32508,8 +33580,12 @@ end run'''"""
                         color: #FFFFFF''')
             self.qw3.setVisible(True)
             self.setFixedSize(540, 960)
-            x_center = int((SCREEN_WEIGHT / 2) + (self.width() / 2))
-            y_center = int((SCREEN_HEIGHT - self.height()) // 4 * 3)
+            if isinstance(target_geometry, QRect):
+                x_center = int(target_geometry.x())
+                y_center = int(target_geometry.y())
+            else:
+                x_center = int((SCREEN_WEIGHT / 2) + (self.width() / 2))
+                y_center = int((SCREEN_HEIGHT - self.height()) // 4 * 3)
         if self.i % 2 == 0:
             btna4.setChecked(False)
             self.drawing_layer.setVisible(False)
@@ -32532,6 +33608,7 @@ end run'''"""
             y_center = int(SCREEN_HEIGHT - 50)
 
         self.move_window(x_center, y_center)
+        self._refresh_pin_tab_edge_state(animated=True)
         self.show()
         self._schedule_background_vision_toast_relayout()
 
@@ -33876,7 +34953,7 @@ end run'''"""
         self.real1.clear()
         self.real1.setVisible(False)
         self.real2.setVisible(True)
-        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
 
     def _materialize_legacy_messages_for_transfer(self, output_text: str) -> list[dict]:
         messages = parse_legacy_chat_history_markdown(output_text)
@@ -33958,7 +35035,7 @@ end run'''"""
         self.real1.clear()
         self.real1.setVisible(False)
         self.real2.setVisible(True)
-        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+        self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
         self._pending_real2_scroll = True
         self.real2.setHtml(render_structured_transfer_editor_html(self._structured_transfer_messages, is_dark_theme(app)))
         self._structured_transfer_autosave_timer.start()
@@ -34044,7 +35121,7 @@ end run'''"""
             self.real1.clear()
             self.real1.setVisible(False)
             self.real2.setVisible(True)
-            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
             self._replace_transfer_editor_with_display_messages(messages)
 
         self._collect_structured_transfer_edits(finish, clear_dirty=True)
@@ -34065,14 +35142,14 @@ end run'''"""
         if self.trans % 2 == 0: # html
             self.real1.setVisible(False)
             self.real2.setVisible(True)
-            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
             self.real1.setReadOnly(True)
             self._disconnect_transfer_plaintext_save()
             self.render_final_output(AllText, history_messages=history_messages or None)
         else: # text
             self.real1.setVisible(False)
             self.real2.setVisible(True)
-            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == 1)
+            self.drawing_layer.setVisible(self.stacked_widget.currentIndex() == TAB_API)
             self.real1.setReadOnly(True)
             self._disconnect_transfer_plaintext_save()
 
@@ -34142,7 +35219,7 @@ end run'''"""
         app.quit()
 
 
-class SettingsPanel(QWidget):  # Customization settings
+class SettingsPanel(SmoothPanelWidget):  # Customization settings
     close_requested = pyqtSignal()
     userscripts_changed = pyqtSignal()
 
@@ -34166,7 +35243,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self._code_runner_records = []
         self._online_memory_updating = False
         self._online_memory_sources = []
-        self._online_memory_route_from = ONLINE_MEMORY_LOCAL_ID
+        self._online_memory_route_from = [ONLINE_MEMORY_LOCAL_ID]
         self._online_memory_route_to = [ONLINE_MEMORY_LOCAL_ID]
         self._online_memory_rule_key = 'read_prompt'
         self._online_memory_views = {}
@@ -34690,6 +35767,11 @@ class SettingsPanel(QWidget):  # Customization settings
             'online_memory_route_to': normalize_online_memory_route_to(
                 self._online_memory_route_to,
                 self._current_online_memory_sources(),
+                excluded=set(normalize_online_memory_route_from(
+                    self._online_memory_route_from,
+                    self._current_online_memory_sources(),
+                )),
+                allow_empty=True,
             ),
             'ui_shortcut': ui_shortcut,
             'same_position_screenshot_shortcut': same_position_screenshot_shortcut,
@@ -35240,7 +36322,16 @@ class SettingsPanel(QWidget):  # Customization settings
         self._online_memory_updating = True
         endpoints = self._current_online_memory_sources()
         self._online_memory_route_from = normalize_online_memory_route_from(self._online_memory_route_from, endpoints)
-        self._online_memory_route_to = normalize_online_memory_route_to(self._online_memory_route_to, endpoints)
+        self._online_memory_route_to = normalize_online_memory_route_to(
+            self._online_memory_route_to,
+            endpoints,
+            excluded=set(self._online_memory_route_from),
+            allow_empty=True,
+        )
+        if not self._online_memory_route_to:
+            route_ids = [ONLINE_MEMORY_LOCAL_ID] + [str(record.get('id', '') or '') for record in endpoints]
+            fallback_to = next((endpoint_id for endpoint_id in route_ids if endpoint_id and endpoint_id not in set(self._online_memory_route_from)), '')
+            self._online_memory_route_to = [fallback_to] if fallback_to else []
         route_items = [{'id': ONLINE_MEMORY_LOCAL_ID, 'label': 'Local Broccoli Memory', 'enabled': True}]
         for record in endpoints:
             route_items.append({
@@ -35250,36 +36341,46 @@ class SettingsPanel(QWidget):  # Customization settings
             })
         self.online_memory_from_list_widget.clear()
         self.online_memory_to_list_widget.clear()
+        from_ids = set(self._online_memory_route_from)
+        to_ids = set(self._online_memory_route_to)
         for item_data in route_items:
             endpoint_id = item_data['id']
             label = item_data['label'] if item_data['enabled'] else f"{item_data['label']} (disabled)"
             from_item = QListWidgetItem(label)
             from_item.setData(Qt.ItemDataRole.UserRole, endpoint_id)
-            from_item.setFlags(from_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            from_item.setCheckState(Qt.CheckState.Checked if endpoint_id == self._online_memory_route_from else Qt.CheckState.Unchecked)
+            from_flags = from_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            if endpoint_id in to_ids:
+                from_flags &= ~Qt.ItemFlag.ItemIsEnabled
+            from_item.setFlags(from_flags)
+            from_item.setCheckState(Qt.CheckState.Checked if endpoint_id in from_ids else Qt.CheckState.Unchecked)
             self.online_memory_from_list_widget.addItem(from_item)
             to_item = QListWidgetItem(label)
             to_item.setData(Qt.ItemDataRole.UserRole, endpoint_id)
-            to_item.setFlags(to_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-            to_item.setCheckState(Qt.CheckState.Checked if endpoint_id in self._online_memory_route_to else Qt.CheckState.Unchecked)
+            to_flags = to_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            if endpoint_id in from_ids:
+                to_flags &= ~Qt.ItemFlag.ItemIsEnabled
+            to_item.setFlags(to_flags)
+            to_item.setCheckState(Qt.CheckState.Checked if endpoint_id in to_ids else Qt.CheckState.Unchecked)
             self.online_memory_to_list_widget.addItem(to_item)
         self._online_memory_updating = previous
 
     def _on_online_memory_route_from_changed(self, item: QListWidgetItem):
         if self._online_memory_updating or item is None:
             return
-        endpoint_id = str(item.data(Qt.ItemDataRole.UserRole) or '')
-        if item.checkState() != Qt.CheckState.Checked:
-            self._refresh_online_memory_route_lists()
-            return
-        self._online_memory_route_from = endpoint_id
-        previous = self._online_memory_updating
-        self._online_memory_updating = True
+        selected = []
         for index in range(self.online_memory_from_list_widget.count()):
             current = self.online_memory_from_list_widget.item(index)
-            if current is not item:
-                current.setCheckState(Qt.CheckState.Unchecked)
-        self._online_memory_updating = previous
+            if current is not None and current.checkState() == Qt.CheckState.Checked:
+                selected.append(str(current.data(Qt.ItemDataRole.UserRole) or ''))
+        endpoints = self._current_online_memory_sources()
+        self._online_memory_route_from = normalize_online_memory_route_from(selected, endpoints)
+        self._online_memory_route_to = normalize_online_memory_route_to(
+            self._online_memory_route_to,
+            endpoints,
+            excluded=set(self._online_memory_route_from),
+            allow_empty=True,
+        )
+        self._refresh_online_memory_route_lists()
         self._mark_dirty_if_needed()
 
     def _on_online_memory_route_to_changed(self, _item: QListWidgetItem):
@@ -35290,7 +36391,12 @@ class SettingsPanel(QWidget):  # Customization settings
             item = self.online_memory_to_list_widget.item(index)
             if item is not None and item.checkState() == Qt.CheckState.Checked:
                 selected.append(str(item.data(Qt.ItemDataRole.UserRole) or ''))
-        self._online_memory_route_to = normalize_online_memory_route_to(selected, self._current_online_memory_sources())
+        self._online_memory_route_to = normalize_online_memory_route_to(
+            selected,
+            self._current_online_memory_sources(),
+            excluded=set(self._online_memory_route_from),
+            allow_empty=True,
+        )
         if not selected:
             self._refresh_online_memory_route_lists()
         self._mark_dirty_if_needed()
@@ -35368,7 +36474,7 @@ class SettingsPanel(QWidget):  # Customization settings
         panel = None
         try:
             index = window.stacked_widget.currentIndex()
-            panel = window.ai_web_panel if index == 0 else (window.localhost_panel if index == 2 else None)
+            panel = window.ai_web_panel if index == TAB_WEB else (window.localhost_panel if index == TAB_LOCALHOST else None)
         except Exception:
             panel = None
         if panel is None:
@@ -35593,6 +36699,8 @@ class SettingsPanel(QWidget):  # Customization settings
         self.settings_store['globals']['online_memory_route_to'] = normalize_online_memory_route_to(
             self._online_memory_route_to,
             self._current_online_memory_sources(),
+            excluded=set(self.settings_store['globals']['online_memory_route_from']),
+            allow_empty=True,
         )
         try:
             save_settings_store(self.settings_store)
@@ -35891,7 +36999,7 @@ class SettingsPanel(QWidget):  # Customization settings
             main_text = str(main_text or '').strip()
             edits_text = str(edits_text or '').strip()
             if main_text and edits_text:
-                callback(main_text + '\n\n---\n\n零碎记忆:\n' + edits_text)
+                callback(main_text + '\n\n---\n\nPoints:\n' + edits_text)
             elif main_text:
                 callback(main_text)
             else:
@@ -36035,7 +37143,7 @@ class SettingsPanel(QWidget):  # Customization settings
             if about_text:
                 parts.append('More about you:\n' + about_text)
             if memories_text:
-                parts.append('零碎记忆:\n' + memories_text)
+                parts.append('Points:\n' + memories_text)
             callback('\n\n---\n\n'.join(parts))
 
         def after_first(result):
@@ -36336,51 +37444,77 @@ class SettingsPanel(QWidget):  # Customization settings
 
     def _sync_online_memory_route(self):
         endpoints = self._current_online_memory_sources()
-        from_id = normalize_online_memory_route_from(self._online_memory_route_from, endpoints)
-        to_ids = normalize_online_memory_route_to(self._online_memory_route_to, endpoints)
-        if from_id in self._online_memory_syncing_ids:
+        from_ids = normalize_online_memory_route_from(self._online_memory_route_from, endpoints)
+        to_ids = normalize_online_memory_route_to(
+            self._online_memory_route_to,
+            endpoints,
+            excluded=set(from_ids),
+            allow_empty=True,
+        )
+        if not from_ids:
+            self.online_memory_status_label.setText('Sync failed: no source selected.')
             return
-        self._online_memory_syncing_ids.add(from_id)
-        self.online_memory_status_label.setText(f'Syncing from {self._online_memory_route_label(from_id)}...')
+        if not to_ids:
+            self.online_memory_status_label.setText('Sync failed: no target selected.')
+            return
+        sync_key = 'route:' + '|'.join(from_ids) + '->' + '|'.join(to_ids)
+        if sync_key in self._online_memory_syncing_ids:
+            return
+        self._online_memory_syncing_ids.add(sync_key)
+        results = []
 
-        def after_read(memory_text: str):
-            text = str(memory_text or '').strip()
-            if not text:
-                self.online_memory_status_label.setText('Sync failed: source returned no memory text.')
-                self._online_memory_syncing_ids.discard(from_id)
+        def read_next(index: int = 0):
+            if index >= len(from_ids):
+                finish_reads()
                 return
+            source_id = from_ids[index]
+            self.online_memory_status_label.setText(
+                f'Reading {index + 1}/{len(from_ids)}: {self._online_memory_route_label(source_id)}...'
+            )
 
-            def finish_sync(text_to_write: str):
-                text_to_write = str(text_to_write or '').strip()
-                if not text_to_write:
-                    self.online_memory_status_label.setText('Sync failed: source returned no memory text.')
-                    self._online_memory_syncing_ids.discard(from_id)
-                    return
-                try:
-                    for to_id in to_ids:
-                        self._write_online_memory_endpoint(to_id, text_to_write)
-                    self.online_memory_status_label.setText(
-                        f'Synced {self._online_memory_route_label(from_id)} to '
-                        + ', '.join(self._online_memory_route_label(item) for item in to_ids)
-                        + '.'
-                    )
-                    self._persist_online_memory_runtime_state()
-                finally:
-                    self._online_memory_syncing_ids.discard(from_id)
+            def after_read(memory_text: str, sid=source_id):
+                text = str(memory_text or '').strip()
+                results.append({
+                    'id': sid,
+                    'text': text,
+                    'ok': bool(text),
+                })
+                read_next(index + 1)
 
-            if from_id != ONLINE_MEMORY_LOCAL_ID and ONLINE_MEMORY_LOCAL_ID in to_ids:
-                _row, merge_record = self._online_memory_source_by_id(from_id)
-                if merge_record is not None:
-                    self._merge_online_memory_text_async(
-                        self.memory_text_edit.toPlainText(),
-                        text,
-                        merge_record,
-                        finish_sync,
-                    )
-                    return
-            finish_sync(text)
+            self._read_online_memory_endpoint(source_id, after_read)
 
-        self._read_online_memory_endpoint(from_id, after_read)
+        def finish_reads():
+            successful = [item for item in results if item.get('ok')]
+            if not successful:
+                self.online_memory_status_label.setText('Sync failed: no source returned memory text.')
+                self._online_memory_syncing_ids.discard(sync_key)
+                return
+            if len(successful) == 1:
+                text_to_write = str(successful[0].get('text', '') or '').strip()
+            else:
+                blocks = []
+                for item in successful:
+                    label = self._online_memory_route_label(str(item.get('id', '') or ''))
+                    blocks.append(f"[Memory from {label}]\n{str(item.get('text', '') or '').strip()}")
+                text_to_write = '\n\n'.join(blocks).strip()
+            try:
+                for to_id in to_ids:
+                    self._write_online_memory_endpoint(to_id, text_to_write)
+                failed_count = len(results) - len(successful)
+                status_prefix = f'Combined {len(successful)}/{len(results)} source memories'
+                if failed_count:
+                    status_prefix += f' ({failed_count} failed)'
+                self.online_memory_status_label.setText(
+                    status_prefix
+                    + ' and synced to '
+                    + ', '.join(self._online_memory_route_label(item) for item in to_ids)
+                    + '.'
+                )
+                self._persist_online_memory_runtime_state()
+            finally:
+                self._online_memory_syncing_ids.discard(sync_key)
+
+        read_next()
 
     def _pull_online_memory_source(self, source_id: str):
         if source_id in self._online_memory_syncing_ids:
@@ -36471,9 +37605,13 @@ class SettingsPanel(QWidget):  # Customization settings
         self._theme_updating = True
         dark = self._force_dark or is_dark_theme(app)
         try:
+            self.set_smooth_panel_background(
+                "#2D2D2D" if dark else "#FFFFFF",
+                "#2D2D2D" if dark else "#ECECEC",
+                59,
+            )
             self.setStyleSheet(
-                f'QWidget#SettingsPanel {{ border: 1px solid {"#2D2D2D" if dark else "#ECECEC"}; '
-                f'background: {"#2D2D2D" if dark else "#FFFFFF"}; border-radius: 26px; }}'
+                'QWidget#SettingsPanel { border: none; background: transparent; }'
                 f'QWidget#SettingsPanel QLabel {{ color: {"#F2F2F7" if dark else "#20242B"}; '
                 f'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }}'
                 f'QWidget#SettingsPanel QCheckBox {{ color: {"#F2F2F7" if dark else "#20242B"}; '
@@ -36618,7 +37756,7 @@ class SettingsPanel(QWidget):  # Customization settings
         item = self.memory_list_widget.itemAt(pos)
         if item is None:
             return
-        menu = QMenu(self)
+        menu = style_broccoli_context_menu(QMenu(self))
         append_action = menu.addAction('Append to permanent memory')
         edit_action = menu.addAction('Edit')
         delete_action = menu.addAction('Delete')
@@ -37111,7 +38249,7 @@ class SettingsPanel(QWidget):  # Customization settings
         self._replace_external_context_item(item, record)
 
     def _show_external_context_new_menu(self):
-        menu = QMenu(self)
+        menu = style_broccoli_context_menu(QMenu(self))
         folder_action = menu.addAction('Local folder')
         file_action = menu.addAction('Local file')
         menu.addSeparator()
@@ -38703,6 +39841,11 @@ class SettingsPanel(QWidget):  # Customization settings
                 'online_memory_route_to': normalize_online_memory_route_to(
                     self._online_memory_route_to,
                     self._current_online_memory_sources(),
+                    excluded=set(normalize_online_memory_route_from(
+                        self._online_memory_route_from,
+                        self._current_online_memory_sources(),
+                    )),
+                    allow_empty=True,
                 ),
                 'ui_shortcut': self.le_ui.text().strip(),
                 'same_position_screenshot_shortcut': self.le_same_position_screenshot.text().strip(),
@@ -38858,24 +40001,20 @@ style_sheet_ori = '''
         border-radius: 9px;
 }
     QWidget#Main-1 {
-        border: 1px solid #ECECEC;
-        background: #FFFFFF;
-        border-radius: 26px;
+        border: none;
+        background: transparent;
 }
     QWidget#SettingsPanel {
-        border: 1px solid #ECECEC;
-        background: #FFFFFF;
-        border-radius: 26px;
+        border: none;
+        background: transparent;
 }
     QWidget#HistoryPanel {
-        border: 1px solid #ECECEC;
-        background: #FFFFFF;
-        border-radius: 26px;
+        border: none;
+        background: transparent;
 }
     QWidget#LinksPanel {
-        border: 1px solid #ECECEC;
-        background: #FFFFFF;
-        border-radius: 26px;
+        border: none;
+        background: transparent;
 }
     QWidget#SettingsScrim {
         background: rgba(0, 0, 0, 110);
@@ -38947,24 +40086,20 @@ style_sheet_dark = '''
         border-radius: 9px;
 }
     QWidget#Main-1 {
-        border: 1px solid #2D2D2D;
-        background: #2D2D2D;
-        border-radius: 26px;
+        border: none;
+        background: transparent;
 }
     QWidget#SettingsPanel {
-        border: 1px solid #2D2D2D;
-        background: #2D2D2D;
-        border-radius: 26px;
+        border: none;
+        background: transparent;
 }
     QWidget#HistoryPanel {
-        border: 1px solid #2D2D2D;
-        background: #2D2D2D;
-        border-radius: 26px;
+        border: none;
+        background: transparent;
 }
     QWidget#LinksPanel {
-        border: 1px solid #2D2D2D;
-        background: #2D2D2D;
-        border-radius: 26px;
+        border: none;
+        background: transparent;
 }
     QWidget#SettingsScrim {
         background: rgba(0, 0, 0, 110);
@@ -39083,6 +40218,7 @@ if __name__ == '__main__':
     w3.apply_show_on_all_spaces_settings(action7.isChecked())
     set_dock_icon_visible(action8.isChecked())
     btna4.triggered.connect(w3.pin_a_tab)
+    btna_same_position_screenshot.triggered.connect(w3.capture_same_position_screenshot_and_send)
     hotkey_manager.ui_hotkey_pressed.connect(w3.pin_a_tab)
     hotkey_manager.same_position_screenshot_pressed.connect(w3.capture_same_position_screenshot_and_send)
     app.aboutToQuit.connect(hotkey_manager.stop)
