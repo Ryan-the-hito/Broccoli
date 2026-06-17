@@ -1,15 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
-
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from pathlib import Path
 
+SPEC_DIR = Path(SPECPATH)
 
 os.makedirs(os.path.join(SPECPATH, 'build', 'Broccoli'), exist_ok=True)
 
 block_cipher = None
 
-__version__ = '2.0.9'
+__version__ = '2.0.10'
 
 browser_automation_hiddenimports = (
     collect_submodules('browser_use')
@@ -71,6 +72,8 @@ resource_datas = [
     ('UI_short.txt', '.'),
     ('showhide.txt', '.'),
     ('/Users/ryanshen/Documents/A-workingfilewithp3.11/.venv/lib/python3.11/site-packages/jieba/', 'jieba'),
+    (str(SPEC_DIR / 'vendor'), 'vendor'),
+    ('list.png', '.'),
     *browser_automation_datas,
 ]
 
