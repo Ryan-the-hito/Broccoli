@@ -247,10 +247,29 @@ def show_web_view_offscreen(view) -> None:
                 | Qt.WindowType.WindowDoesNotAcceptFocus
             )
         view.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        # Invisibility for the fullscreen-Space case, done with Qt-only APIs so we
+        # never touch a manually-resolved NSWindow. These views are children of the
+        # main window; resolving their "own" NSWindow via winId() is unreliable for
+        # QWebEngineView (nested native views) and previously hit the MAIN window's
+        # NSWindow instead -- making the main window click-through and opaque-black.
+        # setWindowOpacity()/WA_TransparentForMouseEvents act on the view's own
+        # window through Qt's own mapping, so they cannot affect the main window.
+        #   - WA_TransparentForMouseEvents: real clicks fall through if the view is
+        #     clamped on-screen inside a fullscreen Space.
+        #   - setWindowOpacity(0): paints nothing while staying mapped, so Blink
+        #     keeps rendering/streaming. The app drives sends via JS dispatchEvent /
+        #     QApplication.sendEvent (explicit delivery), so neither attribute nor
+        #     opacity affects sending or reading content.
+        # Re-applied every call because setParent() (online-memory re-parenting)
+        # drops them just like the window flags above.
+        view.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        view.setWindowOpacity(0.0)
         view.move(-32000, -32000)
         view.show()
         view.move(-32000, -32000)
         view.lower()
+        # Re-assert opacity after show(): some Qt paths reset it on the first map.
+        view.setWindowOpacity(0.0)
     except Exception:
         logging.exception('Failed to show web view off-screen')
         try:
@@ -479,7 +498,7 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.10'
+VERSION = '2.0.11'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
 BUNDLED_RESOURCES_DIR = _resolve_bundled_resources_dir()
@@ -20820,6 +20839,45 @@ def _agent_cli_iso_from_timestamp(value) -> str:
         return ''
 
 
+_LOGIN_SHELL_PATH_CACHE: dict[str, str] = {}
+
+
+def login_shell_search_path() -> str:
+    """PATH as seen by the terminal's login+interactive shell.
+
+    macOS GUI apps launched from Finder/Dock inherit a minimal PATH and never
+    source the user's shell rc files, so shutil.which() against os.environ
+    misses tools like codex / claude that live in ~/.local/bin, Homebrew, or
+    npm global bins. The terminal panel runs the user's shell (see
+    _shell_launch_args), which rebuilds the full PATH -- mirror that here so the
+    availability gate matches what the terminal can actually launch. Cached per
+    shell so the cost (one shell startup) is paid at most once.
+    """
+    try:
+        globals_store = load_settings_store().get('globals', {})
+    except Exception:
+        globals_store = {}
+    use_bash = bool(globals_store.get('terminal_use_bash', False))
+    shell_exec = '/bin/bash' if use_bash else '/bin/zsh'
+    cached = _LOGIN_SHELL_PATH_CACHE.get(shell_exec)
+    if cached is None:
+        resolved = ''
+        try:
+            proc = subprocess.run(
+                [shell_exec, '-lic', 'printf %s "$PATH"'],
+                capture_output=True, text=True, timeout=5,
+            )
+            resolved = (proc.stdout or '').strip()
+        except Exception:
+            resolved = ''
+        env_path = os.environ.get('PATH', '')
+        # Union the shell PATH with the process PATH so we never lose entries.
+        merged = os.pathsep.join(p for p in (resolved, env_path) if p)
+        cached = merged or env_path
+        _LOGIN_SHELL_PATH_CACHE[shell_exec] = cached
+    return cached
+
+
 def agent_cli_executable_for_kind(kind: str) -> str:
     kind = str(kind or '').strip().lower()
     if kind == 'claude_tui':
@@ -20829,12 +20887,14 @@ def agent_cli_executable_for_kind(kind: str) -> str:
         globals_store = load_settings_store().get('globals', {})
     except Exception:
         globals_store = {}
+    search_path = login_shell_search_path()
     if kind == 'codex':
         configured = str(globals_store.get('codex_cli_command', '') or '').strip()
-        return configured or shutil.which('codex') or 'codex'
+        return configured or shutil.which('codex', path=search_path) or 'codex'
     if kind == 'claude':
         configured = str(globals_store.get('claude_code_cli_command', '') or '').strip()
-        return configured or shutil.which('claude') or shutil.which('claude-code') or 'claude'
+        return (configured or shutil.which('claude', path=search_path)
+                or shutil.which('claude-code', path=search_path) or 'claude')
     return ''
 
 
@@ -20845,7 +20905,7 @@ def agent_cli_command_available(kind: str) -> bool:
     first = shlex.split(command)[0] if command.strip() else ''
     if os.path.isabs(first):
         return os.path.exists(first)
-    return bool(shutil.which(first))
+    return bool(shutil.which(first, path=login_shell_search_path()))
 
 
 def agent_cli_start_command(kind: str, resume_id: str = '') -> str:
@@ -28853,7 +28913,13 @@ class AgentConversationShelf(QWidget):
 
     def __init__(self, parent=None):
         self._owner_window = parent
-        super().__init__(parent)
+        # Independent top-level window (parent=None), mirroring BackgroundVisionToastHost.
+        # If it keeps the main window as its QWidget parent, it becomes a child NSWindow
+        # and winId().window() resolves back to the MAIN window's NSWindow -- so applying
+        # collectionBehavior for the fullscreen-Space fix poisoned the main window
+        # (opaque black corners + dead clicks). Owner is still tracked via _owner_window
+        # for restacking.
+        super().__init__(None)
         self._records = []
         self._badges: dict[str, AgentConversationBadge] = {}
         self._badge_anims: dict[str, QPropertyAnimation] = {}
@@ -28877,11 +28943,23 @@ class AgentConversationShelf(QWidget):
     def restack_with_owner(self):
         if not self.isVisible():
             return
+        owner = getattr(self, '_owner_window', None)
+        # Skip the ENTIRE restack while the owner is hiding to / resting at a screen
+        # edge. The shelf is an independent top-level window, so raising it (self.raise_)
+        # AND/OR raising the owner re-activates the main window -> its focusInEvent fires
+        # -> _show_window_from_screen_edge() pops the just-hidden window straight back
+        # out, flapping in a loop. The shelf is WindowStaysOnTop and already visible, so
+        # not re-raising it during edge-hide is fine.
+        edge_hidden = bool(
+            getattr(owner, '_edge_auto_hidden_side', '')
+            or getattr(owner, '_edge_auto_hide_animating', False)
+        )
+        if edge_hidden:
+            return
         try:
             self.raise_()
         except Exception:
             pass
-        owner = getattr(self, '_owner_window', None)
         if owner is not None:
             try:
                 owner.raise_()
@@ -31026,11 +31104,60 @@ class MyWidget(QWidget):  # 主窗口
         except Exception:
             return False
 
+    def _apply_mac_space_behavior_to_widget(self, widget, enabled: bool | None = None) -> bool:
+        # collectionBehavior is per-NSWindow and is NOT inherited from the owner
+        # window, so any standalone top-level (e.g. the agent conversation shelf)
+        # must be given the same CanJoinAllSpaces | FullScreenAuxiliary bits as the
+        # main window or it stays bound to its origin Space and vanishes when the
+        # user switches to another app's fullscreen Space.
+        if sys.platform != 'darwin' or objc is None or widget is None:
+            return False
+        if enabled is None:
+            enabled = bool(getattr(self, '_show_on_all_spaces', False))
+        bits = self._mac_space_behavior_bits()
+        if not bits:
+            return False
+        try:
+            native_view = objc.objc_object(c_void_p=int(widget.winId()))
+            ns_window = native_view.window() if hasattr(native_view, 'window') else None
+        except Exception:
+            return False
+        if ns_window is None:
+            return False
+        # Safety net: a child-of-main widget can resolve winId().window() back to
+        # the MAIN window's NSWindow. Never mutate the main window through this
+        # helper -- that would silently change the main window's behavior. Skip if
+        # the resolved window is the main window's own NSWindow.
+        try:
+            main_ns_window = self._native_ns_window()
+            if main_ns_window is not None and ns_window == main_ns_window:
+                return False
+        except Exception:
+            pass
+        try:
+            behavior = int(ns_window.collectionBehavior())
+            behavior &= ~self._mac_move_to_active_space_bit()
+            if enabled:
+                behavior |= bits
+            else:
+                behavior &= ~bits
+            ns_window.setCollectionBehavior_(behavior)
+            return True
+        except Exception:
+            return False
+
+    def _apply_agent_conversation_shelf_space_behavior(self, enabled: bool | None = None) -> None:
+        shelf = getattr(self, 'agent_conversation_shelf', None)
+        if shelf is None:
+            return
+        self._apply_mac_space_behavior_to_widget(shelf, enabled)
+
     def apply_show_on_all_spaces_settings(self, enabled: bool | None = None):
         if enabled is None:
             enabled = bool(load_settings_store().get('globals', {}).get('show_on_all_spaces', False))
         self._show_on_all_spaces = bool(enabled)
         self._apply_mac_space_behavior(self._show_on_all_spaces)
+        self._apply_agent_conversation_shelf_space_behavior(self._show_on_all_spaces)
 
     def sync_show_on_all_spaces_action(self, enabled: bool):
         action = globals().get('action7')
@@ -32165,7 +32292,11 @@ class MyWidget(QWidget):  # 主窗口
         if not hasattr(self, '_selection_context_widgets'):
             self._selection_context_widgets = set()
         widgets = []
-        for name in ('real1', 'real2'):
+        # real2 (QWebEngineView) is wired separately to _show_real2_context_menu,
+        # which itself delegates to the selection menu when text is selected. Adding
+        # it here too would connect two slots to one customContextMenuRequested
+        # signal, making both menus pop up in sequence.
+        for name in ('real1',):
             widget = getattr(self, name, None)
             if widget is not None:
                 widgets.append(widget)
@@ -37719,6 +37850,11 @@ class MyWidget(QWidget):  # 主窗口
         shelf.resize(shelf_w, shelf_h)
         shelf.move(x, y)
         shelf.restack_with_owner()
+        # Mirror the main window's Space behavior so the shelf rides along into
+        # fullscreen Spaces instead of staying pinned to its origin Space. Safe to
+        # re-apply every refresh: collectionBehavior persists on the NSWindow and
+        # the call is a cheap no-op once set.
+        self._apply_agent_conversation_shelf_space_behavior()
 
     def _refresh_links_panel(self):
         record = self._load_active_conversation_record()
@@ -42118,6 +42254,10 @@ end run'''"""
         super().enterEvent(event)
 
     def focusInEvent(self, event):
+        # Reveal the edge-hidden window when it gains focus (e.g. Cmd-Tab back).
+        # The flap loop is prevented upstream in AgentConversationShelf.restack_with_owner,
+        # which no longer raises the shelf/owner while the window is edge-hidden, so the
+        # spurious activation bounce that previously re-triggered this no longer happens.
         if getattr(self, '_edge_auto_hidden_side', ''):
             self._show_window_from_screen_edge()
         super().focusInEvent(event)
@@ -42394,30 +42534,33 @@ end run'''"""
             self._real2_load_web_guarded(stack[idx + 1])
 
     def _show_real2_context_menu(self, pos):
+        global_pos = self.real2.mapToGlobal(pos)
+        # When text is selected, fall back to the original rich selection menu
+        # (Copy + route-to-prompt + outputs). The Back/Forward navigation menu is
+        # only for right-clicks with no selection.
+        page = self.real2.page()
+        has_selection = False
+        try:
+            has_selection = bool(
+                page is not None and page.hasSelection()
+                and str(page.selectedText() or '').strip()
+            )
+        except Exception:
+            has_selection = False
+        if has_selection:
+            self._handle_selection_context_menu_at(self.real2, global_pos)
+            return
         menu = style_broccoli_context_menu(QMenu(self))
         idx = int(getattr(self, '_real2_web_index', -1))
         stack = list(getattr(self, '_real2_web_stack', []) or [])
-        page = self.real2.page()
-        copy_action = None
-        try:
-            if page is not None and page.hasSelection():
-                copy_action = menu.addAction('Copy')
-                menu.addSeparator()
-        except Exception:
-            copy_action = None
         back_action = menu.addAction('Back')
         back_action.setEnabled(idx >= 0)
         forward_action = menu.addAction('Forward')
         forward_action.setEnabled(idx < len(stack) - 1)
-        chosen = menu.exec(self.real2.mapToGlobal(pos))
+        chosen = menu.exec(global_pos)
         if chosen is None:
             return
-        if copy_action is not None and chosen is copy_action:
-            try:
-                page.triggerAction(QWebEnginePage.WebAction.Copy)
-            except Exception:
-                pass
-        elif chosen == back_action:
+        if chosen == back_action:
             self._real2_go_back()
         elif chosen == forward_action:
             self._real2_go_forward()
