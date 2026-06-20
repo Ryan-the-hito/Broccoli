@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QTreeView, QSplitter, QGraphicsView,
                              QGraphicsScene, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsLineItem)
 from PyQt6.QtCore import Qt, QRect, QRectF, QPropertyAnimation, QParallelAnimationGroup, QVariantAnimation, QTimer, QThread, pyqtSignal, QObject, QEasingCurve, QPoint, QPointF, QUrl, QProcess, QEvent, QSize, QSignalBlocker
-from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem, QRegion, QLinearGradient, QShortcut, QKeySequence
+from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem, QRegion, QLinearGradient, QRadialGradient, QShortcut, QKeySequence
 import PyQt6.QtGui
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings
@@ -270,12 +270,149 @@ def show_web_view_offscreen(view) -> None:
         view.lower()
         # Re-assert opacity after show(): some Qt paths reset it on the first map.
         view.setWindowOpacity(0.0)
+        # Track for idle power management (freeze/discard when not in use).
+        register_offscreen_view(view)
     except Exception:
         logging.exception('Failed to show web view off-screen')
         try:
             view.hide()
         except Exception:
             pass
+
+
+# ── Idle power management for the off-screen @target / online-memory web views ──
+# These views are kept mapped + Active + visibility-spoofed so they render streamed
+# answers during a run; left like that they keep running rAF/timers/compositing
+# forever (the global --disable-*-throttling flags also stop Chromium from
+# backgrounding them) -> large idle battery drain. Solution: only keep a view Active
+# while a run holds it; after it goes idle, hide() + setLifecycleState(Frozen) (pauses
+# CPU/GPU, keeps DOM + login, instant wake), and after longer idle Discarded (frees
+# the renderer process; the next use re-shows + reloads). A view MUST be hidden before
+# freezing -- a visible page's recommendedState stays Active and the freeze is ignored.
+OFFSCREEN_VIEW_FREEZE_IDLE_MS = 45 * 1000        # idle this long -> Frozen
+OFFSCREEN_VIEW_DISCARD_IDLE_MS = 5 * 60 * 1000   # idle this long -> Discarded
+OFFSCREEN_VIEW_SWEEP_INTERVAL_MS = 15 * 1000     # how often the sweeper runs
+OFFSCREEN_VIEW_MAX_HOLD_MS = 5 * 60 * 1000       # leak recovery: force-release a stuck hold
+_OFFSCREEN_VIEW_REGISTRY: dict = {}
+
+
+def _offscreen_now_ms() -> int:
+    return int(time.monotonic() * 1000)
+
+
+def register_offscreen_view(view) -> None:
+    if view is None:
+        return
+    entry = _OFFSCREEN_VIEW_REGISTRY.get(id(view))
+    if entry is None:
+        _OFFSCREEN_VIEW_REGISTRY[id(view)] = {
+            'view': view, 'last_active_ms': _offscreen_now_ms(), 'holds': 0, 'held_since_ms': 0,
+        }
+    else:
+        entry['last_active_ms'] = _offscreen_now_ms()
+
+
+def _offscreen_set_state(view, name: str) -> None:
+    try:
+        state = WebViewPanel._page_lifecycle_state(name)
+        if state is not None:
+            WebViewPanel._set_view_lifecycle_state(view, state)
+    except Exception:
+        pass
+
+
+def wake_offscreen_view(view) -> None:
+    """Re-show off-screen + Active; reload if it had been Discarded. Call before use."""
+    if view is None:
+        return
+    was_discarded = False
+    try:
+        discarded = WebViewPanel._page_lifecycle_state('Discarded')
+        page = view.page()
+        was_discarded = discarded is not None and page is not None and page.lifecycleState() == discarded
+    except Exception:
+        was_discarded = False
+    show_web_view_offscreen(view)          # re-map off-screen (also registers / bumps last_active)
+    _offscreen_set_state(view, 'Active')
+    if was_discarded:
+        try:
+            view.reload()
+        except Exception:
+            pass
+
+
+def acquire_offscreen_view(view) -> None:
+    """Wake the view and pin it Active for the duration of a run."""
+    if view is None:
+        return
+    wake_offscreen_view(view)
+    entry = _OFFSCREEN_VIEW_REGISTRY.get(id(view))
+    if entry is not None:
+        if int(entry.get('holds', 0)) <= 0:
+            entry['held_since_ms'] = _offscreen_now_ms()
+        entry['holds'] = int(entry.get('holds', 0)) + 1
+        entry['last_active_ms'] = _offscreen_now_ms()
+
+
+def release_offscreen_view(view) -> None:
+    """Release a run's pin; the sweeper may freeze/discard it once idle."""
+    if view is None:
+        return
+    entry = _OFFSCREEN_VIEW_REGISTRY.get(id(view))
+    if entry is not None:
+        entry['holds'] = max(0, int(entry.get('holds', 0)) - 1)
+        entry['last_active_ms'] = _offscreen_now_ms()
+
+
+def sweep_offscreen_views() -> None:
+    """Freeze idle off-screen views, discard long-idle ones. Run on a timer."""
+    if not _OFFSCREEN_VIEW_REGISTRY:
+        return
+    try:
+        frozen = WebViewPanel._page_lifecycle_state('Frozen')
+        discarded = WebViewPanel._page_lifecycle_state('Discarded')
+    except Exception:
+        return
+    if frozen is None:
+        return
+    now = _offscreen_now_ms()
+    for key, entry in list(_OFFSCREEN_VIEW_REGISTRY.items()):
+        view = entry.get('view')
+        page = None
+        try:
+            page = view.page() if view is not None else None
+        except Exception:
+            page = None
+        if page is None:
+            _OFFSCREEN_VIEW_REGISTRY.pop(key, None)
+            continue
+        holds = int(entry.get('holds', 0))
+        if holds > 0:
+            # Leak recovery: a run that never released (crash / missing release) must
+            # not pin the view Active forever.
+            if now - int(entry.get('held_since_ms', now)) > OFFSCREEN_VIEW_MAX_HOLD_MS:
+                entry['holds'] = 0
+            else:
+                continue
+        idle = now - int(entry.get('last_active_ms', now))
+        try:
+            current = page.lifecycleState()
+        except Exception:
+            current = None
+        if discarded is not None and idle >= OFFSCREEN_VIEW_DISCARD_IDLE_MS:
+            if current != discarded:
+                try:
+                    view.hide()
+                except Exception:
+                    pass
+                _offscreen_set_state(view, 'Discarded')
+        elif idle >= OFFSCREEN_VIEW_FREEZE_IDLE_MS:
+            if current not in (frozen, discarded):
+                try:
+                    view.hide()
+                except Exception:
+                    pass
+                _offscreen_set_state(view, 'Frozen')
 
 
 def external_target_alias_slug(value: str, fallback: str = 'target') -> str:
@@ -498,9 +635,10 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.11'
+VERSION = '2.0.12'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
+DEFAULT_EDGE_TOGGLE_SHORTCUT = '<ctrl>+<alt>+n'
 BUNDLED_RESOURCES_DIR = _resolve_bundled_resources_dir()
 BROCCOLI_APPLICATION_SUPPORT_DIR = os.path.join(str(Path.home()), 'Library', 'Application Support', 'Broccoli')
 BROCCOLI_USER_RESOURCES_DIR = os.path.join(BROCCOLI_APPLICATION_SUPPORT_DIR, 'Resources')
@@ -6981,6 +7119,7 @@ def default_global_settings() -> dict:
         'languages': read_text_file(LANGUAGE_LIST_PATH, ''),
         'ui_shortcut': read_text_file(UI_SHORTCUT_PATH, DEFAULT_UI_SHORTCUT) or DEFAULT_UI_SHORTCUT,
         'same_position_screenshot_shortcut': DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT,
+        'edge_toggle_shortcut': DEFAULT_EDGE_TOGGLE_SHORTCUT,
         'pdf_max_pages': 10,
         'embedding_profile': '',
         'webfetch_download_path': '',
@@ -7060,6 +7199,12 @@ def load_settings_store() -> dict:
                     store['globals'].get(
                         'same_position_screenshot_shortcut',
                         globals_store['same_position_screenshot_shortcut'],
+                    )
+                ),
+                'edge_toggle_shortcut': safe_normalize_optional_shortcut_text(
+                    store['globals'].get(
+                        'edge_toggle_shortcut',
+                        globals_store['edge_toggle_shortcut'],
                     )
                 ),
                 'pdf_max_pages': int(store['globals'].get('pdf_max_pages', globals_store['pdf_max_pages'])),
@@ -12619,7 +12764,21 @@ class AsyncPreflightThread(threading.Thread):
             'result': None,
         }
         self.signals.external_target.emit(request)
-        if not request['event'].wait(max(60, int(request.get('timeout', 180) or 180) + 90)):
+        # The external web run governs its own completion: it keeps waiting while the
+        # answer streams (90s stall cap / up to EXTERNAL_TARGET_ABSOLUTE_MAX_MS ~15min)
+        # and sets this event on finish OR on its own internal timeout. The standalone
+        # @target path has NO outer cap, so this worker-side wait must be LONGER than
+        # that internal ceiling (+ open/ready/parse overhead); otherwise steps
+        # (compare/verify) abort with a premature generic timeout while the answer is
+        # still being produced -- the bug where @target works standalone but times out
+        # as a step. config_timeout+90 (the LLM-API timeout, default 60->150s) is kept
+        # only as a lower floor for callers that pass a larger explicit timeout.
+        wait_seconds = max(
+            60,
+            int(request.get('timeout', 180) or 180) + 90,
+            int(EXTERNAL_TARGET_ABSOLUTE_MAX_MS / 1000) + 120,
+        )
+        if not request['event'].wait(wait_seconds):
             return {
                 'status': 'timeout',
                 'answer': '',
@@ -14501,6 +14660,7 @@ class AgentAutomationServer(threading.Thread):
 class GlobalHotkeyManager(QObject):
     ui_hotkey_pressed = pyqtSignal()
     same_position_screenshot_pressed = pyqtSignal()
+    edge_toggle_pressed = pyqtSignal()
     shortcut_recorded = pyqtSignal(str, str)
     shortcut_record_failed = pyqtSignal(str, str)
     backend_ready = pyqtSignal()
@@ -14516,6 +14676,7 @@ class GlobalHotkeyManager(QObject):
         self._last_trigger = 0.0
         self._ui_spec = self._read_shortcut_spec(UI_SHORTCUT_PATH, DEFAULT_UI_SHORTCUT)
         self._same_position_screenshot_spec = self._read_settings_shortcut_spec('same_position_screenshot_shortcut')
+        self._edge_toggle_spec = self._read_settings_shortcut_spec('edge_toggle_shortcut')
 
     @property
     def available(self) -> bool:
@@ -14561,9 +14722,10 @@ class GlobalHotkeyManager(QObject):
         with self._lock:
             self._ui_spec = self._read_shortcut_spec(UI_SHORTCUT_PATH, DEFAULT_UI_SHORTCUT)
             self._same_position_screenshot_spec = self._read_settings_shortcut_spec('same_position_screenshot_shortcut')
+            self._edge_toggle_spec = self._read_settings_shortcut_spec('edge_toggle_shortcut')
 
     def begin_recording(self, target: str) -> bool:
-        if not self.available or not self._backend_ready_flag or target not in {'ui', 'same_position_screenshot'}:
+        if not self.available or not self._backend_ready_flag or target not in {'ui', 'same_position_screenshot', 'edge_toggle'}:
             return False
         with self._lock:
             self._record_target = target
@@ -14595,6 +14757,11 @@ class GlobalHotkeyManager(QObject):
                 if self._same_position_screenshot_spec is not None
                 else None
             )
+            edge_toggle_spec = (
+                dict(self._edge_toggle_spec)
+                if self._edge_toggle_spec is not None
+                else None
+            )
 
         if record_target is not None:
             if flags == 0:
@@ -14610,6 +14777,8 @@ class GlobalHotkeyManager(QObject):
                     self._ui_spec = build_shortcut_spec(normalized, DEFAULT_UI_SHORTCUT)
                 elif record_target == 'same_position_screenshot':
                     self._same_position_screenshot_spec = updated_spec
+                elif record_target == 'edge_toggle':
+                    self._edge_toggle_spec = updated_spec
                 self._record_target = None
 
             self.shortcut_recorded.emit(record_target, normalized)
@@ -14624,6 +14793,12 @@ class GlobalHotkeyManager(QObject):
             and flags == same_position_screenshot_spec['flags']
         ):
             matched_action = 'same_position_screenshot'
+        elif (
+            edge_toggle_spec is not None
+            and keycode == edge_toggle_spec['keycode']
+            and flags == edge_toggle_spec['flags']
+        ):
+            matched_action = 'edge_toggle'
         if matched_action is None:
             return
         if now - self._last_trigger < self._cooldown_seconds:
@@ -14631,6 +14806,8 @@ class GlobalHotkeyManager(QObject):
         self._last_trigger = now
         if matched_action == 'same_position_screenshot':
             self.same_position_screenshot_pressed.emit()
+        elif matched_action == 'edge_toggle':
+            self.edge_toggle_pressed.emit()
         else:
             self.ui_hotkey_pressed.emit()
 
@@ -14638,6 +14815,141 @@ class GlobalHotkeyManager(QObject):
 # Create the icon
 ensure_broccoli_resource_dir()
 icon = QIcon(resource_path('Broccolimen.icns'))
+
+
+# ── Native macOS notifications (UNUserNotificationCenter) ──────────────────────
+# A real system notification on agent completion, with an "Open" action that brings
+# Broccoli to the front and jumps to that conversation. The app icon + correct click
+# routing require running as the packaged .app bundle (dev mode is attributed to the
+# Python framework org.python.python). Alert only -- no sound.
+_MAC_NOTIFICATION_DELEGATE_CLASS = None
+if sys.platform == 'darwin' and objc is not None:
+    try:
+        from Foundation import NSObject as _NSObjectForNotif
+
+        class _BroccoliNotificationDelegate(_NSObjectForNotif):
+            def userNotificationCenter_willPresentNotification_withCompletionHandler_(
+                    self, center, notification, completionHandler):
+                # Show the banner even when Broccoli is the foreground app.
+                try:
+                    from UserNotifications import (
+                        UNNotificationPresentationOptionBanner,
+                        UNNotificationPresentationOptionList,
+                    )
+                    completionHandler(int(UNNotificationPresentationOptionBanner)
+                                      | int(UNNotificationPresentationOptionList))
+                except Exception:
+                    try:
+                        completionHandler(0)
+                    except Exception:
+                        pass
+
+            def userNotificationCenter_didReceiveNotificationResponse_withCompletionHandler_(
+                    self, center, response, completionHandler):
+                try:
+                    path = ''
+                    info = response.notification().request().content().userInfo()
+                    if info is not None:
+                        # userInfo may bridge back as a Python dict OR an NSDictionary;
+                        # .get() works for both, objectForKey_ only for NSDictionary.
+                        try:
+                            path = str(info.get('path', '') or '')
+                        except Exception:
+                            try:
+                                path = str(info.objectForKey_('path') or '')
+                            except Exception:
+                                path = ''
+                    mgr = globals().get('_mac_notifier')
+                    if mgr is not None:
+                        mgr.handle_click(path)
+                except Exception:
+                    logging.exception('notification click handling failed')
+                try:
+                    completionHandler()
+                except Exception:
+                    pass
+
+        _MAC_NOTIFICATION_DELEGATE_CLASS = _BroccoliNotificationDelegate
+    except Exception:
+        _MAC_NOTIFICATION_DELEGATE_CLASS = None
+
+
+class _MacNotificationManager:
+    def __init__(self):
+        self._center = None
+        self._delegate = None   # strong ref required (else garbage-collected)
+        self._ready = False
+        self._window = None
+
+    def setup(self, window):
+        self._window = window
+        if self._ready or sys.platform != 'darwin' or objc is None or _MAC_NOTIFICATION_DELEGATE_CLASS is None:
+            return
+        try:
+            from Foundation import NSSet
+            from UserNotifications import (
+                UNUserNotificationCenter, UNNotificationAction, UNNotificationCategory,
+                UNAuthorizationOptionAlert, UNNotificationActionOptionForeground,
+                UNNotificationCategoryOptionNone,
+            )
+            center = UNUserNotificationCenter.currentNotificationCenter()
+            if center is None:
+                return
+            self._delegate = _MAC_NOTIFICATION_DELEGATE_CLASS.alloc().init()
+            center.setDelegate_(self._delegate)
+            open_action = UNNotificationAction.actionWithIdentifier_title_options_(
+                'OPEN', 'Open', UNNotificationActionOptionForeground)
+            category = UNNotificationCategory.categoryWithIdentifier_actions_intentIdentifiers_options_(
+                'BROCCOLI_AGENT', [open_action], [], UNNotificationCategoryOptionNone)
+            center.setNotificationCategories_(NSSet.setWithObject_(category))
+            center.requestAuthorizationWithOptions_completionHandler_(
+                int(UNAuthorizationOptionAlert), lambda granted, error: None)
+            self._center = center
+            self._ready = True
+        except Exception:
+            logging.exception('macOS notification setup failed')
+
+    def post(self, title, body, path):
+        if not self._ready or self._center is None:
+            return
+        try:
+            from UserNotifications import UNMutableNotificationContent, UNNotificationRequest
+            content = UNMutableNotificationContent.alloc().init()
+            content.setTitle_(str(title or 'Broccoli'))
+            content.setBody_(str(body or ''))
+            content.setCategoryIdentifier_('BROCCOLI_AGENT')
+            content.setUserInfo_({'path': str(path or '')})
+            ident = f'broccoli-agent-{int(time.time() * 1000)}'
+            req = UNNotificationRequest.requestWithIdentifier_content_trigger_(ident, content, None)
+            self._center.addNotificationRequest_withCompletionHandler_(req, None)
+        except Exception:
+            logging.exception('macOS notification post failed')
+
+    def handle_click(self, path):
+        window = self._window
+        if window is None:
+            return
+        try:
+            if NSApp is not None:
+                NSApp.activateIgnoringOtherApps_(True)
+        except Exception:
+            pass
+        try:
+            window.show()
+            window.raise_()
+            window.activateWindow()
+        except Exception:
+            pass
+        path = str(path or '').strip()
+        if path and hasattr(window, '_activate_agent_conversation_badge'):
+            try:
+                window._activate_agent_conversation_badge(path)
+            except Exception:
+                logging.exception('notification navigate failed')
+
+
+_mac_notifier = _MacNotificationManager()
+
 
 # Create the tray
 tray = QSystemTrayIcon()
@@ -16904,7 +17216,8 @@ def wait_for_web_chat_ready(view,
                             mode: str = 'response',
                             allow_text_stability_fallback: bool = False,
                             stall_timeout_ms: int = 0,
-                            absolute_max_ms: int = 0):
+                            absolute_max_ms: int = 0,
+                            on_progress=None):
     started_at = time.monotonic()
     state = {
         'last_key': '',
@@ -16992,6 +17305,15 @@ def wait_for_web_chat_ready(view,
                 state['last_progress_at'] = time.monotonic()
             if cur_len > progress_peak:
                 state['progress_peak_len'] = cur_len
+            if on_progress is not None:
+                try:
+                    on_progress({
+                        'length': cur_len,
+                        'peak_len': int(state.get('progress_peak_len', 0) or 0),
+                        'busy': busy,
+                    })
+                except Exception:
+                    pass
             if busy:
                 state['saw_busy'] = True
                 state['stable_hits'] = 0
@@ -19190,6 +19512,11 @@ class TerminalWidget(QWidget):
             except Exception:
                 pass
             self._xterm_view.loadFinished.connect(self._on_xterm_loaded)
+            # Suppress the native QWebEngineView menu and route right-clicks to Broccoli's own
+            # custom-drawn selection menu (no native menus anywhere in the app).
+            self._xterm_view._broccoli_is_terminal_xterm = True
+            self._xterm_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self._xterm_view.customContextMenuRequested.connect(self._show_xterm_context_menu)
             clip_layout.addWidget(self._xterm_view)
             self._display_widget = self._xterm_clip
             self._load_xterm_html()
@@ -19414,6 +19741,27 @@ class TerminalWidget(QWidget):
 </body>
 </html>'''
         self._xterm_view.setHtml(html_doc, QUrl.fromLocalFile(str(asset_dir) + os.sep))
+
+    def _show_xterm_context_menu(self, pos):
+        view = self._xterm_view
+        if view is None:
+            return
+        # Find the main window (MyWidget) up the parent chain, then hand off to its terminal
+        # xterm menu builder (which reads the xterm selection and shows the custom menu).
+        host = self
+        handler = None
+        while host is not None:
+            handler = getattr(host, '_show_terminal_xterm_context_menu', None)
+            if callable(handler):
+                break
+            host = host.parentWidget() if hasattr(host, 'parentWidget') else None
+        if not callable(handler):
+            handler = getattr(view.window(), '_show_terminal_xterm_context_menu', None)
+        if callable(handler):
+            try:
+                handler(view, view.mapToGlobal(pos))
+            except Exception:
+                pass
 
     def _on_xterm_loaded(self, ok: bool):
         if not self._uses_xterm_renderer() or self._xterm_view is None:
@@ -28771,6 +29119,62 @@ class AgentConversationBadge(QWidget):
         shadow.setYOffset(5)
         shadow.setColor(QColor(0, 0, 0, 44))
         self.setGraphicsEffect(shadow)
+        self._shadow = shadow
+        self._shadow_normal = (QColor(0, 0, 0, 44), 20.0, 0.0, 5.0)  # color, blur, dx, dy
+        # "Unseen / just generated, not looked at yet" attention effect.
+        self._unseen = False
+        self._unseen_fade = 0.0       # 0..1 visual intensity (fades in fast, out slow)
+        self._anim_phase = 0.0        # driven by the shelf's shared animation timer
+
+    @staticmethod
+    def _lerp_color(a: QColor, b: QColor, t: float) -> QColor:
+        t = max(0.0, min(1.0, float(t)))
+        return QColor(
+            int(a.red() + (b.red() - a.red()) * t),
+            int(a.green() + (b.green() - a.green()) * t),
+            int(a.blue() + (b.blue() - a.blue()) * t),
+            int(a.alpha() + (b.alpha() - a.alpha()) * t),
+        )
+
+    def _unseen_color(self) -> QColor:
+        # Deep teal-green for finished (distinct from the bright green ✅ icon so it pops);
+        # red reserved for failed (mechanism ready; not marked unseen yet).
+        if self._status in {'failed', 'error'}:
+            return QColor(255, 88, 76)
+        return QColor(46, 160, 120)
+
+    def set_unseen(self, active: bool):
+        active = bool(active)
+        if active == self._unseen:
+            return
+        self._unseen = active
+        parent = self.parentWidget()
+        if parent is not None and hasattr(parent, '_ensure_unseen_animation'):
+            parent._ensure_unseen_animation()
+
+    def needs_unseen_anim(self) -> bool:
+        return bool(self._unseen) or self._unseen_fade > 0.001
+
+    def tick_unseen(self, phase: float, dt: float):
+        # Fade in fast (~0.2s), fade out slow (~0.45s) so the effect never snaps off.
+        target = 1.0 if self._unseen else 0.0
+        if self._unseen_fade < target:
+            self._unseen_fade = min(target, self._unseen_fade + dt / 0.2)
+        elif self._unseen_fade > target:
+            self._unseen_fade = max(target, self._unseen_fade - dt / 0.45)
+        self._anim_phase = phase
+        fade = self._unseen_fade
+        # (A) glowing halo via the drop-shadow effect: blend normal shadow <-> green glow.
+        if self._shadow is not None:
+            pulse = 0.5 + 0.5 * math.sin(phase * 2.4)      # breathing 0..1
+            glow = self._unseen_color()
+            n_col, n_blur, n_dx, n_dy = self._shadow_normal
+            g_col = QColor(glow.red(), glow.green(), glow.blue(), int(150 + 90 * pulse))
+            g_blur = 20.0 + 16.0 * pulse
+            self._shadow.setColor(self._lerp_color(n_col, g_col, fade))
+            self._shadow.setBlurRadius(n_blur + (g_blur - n_blur) * fade)
+            self._shadow.setOffset(n_dx * (1.0 - fade), n_dy * (1.0 - fade))
+        self.update()
 
     def set_side(self, side: str):
         self._side = 'right' if side == 'right' else 'left'
@@ -28871,6 +29275,9 @@ class AgentConversationBadge(QWidget):
             base = QColor(118, 183, 255, 210 if self._expanded else 182)
         if dark:
             base = QColor(max(0, base.red() - 18), max(0, base.green() - 18), max(0, base.blue() - 18), base.alpha())
+        if self._unseen_fade > 0.001:
+            uc = self._unseen_color()
+            base = self._lerp_color(base, QColor(uc.red(), uc.green(), uc.blue(), 228), self._unseen_fade)
         painter.setBrush(QBrush(base))
         painter.setPen(QPen(QColor(255, 255, 255, 76), 1))
         painter.drawRoundedRect(rect, radius, radius)
@@ -28882,6 +29289,23 @@ class AgentConversationBadge(QWidget):
         painter.setPen(QPen(QBrush(highlight), 1))
         inner = rect.adjusted(4, 4, -4, -4)
         painter.drawRoundedRect(inner, inner.height() / 2, inner.height() / 2)
+        if self._unseen_fade > 0.001:
+            # (B) internal moving light: a soft bright spot sweeping left<->right, looping.
+            painter.save()
+            clip = QPainterPath()
+            clip.addRoundedRect(rect, radius, radius)
+            painter.setClipPath(clip)
+            sweep = math.sin(self._anim_phase * 1.6) * 0.5 + 0.5      # 0..1
+            cx = rect.left() + sweep * rect.width()
+            a = int(165 * self._unseen_fade)
+            spot = QRadialGradient(cx, rect.center().y(), rect.height() * 1.15)
+            spot.setColorAt(0.0, QColor(255, 255, 255, a))
+            spot.setColorAt(0.4, QColor(255, 255, 255, int(a * 0.35)))
+            spot.setColorAt(1.0, QColor(255, 255, 255, 0))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(spot))
+            painter.drawRoundedRect(rect, radius, radius)
+            painter.restore()
         painter.setPen(QColor('#F8FBFF' if dark else '#18202B'))
         font = painter.font()
         font.setFamily('Helvetica Neue')
@@ -28939,6 +29363,43 @@ class AgentConversationShelf(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.hide()
+        # Shared ~30fps driver for the "unseen / just generated" attention effect.
+        # Runs only while a badge needs it and the shelf is visible (power-friendly).
+        self._unseen_timer = QTimer(self)
+        self._unseen_timer.setInterval(33)
+        self._unseen_timer.timeout.connect(self._tick_unseen_animation)
+        self._unseen_phase = 0.0
+        self._unseen_last_tick_ms = 0
+
+    def _ensure_unseen_animation(self):
+        active = self.isVisible() and any(b.needs_unseen_anim() for b in self._badges.values())
+        if active and not self._unseen_timer.isActive():
+            self._unseen_last_tick_ms = int(time.monotonic() * 1000)
+            self._unseen_timer.start()
+        elif not active and self._unseen_timer.isActive():
+            self._unseen_timer.stop()
+
+    def _tick_unseen_animation(self):
+        now = int(time.monotonic() * 1000)
+        dt = max(0.001, min(0.1, (now - int(self._unseen_last_tick_ms or now)) / 1000.0))
+        self._unseen_last_tick_ms = now
+        self._unseen_phase += dt * 3.0
+        any_active = False
+        for badge in list(self._badges.values()):
+            if badge.needs_unseen_anim():
+                badge.tick_unseen(self._unseen_phase, dt)
+                any_active = True
+        if not any_active:
+            self._unseen_timer.stop()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, '_unseen_timer'):
+            self._unseen_timer.stop()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._ensure_unseen_animation()
 
     def restack_with_owner(self):
         if not self.isVisible():
@@ -28984,6 +29445,7 @@ class AgentConversationShelf(QWidget):
                 'path': path,
                 'title': str(record.get('title', '') or 'Agent conversation'),
                 'status': str(record.get('status', '') or 'running'),
+                'unseen': bool(record.get('unseen', False)),
             })
         self._records = normalized
         wanted = {record['path'] for record in normalized}
@@ -29004,7 +29466,9 @@ class AgentConversationShelf(QWidget):
                 badge.set_side(self._side)
                 self._badges[path] = badge
             badge.set_data(status=record['status'], title=record['title'])
+            badge.set_unseen(record.get('unseen', False))
             badge.show()
+        self._ensure_unseen_animation()
         self._clamp_scroll()
         if normalized:
             if not self.isVisible():
@@ -29665,6 +30129,7 @@ class OutputsPanel(SmoothPanelWidget):
             self.media_preview.setStyleSheet(f'QWebEngineView {{ background: {card_bg}; border: none; }}')
             for button in (self.copy_button, self.save_button, self.context_button, self.capture_frame_button, self.time_comment_button):
                 button.setStyleSheet(_secondary_capsule_stylesheet(dark))
+            self.output_combo._force_dark = dark
             self.output_combo._update_style()
         finally:
             self._theme_updating = False
@@ -31337,6 +31802,46 @@ class MyWidget(QWidget):  # 主窗口
         self.raise_()
         self._refresh_pin_tab_edge_state(animated=True)
 
+    def _toggle_edge_hide(self):
+        # Global-shortcut toggle for the edge-docked window. Unlike the mouse hover-reveal
+        # (which re-hides the moment the cursor leaves the window), a shortcut reveal PINS the
+        # window position so it stays out until the next press, and focuses the prompt input.
+        # The matching press un-pins and tucks it back to the nearest edge. Only active while
+        # edge auto-hide is enabled (decision A). The reveal is hotkey-driven (not focusInEvent),
+        # so it cannot re-enter the focus-reveal flap loop.
+        if not bool(getattr(self, '_edge_auto_hide_enabled', False)):
+            return
+        if getattr(self, '_edge_auto_hidden_side', ''):
+            # Reveal: pinning slides it out (when edge-hidden) + suspends auto-hide + lights the
+            # pin button; then bring to front and drop the cursor into the input box.
+            self._set_window_position_pin_state(True)
+            try:
+                if NSApp is not None:
+                    NSApp.activateIgnoringOtherApps_(True)
+            except Exception:
+                pass
+            try:
+                self.show()
+                self.raise_()
+                self.activateWindow()
+            except Exception:
+                pass
+            try:
+                self.text1.setFocus()
+                QTimer.singleShot(0, self.text1.setFocus)
+            except Exception:
+                pass
+            return
+        # Hide: release the pin first (otherwise _hide_window_to_screen_edge is blocked), then
+        # tuck to the nearest edge.
+        self._set_window_position_pin_state(False)
+        screen_geo = self._edge_auto_hide_screen_geometry()
+        if screen_geo is None:
+            return
+        geom = self.geometry()
+        side = 'left' if (geom.left() - screen_geo.left()) <= (screen_geo.right() - geom.right()) else 'right'
+        self._hide_window_to_screen_edge(side, screen_geo)
+
     def _animate_main_window_geometry(self, target: QRect, duration: int = 220, finished_callback=None):
         main_anim = getattr(self, '_main_window_animation', None)
         if main_anim is not None:
@@ -31377,6 +31882,14 @@ class MyWidget(QWidget):  # 主窗口
             max(0, int(getattr(self, 'EDGE_AUTO_HIDE_HOVER_BUFFER_MS', 650)))
         )
         self._edge_auto_hide_check_timer.timeout.connect(self._check_edge_auto_hide)
+        # Idle power management for off-screen @target / online-memory web views:
+        # periodically freeze (then discard) views that no run is holding active.
+        self._offscreen_view_sweep_timer = QTimer(self)
+        self._offscreen_view_sweep_timer.setInterval(OFFSCREEN_VIEW_SWEEP_INTERVAL_MS)
+        self._offscreen_view_sweep_timer.timeout.connect(sweep_offscreen_views)
+        self._offscreen_view_sweep_timer.start()
+        # Native macOS notification on agent completion (requests permission once).
+        QTimer.singleShot(0, lambda: _mac_notifier.setup(self))
         self._apply_window_flags()
         QTimer.singleShot(0, self._apply_mac_space_behavior)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -31486,6 +31999,13 @@ class MyWidget(QWidget):  # 主窗口
         self.real2.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.real2.customContextMenuRequested.connect(self._show_real2_context_menu)
         self.real2.urlChanged.connect(self._on_real2_url_changed)
+        # Detect user engagement with the answer view (scroll/click) to mark the shown
+        # conversation as "seen". Wheel/mouse events reach the QWebEngineView's focus
+        # proxy (the Chromium render widget), so filter that too once it exists.
+        self._real2_filtered_proxies = set()
+        self.real2.installEventFilter(self)
+        self.real2.loadFinished.connect(lambda _ok: self._ensure_real2_engagement_filter())
+        QTimer.singleShot(1500, self._ensure_real2_engagement_filter)
 
         self.text1 = AssistantPromptInlineEdit(self)
         self._set_prompt_edit_read_only(False)
@@ -31512,6 +32032,13 @@ class MyWidget(QWidget):  # 主窗口
         self.text1.textChanged.connect(self._sync_prompt_from_inline)
         self.text1.textChanged.connect(self._refresh_slash_command_popup)
         self.text1.textChanged.connect(self._refresh_mention_target_popup)
+        # Debounced background-color highlight of @target / slash directive blocks
+        # in the prompt editor(s). Pure display via extra selections; never edits text.
+        self._directive_highlight_timer = QTimer(self)
+        self._directive_highlight_timer.setSingleShot(True)
+        self._directive_highlight_timer.setInterval(80)
+        self._directive_highlight_timer.timeout.connect(self._refresh_prompt_directive_highlight)
+        self.text1.textChanged.connect(self._directive_highlight_timer.start)
         self.text1.installEventFilter(self)
         self._slash_command_popup.list_widget.installEventFilter(self)
         self._text1_popup.edit.textChanged.connect(self._sync_prompt_from_popup)
@@ -32204,6 +32731,7 @@ class MyWidget(QWidget):  # 主窗口
         self._agent_plan_auto_pause_panel_step_id = ''
         self._agent_plan_auto_pause_panel_visible = False
         self._agent_conversation_finished_badges = {}
+        self._agent_unseen_paths = set()   # conversations finished but not looked at yet
         self._agent_conversation_open_badges = {
             str(path or '').strip()
             for path in _load_json_list(AGENT_CONVERSATION_BADGES_PATH)
@@ -32337,6 +32865,8 @@ class MyWidget(QWidget):  # 主窗口
     def eventFilter(self, obj, event):
         slash_popup = getattr(self, '_slash_command_popup', None)
         mention_popup = getattr(self, '_mention_target_popup', None)
+        if event.type() in (QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.Wheel):
+            self._note_agent_engagement(obj, event)
         if obj is getattr(self, 'text1', None) and event.type() == QEvent.Type.KeyPress:
             if mention_popup is not None and mention_popup.isVisible():
                 key = event.key()
@@ -32384,8 +32914,16 @@ class MyWidget(QWidget):  # 主窗口
                 return True
         if isinstance(obj, QWebEngineView):
             return False
-        if event.type() == QEvent.Type.ContextMenu and self._is_selection_context_widget(obj):
-            if self._handle_selection_context_menu(obj, event):
+        if event.type() == QEvent.Type.ContextMenu:
+            # Web views (real2 etc.) own their context menu via customContextMenuRequested
+            # -> _show_real2_context_menu, which itself delegates to the selection menu on
+            # selected text. Installing an event filter on real2's focus proxy (for
+            # engagement detection) re-exposed its ContextMenu event here; a focus proxy is
+            # NOT a QWebEngineView instance so the guard above misses it. Skip any widget
+            # OWNED by a web view so only ONE menu ever shows.
+            if isinstance(self._selection_context_owner(obj), QWebEngineView):
+                return False
+            if self._is_selection_context_widget(obj) and self._handle_selection_context_menu(obj, event):
                 return True
         return super().eventFilter(obj, event)
 
@@ -32438,11 +32976,14 @@ class MyWidget(QWidget):  # 主窗口
         cursor_pos = self.text1.textCursor().position()
         before_cursor = text[:cursor_pos]
         line_start = before_cursor.rfind('\n') + 1
-        token_start = max(line_start, before_cursor.rfind(' ') + 1, before_cursor.rfind('\t') + 1)
-        token = before_cursor[token_start:]
-        if not token.startswith('@'):
+        current_line = before_cursor[line_start:]
+        # @ is only recognized at the start of a line (after optional leading
+        # whitespace), matching the /command rule. Aliases contain no spaces, so once
+        # a space separates the alias from its text, stop suggesting targets.
+        stripped = current_line.lstrip()
+        if not stripped.startswith('@') or ' ' in stripped or '\t' in stripped:
             return ''
-        return token
+        return stripped
 
     def _refresh_mention_target_popup(self):
         popup = getattr(self, '_mention_target_popup', None)
@@ -32475,6 +33016,149 @@ class MyWidget(QWidget):  # 主窗口
         if getattr(self, '_mention_target_popup', None) is not None:
             self._mention_target_popup.hide()
         self.text1.setFocus()
+
+    def _prompt_directive_alias_set(self) -> set:
+        try:
+            aliases = {str(t.get('alias', '') or '') for t in self._collect_external_targets()}
+        except Exception:
+            aliases = set()
+        aliases.discard('')
+        return aliases
+
+    def _parse_prompt_directive_blocks(self, text: str) -> list[dict]:
+        """Split the prompt into ordered blocks for highlight (P1) and later routing.
+
+        A directive block begins on a line that, after optional leading whitespace,
+        starts with @<registered target alias> or /<built-in slash command>. The rest
+        of that line plus following non-directive lines form the block body. Lines
+        before the first directive become a single 'plain' block. Unrecognized @x // x
+        are NOT directives -- they stay as plain text. Char offsets (start/end and the
+        header token header_start/header_end) are relative to `text`, for highlighting.
+        Pure parsing, no side effects."""
+        text = str(text or '')
+        aliases = self._prompt_directive_alias_set()
+        commands = sorted(
+            ((cmd.lower(), cap) for cmd, cap, _desc in SPECIALIZED_SLASH_COMMANDS),
+            key=lambda item: len(item[0]), reverse=True,
+        )
+
+        def detect(content: str):
+            if content.startswith('@'):
+                match = re.match(r'@([A-Za-z0-9][A-Za-z0-9_.-]{0,63})', content)
+                if match:
+                    alias = external_target_alias_slug(match.group(1))
+                    if alias and alias in aliases:
+                        return ('external', alias, match.end())
+                return None
+            if content.startswith('/'):
+                low = content.lower()
+                for cmd, cap in commands:
+                    if low == cmd or low.startswith(cmd + ' '):
+                        return ('capability', cap, len(cmd))
+            return None
+
+        plain0 = None
+        directive_blocks = []
+        cur = None
+        offset = 0
+        for raw_line in text.splitlines(keepends=True):
+            line_len = len(raw_line)
+            line_start = offset
+            offset += line_len
+            line_body = raw_line.rstrip('\n')
+            if line_body.endswith('\r'):
+                line_body = line_body[:-1]
+            lead = len(line_body) - len(line_body.lstrip())
+            content = line_body.lstrip()
+            directive = detect(content) if content else None
+            if directive is not None:
+                kind, ref, token_len = directive
+                header_start = line_start + lead
+                cur = {
+                    'kind': kind, 'ref': ref,
+                    'header_start': header_start,
+                    'header_end': header_start + token_len,
+                    'start': line_start, 'end': line_start + line_len,
+                    'body_parts': [content[token_len:].strip()],
+                }
+                directive_blocks.append(cur)
+            elif cur is not None:
+                cur['end'] = line_start + line_len
+                if line_body.strip():
+                    cur['body_parts'].append(line_body.strip())
+            else:
+                if plain0 is None:
+                    plain0 = {
+                        'kind': 'plain', 'ref': '',
+                        'header_start': -1, 'header_end': -1,
+                        'start': line_start, 'end': line_start + line_len,
+                        'body_parts': [],
+                    }
+                plain0['end'] = line_start + line_len
+                if line_body.strip():
+                    plain0['body_parts'].append(line_body.strip())
+
+        ordered = []
+        if plain0 is not None and any(plain0['body_parts']):
+            ordered.append(plain0)
+        ordered.extend(directive_blocks)
+        for index, block in enumerate(ordered):
+            block['body'] = '\n'.join(part for part in block['body_parts'] if part).strip()
+            block['step_index'] = index
+            block.pop('body_parts', None)
+        return ordered
+
+    @staticmethod
+    def _directive_step_colors(step_index: int, dark: bool):
+        # Golden-angle hue spacing gives visually distinct colors for any step count.
+        hue = (int(step_index) * 137) % 360
+        if dark:
+            return QColor.fromHsl(hue, 95, 66), QColor.fromHsl(hue, 120, 92)
+        return QColor.fromHsl(hue, 150, 231), QColor.fromHsl(hue, 165, 204)
+
+    def _refresh_prompt_directive_highlight(self):
+        text1 = getattr(self, 'text1', None)
+        if text1 is None:
+            return
+        text = text1.toPlainText()
+        blocks = self._parse_prompt_directive_blocks(text)
+        directive_blocks = [b for b in blocks if b['kind'] in ('external', 'capability')]
+        dark = is_dark_theme(app)
+        text_len = len(text)
+        edits = [text1]
+        popup = getattr(self, '_text1_popup', None)
+        popup_edit = getattr(popup, 'edit', None) if popup is not None else None
+        if popup_edit is not None:
+            edits.append(popup_edit)
+        for edit in edits:
+            selections = []
+            if directive_blocks:
+                doc = edit.document()
+                for block in directive_blocks:
+                    bg, header_bg = self._directive_step_colors(block['step_index'], dark)
+                    body_cursor = QTextCursor(doc)
+                    body_cursor.setPosition(max(0, min(block['start'], text_len)))
+                    body_cursor.setPosition(max(0, min(block['end'], text_len)), QTextCursor.MoveMode.KeepAnchor)
+                    body_fmt = QTextCharFormat()
+                    body_fmt.setBackground(bg)
+                    body_sel = QTextEdit.ExtraSelection()
+                    body_sel.cursor = body_cursor
+                    body_sel.format = body_fmt
+                    selections.append(body_sel)
+                    if block['header_end'] > block['header_start']:
+                        head_cursor = QTextCursor(doc)
+                        head_cursor.setPosition(max(0, min(block['header_start'], text_len)))
+                        head_cursor.setPosition(max(0, min(block['header_end'], text_len)), QTextCursor.MoveMode.KeepAnchor)
+                        head_fmt = QTextCharFormat()
+                        head_fmt.setBackground(header_bg)
+                        head_sel = QTextEdit.ExtraSelection()
+                        head_sel.cursor = head_cursor
+                        head_sel.format = head_fmt
+                        selections.append(head_sel)
+            try:
+                edit.setExtraSelections(selections)
+            except Exception:
+                pass
 
     def _selection_context_owner(self, obj):
         current = obj
@@ -32510,6 +33194,8 @@ class MyWidget(QWidget):  # 主窗口
 
     def _is_terminal_selection_context_widget(self, obj) -> bool:
         obj = self._selection_context_owner(obj)
+        if bool(getattr(obj, '_broccoli_is_terminal_xterm', False)):
+            return True
         terminal = getattr(self, 'terminal_widget', None)
         return bool(terminal is not None and obj in (getattr(terminal, 'output', None), getattr(terminal, 'input_line', None)))
 
@@ -32531,20 +33217,54 @@ class MyWidget(QWidget):  # 主窗口
             return ''
         return ''
 
+    def _show_terminal_xterm_context_menu(self, view, global_pos):
+        # xterm.js keeps its own selection (not reliably mirrored to the DOM), so read it via
+        # window.term.getSelection() and then show the same custom selection menu.
+        if view is None:
+            return
+        page = view.page() if hasattr(view, 'page') else None
+        if page is None:
+            self._handle_selection_context_menu_at(view, global_pos, selection_override='', copy_via_clipboard=True)
+            return
+
+        def _on_selection(sel):
+            self._handle_selection_context_menu_at(
+                view, global_pos, selection_override=str(sel or ''), copy_via_clipboard=True
+            )
+
+        try:
+            page.runJavaScript(
+                'window.term && window.term.getSelection ? window.term.getSelection() : ""',
+                _on_selection,
+            )
+        except Exception:
+            self._handle_selection_context_menu_at(view, global_pos, selection_override='', copy_via_clipboard=True)
+
     def _handle_selection_context_menu(self, obj, event) -> bool:
         return self._handle_selection_context_menu_at(obj, event.globalPos())
 
-    def _handle_selection_context_menu_at(self, obj, global_pos) -> bool:
+    def _handle_selection_context_menu_at(self, obj, global_pos, selection_override=None, copy_via_clipboard=False) -> bool:
         obj = self._selection_context_owner(obj)
-        selected_text = self._selected_text_from_widget(obj)
+        if selection_override is not None:
+            # Caller already resolved the selection (e.g. xterm via term.getSelection()).
+            selected_text = str(selection_override or '').strip()
+        else:
+            selected_text = self._selected_text_from_widget(obj)
         if isinstance(obj, QWebEngineView):
             if not selected_text:
                 return True
             menu = style_broccoli_context_menu(QMenu(self))
             copy_action = menu.addAction('Copy')
-            copy_action.triggered.connect(
-                lambda _checked=False, view=obj: view.page().triggerAction(QWebEnginePage.WebAction.Copy)
-            )
+            if copy_via_clipboard:
+                # The selection text is already known; the browser's own copy may not see an
+                # xterm/canvas selection, so write the clipboard directly.
+                copy_action.triggered.connect(
+                    lambda _checked=False, text=selected_text: QApplication.clipboard().setText(text)
+                )
+            else:
+                copy_action.triggered.connect(
+                    lambda _checked=False, view=obj: view.page().triggerAction(QWebEnginePage.WebAction.Copy)
+                )
         else:
             try:
                 menu = style_broccoli_context_menu(obj.createStandardContextMenu())
@@ -37747,7 +38467,55 @@ class MyWidget(QWidget):  # 主窗口
             'title': title or self._agent_badge_title_for_path(path),
             'updated_at': datetime.datetime.now().isoformat(timespec='seconds'),
         }
+        # A freshly finished result the user has not looked at yet -> mark unseen so its
+        # shelf badge glows (green for finished, red for failed -- the badge picks the
+        # colour from its status) and fire a native notification.
+        status_l = str(status or '').strip()
+        if status_l in {'finished', 'done', 'failed', 'error'}:
+            if not hasattr(self, '_agent_unseen_paths'):
+                self._agent_unseen_paths = set()
+            self._agent_unseen_paths.add(path)
+            title_text = str(title or self._agent_badge_title_for_path(path) or 'Agent conversation').strip()
+            if status_l in {'failed', 'error'}:
+                body = f'Agent run failed — {title_text}'
+            else:
+                body = f'Answer ready — {title_text}'
+            _mac_notifier.post('Broccoli', body, path)
         self._refresh_agent_conversation_shelf()
+
+    def _mark_agent_conversation_seen(self, path: str):
+        path = str(path or '').strip()
+        if not path or path not in getattr(self, '_agent_unseen_paths', set()):
+            return
+        self._agent_unseen_paths.discard(path)
+        shelf = getattr(self, 'agent_conversation_shelf', None)
+        badge = shelf._badges.get(path) if shelf is not None else None
+        if badge is not None:
+            badge.set_unseen(False)   # gradual fade-out, driven by the shelf timer
+
+    def _note_agent_engagement(self, obj, event):
+        # Active engagement with the currently-shown conversation (typing/clicking in the
+        # prompt, scrolling/clicking the answer) counts as "seen" -- no badge click needed
+        # when the conversation is already on top.
+        text1 = getattr(self, 'text1', None)
+        real2 = getattr(self, 'real2', None)
+        hit = obj is text1
+        if not hit and real2 is not None:
+            hit = obj is real2 or obj is real2.focusProxy()
+        if hit:
+            self._mark_agent_conversation_seen(str(self._active_conversation_path or ''))
+
+    def _ensure_real2_engagement_filter(self):
+        real2 = getattr(self, 'real2', None)
+        if real2 is None:
+            return
+        proxy = real2.focusProxy()
+        if proxy is not None and id(proxy) not in getattr(self, '_real2_filtered_proxies', set()):
+            try:
+                proxy.installEventFilter(self)
+                self._real2_filtered_proxies.add(id(proxy))
+            except Exception:
+                pass
 
     def _hide_agent_conversation_badge(self, path: str):
         path = str(path or '').strip()
@@ -37760,6 +38528,7 @@ class MyWidget(QWidget):  # 主窗口
         self._refresh_agent_conversation_shelf()
 
     def _activate_agent_conversation_badge(self, path: str):
+        self._mark_agent_conversation_seen(path)
         self._select_main_tab(TAB_API)
         self._load_conversation_from_path(path)
         try:
@@ -37802,6 +38571,7 @@ class MyWidget(QWidget):  # 主窗口
                 'title': title,
                 'status': status,
                 'updated_at': updated_at,
+                'unseen': path in getattr(self, '_agent_unseen_paths', set()),
             })
         if missing:
             for path in missing:
@@ -37813,6 +38583,12 @@ class MyWidget(QWidget):  # 主窗口
     def _refresh_agent_conversation_shelf(self):
         shelf = getattr(self, 'agent_conversation_shelf', None)
         if shelf is None:
+            return
+        # While the window is pinned-collapsed to the small circle, keep the side
+        # shelf hidden no matter what triggered this refresh (agent activity calls
+        # this from ~9 places, and set_records would otherwise re-show it).
+        if self._is_main_window_pinned_collapsed():
+            shelf.hide()
             return
         shelf.set_records(self._agent_conversation_shelf_records())
         self._update_agent_conversation_shelf_geometry()
@@ -37836,6 +38612,11 @@ class MyWidget(QWidget):  # 主窗口
     def _update_agent_conversation_shelf_geometry(self):
         shelf = getattr(self, 'agent_conversation_shelf', None)
         if shelf is None:
+            return
+        # moveEvent calls this on every window move, including when pin_a_tab shrinks
+        # to the circle -> never position/show the shelf in the collapsed state.
+        if self._is_main_window_pinned_collapsed():
+            shelf.hide()
             return
         side = self._agent_conversation_shelf_side()
         shelf.set_side(side)
@@ -42477,9 +43258,11 @@ end run'''"""
         self._real2_nav_guard = False
 
     def _on_real2_url_changed(self, qurl):
-        # Record user-initiated link navigations (http/https). Programmatic
-        # back/forward loads are flagged so they are not re-pushed; conversation
-        # re-renders (about:blank/data) are ignored here (reset is explicit).
+        # Record user-initiated link navigations: web pages (http/https) AND opened
+        # local attachments (file://, e.g. clicking an image/PDF in the answer), so the
+        # right-click Back can return to the conversation. Programmatic back/forward
+        # loads are flagged so they are not re-pushed; conversation re-renders use
+        # setHtml without a base URL (about:blank), so they never hit the file branch.
         if getattr(self, '_real2_nav_guard', False):
             self._real2_nav_guard = False
             return
@@ -42487,7 +43270,7 @@ end run'''"""
             scheme = qurl.scheme().lower()
         except Exception:
             return
-        if scheme in ('http', 'https'):
+        if scheme in ('http', 'https', 'file'):
             idx = int(getattr(self, '_real2_web_index', -1))
             stack = list(getattr(self, '_real2_web_stack', []) or [])[:idx + 1]
             stack.append(qurl.toString())
@@ -43664,6 +44447,25 @@ end run'''"""
         self._forget_agent_run(run)
 
     def _agent_run_preview_text(self, run: dict) -> str:
+        # Compose the run's own preview with a running external-target sub-step block
+        # (compare/verify), so the parent content and the @target status show together
+        # instead of overwriting each other in the shared preview area.
+        base = self._agent_run_preview_text_base(run)
+        substeps = run.get('_external_substeps') if isinstance(run, dict) else None
+        if isinstance(substeps, dict) and substeps:
+            blocks = []
+            for entry in substeps.values():
+                if not isinstance(entry, dict) or not entry.get('lines'):
+                    continue
+                alias = str(entry.get('alias', '') or '').strip()
+                header = f'── @{alias} ──' if alias else '── external target ──'
+                blocks.append(header + '\n' + '\n'.join(str(line) for line in (entry.get('lines') or [])))
+            if blocks:
+                tiled = '\n\n'.join(blocks)
+                return (base.rstrip() + '\n\n' + tiled) if str(base or '').strip() else tiled
+        return base
+
+    def _agent_run_preview_text_base(self, run: dict) -> str:
         phase = str(run.get('phase', '') or '')
         answer = str(run.get('answer', '') or '')
         if answer:
@@ -43685,6 +44487,29 @@ end run'''"""
     def _render_agent_run_preview_if_active(self, run: dict | None):
         if not isinstance(run, dict):
             return
+        # A child external-target sub-step (compare/verify) must NOT render to the shared
+        # preview area itself -- it would fight the parent run that owns that area and the
+        # two would flicker back and forth. Instead, stash its status on the parent and
+        # render the parent's COMPOSED preview (parent content + this @target block).
+        rcfg = run.get('config') if isinstance(run.get('config'), dict) else {}
+        parent_id = str(rcfg.get('parent_run_id', '') or '').strip()
+        if parent_id:
+            parent = self._agent_run_for_id(parent_id)
+            if parent is not None and parent is not run:
+                child_id = str(run.get('run_id', '') or '') or str(id(run))
+                substeps = parent.get('_external_substeps')
+                if not isinstance(substeps, dict):
+                    substeps = {}
+                    parent['_external_substeps'] = substeps
+                # Keyed by child run_id so multiple PARALLEL compare/verify branches each
+                # keep their own tile instead of overwriting one shared slot. Updating an
+                # existing key keeps its insertion position, so tiles never reorder.
+                substeps[child_id] = {
+                    'alias': str(rcfg.get('external_target_alias', '') or '').strip(),
+                    'lines': list(run.get('status_lines') or [])[-6:],
+                }
+                self._render_agent_run_preview_if_active(parent)
+                return
         path = str(run.get('conversation_path', '') or '').strip()
         if path != str(self._active_conversation_path or '').strip():
             return
@@ -44895,6 +45720,10 @@ end run'''"""
         attachment_bundle = self._build_external_target_attachment_bundle(config)
         run['external_target_attachment_debug'] = dict(attachment_bundle.get('debug') or {})
         view = self._ensure_external_web_view(session_key)
+        # Pin the view Active for this run; released on finish/failure so it can idle->freeze.
+        acquire_offscreen_view(view)
+        run['_offscreen_view'] = view
+        run['_offscreen_held'] = True
         run.setdefault('status_lines', []).append(f'Opening @{target.get("alias", "")}...')
         self._render_agent_run_preview_if_active(run)
 
@@ -45141,6 +45970,48 @@ end run'''"""
             view.loadFinished.connect(lambda ok, rid=str(run.get('run_id', '') or ''): after_loaded(ok) if self._agent_run_for_id(rid) is run else None)
             view.setUrl(QUrl(url))
 
+    def _set_external_live_status(self, run: dict, text: str):
+        """Update the single live status line IN PLACE on the run's own status_lines
+        (e.g. the real-time char count), never appending a new line per update. The
+        render step (see _render_agent_run_preview_if_active) routes a child sub-step's
+        status into its parent's composed preview, so we never write into the parent."""
+        if not isinstance(run, dict):
+            return
+        lines = run.setdefault('status_lines', [])
+        live = run.get('_external_live_line')
+        if lines and live is not None and lines[-1] == live:
+            lines[-1] = text
+        else:
+            lines.append(text)
+        run['_external_live_line'] = text
+        self._render_agent_run_preview_if_active(run)
+
+    def _append_external_status(self, run: dict, text: str):
+        """Append a discrete milestone line and finalize the live line so the next live
+        update starts a fresh line below it."""
+        if not isinstance(run, dict):
+            return
+        run.setdefault('status_lines', []).append(text)
+        run['_external_live_line'] = None
+        self._render_agent_run_preview_if_active(run)
+
+    def _clear_external_substep_for_run(self, run: dict):
+        """When a child external-target sub-step ends, drop the composed block from the
+        parent's preview so it does not linger after the parent resumes."""
+        if not isinstance(run, dict):
+            return
+        parent_id = str((run.get('config') or {}).get('parent_run_id', '') or '').strip()
+        if not parent_id:
+            return
+        parent = self._agent_run_for_id(parent_id)
+        if not isinstance(parent, dict):
+            return
+        substeps = parent.get('_external_substeps')
+        if isinstance(substeps, dict):
+            child_id = str(run.get('run_id', '') or '') or str(id(run))
+            if substeps.pop(child_id, None) is not None:
+                self._render_agent_run_preview_if_active(parent)
+
     def _wait_for_external_web_answer(
             self,
             run: dict,
@@ -45173,12 +46044,12 @@ end run'''"""
             'final_recheck_done_key': '',
             'parse_events': [],
         }
-        run.setdefault('status_lines', []).append('Waiting for external answer...')
+        self._set_external_live_status(run, 'Generating response…')
         self._render_agent_run_preview_if_active(run)
         before_last_key = re.sub(r'\s+', ' ', str(before_last_assistant or '').strip()).lower()
         parse_started_at = {'value': None}
 
-        def finish_with_answer(answer: str, capture_payload: dict):
+        def finish_with_answer(answer: str, capture_payload: dict, partial: bool = False):
             if self._agent_run_for_id(str(run.get('run_id', '') or '')) is not run:
                 return
             answer = str(answer or '').strip()
@@ -45189,6 +46060,8 @@ end run'''"""
                     'External target finished but Broccoli could not extract a readable answer.',
                 )
                 return
+            if partial:
+                answer = answer.rstrip() + '\n\n[Note: @target timed out; this answer may be incomplete.]'
             capture_payload = capture_payload if isinstance(capture_payload, dict) else {}
             try:
                 normalized_capture = self._normalize_web_conversation_capture(capture_payload)
@@ -45203,6 +46076,11 @@ end run'''"""
                 reason='finished_success',
                 force=bool(EXTERNAL_TARGET_DEBUG_WRITE_EVERY_RUN),
             )
+            self._append_external_status(
+                run,
+                f'Timed out — salvaged partial answer ({len(answer)} chars).'
+                if partial else f'Extraction complete ({len(answer)} chars) — cleaning up answer…',
+            )
             self.on_external_target_finished_for_run(
                 str(run.get('run_id', '') or ''),
                 {
@@ -45210,6 +46088,7 @@ end run'''"""
                     'capture': capture_payload,
                     'session_url': view.url().toString(),
                     'status': 'finished',
+                    'partial': bool(partial),
                 },
             )
 
@@ -45220,17 +46099,58 @@ end run'''"""
             last_answer_key = re.sub(r'\s+', ' ', last_answer).strip().lower()
             if (
                     self._external_web_answer_is_readable(last_answer)
-                    and not self._external_web_answer_looks_incomplete(last_answer)
                     and last_answer_key
                     and not self._external_web_answer_matches_previous(last_answer_key, before_last_key)):
                 capture_payload = state.get('last_capture') if isinstance(state.get('last_capture'), dict) else {}
-                finish_with_answer(last_answer, capture_payload)
+                # Salvage the last parsed text; mark it partial if it looks unfinished
+                # (timed out -> we are no longer waiting, so accept incomplete content).
+                finish_with_answer(
+                    last_answer,
+                    capture_payload,
+                    partial=self._external_web_answer_looks_incomplete(last_answer),
+                )
                 return
-            self._write_external_target_debug_snapshot(run, view, state, reason='no_readable_answer', force=True)
-            self.on_external_target_failed_for_run(
-                str(run.get('run_id', '') or ''),
-                'External target finished but Broccoli could not extract a readable answer.',
-            )
+            # No usable parsed text yet -> one fresh capture of the current page before failing.
+            salvage_partial_answer()
+
+        def salvage_partial_answer():
+            # Timed out: grab whatever is on the page RIGHT NOW (mid-stream partial) with a
+            # one-shot capture -- do NOT wait for the answer to stabilize. An incomplete
+            # answer (clearly marked) is better than returning nothing.
+            if self._agent_run_for_id(str(run.get('run_id', '') or '')) is not run:
+                return
+
+            def _finish_or_fail(partial_text: str, capture: dict):
+                partial_text = str(partial_text or '').strip()
+                if self._external_web_answer_is_readable(partial_text):
+                    finish_with_answer(partial_text, capture if isinstance(capture, dict) else {}, partial=True)
+                else:
+                    self._write_external_target_debug_snapshot(run, view, state, reason='timeout_no_content', force=True)
+                    self.on_external_target_failed_for_run(
+                        str(run.get('run_id', '') or ''),
+                        f'External target @{target.get("alias", "")} timed out and produced no readable content.',
+                    )
+
+            def use_capture(capture):
+                capture = capture if isinstance(capture, dict) else {}
+                partial = str(self._latest_assistant_from_capture_after(
+                    capture, before_count, before_digest, prompt_candidates=prompt_candidates) or '').strip()
+                if self._external_web_answer_is_readable(partial):
+                    _finish_or_fail(partial, capture)
+                    return
+                # Fall back to the last text parsed during polling.
+                _finish_or_fail(
+                    str(state.get('last_answer', '') or ''),
+                    state.get('last_capture') if isinstance(state.get('last_capture'), dict) else capture,
+                )
+
+            try:
+                self._capture_web_conversation_with_shared_parser(view, use_capture)
+            except Exception:
+                _finish_or_fail(
+                    str(state.get('last_answer', '') or ''),
+                    state.get('last_capture') if isinstance(state.get('last_capture'), dict) else {},
+                )
 
         def schedule_parse_retry():
             if self._agent_run_for_id(str(run.get('run_id', '') or '')) is not run:
@@ -45397,12 +46317,21 @@ end run'''"""
             if timed_out and still_busy:
                 state['last_text'] = str(result.get('reason', '') or 'timeout')
                 self._write_external_target_debug_snapshot(run, view, state, reason='timeout_busy', force=True)
-                self.on_external_target_failed_for_run(
-                    str(run.get('run_id', '') or ''),
-                    f'External target @{target.get("alias", "")} did not finish before timeout. Last state: {result.get("reason", "timeout")}.',
-                )
+                # Timed out while still generating -> salvage the partial answer that is
+                # already on the page instead of returning nothing.
+                self._append_external_status(run, 'Timed out while generating — salvaging partial answer…')
+                salvage_partial_answer()
                 return
+            self._append_external_status(run, 'Generation complete — extracting answer…')
             extract_from_conversation_capture()
+
+        def on_answer_progress(info):
+            # Real-time char count on the single live "Generating" line (updated in
+            # place each poll, never appending). peak_len is already measured by the
+            # existing readiness probe, so this adds no extra JS / polling.
+            n = int((info or {}).get('peak_len', 0) or (info or {}).get('length', 0) or 0)
+            if n > 0:
+                self._set_external_live_status(run, f'Generating response (~{n} chars)…')
 
         wait_for_web_chat_ready(
             view,
@@ -45414,6 +46343,7 @@ end run'''"""
             allow_text_stability_fallback=True,
             stall_timeout_ms=EXTERNAL_TARGET_STALL_TIMEOUT_MS,
             absolute_max_ms=EXTERNAL_TARGET_ABSOLUTE_MAX_MS,
+            on_progress=on_answer_progress,
         )
 
     def _run_external_terminal_target_for_run(self, run: dict):
@@ -45697,6 +46627,10 @@ end run'''"""
         except Exception as exc:
             self.on_external_target_failed_for_run(run_id, str(exc))
             return
+        if run.get('_offscreen_held'):
+            release_offscreen_view(run.get('_offscreen_view'))
+            run['_offscreen_held'] = False
+        self._clear_external_substep_for_run(run)
         run['status'] = 'finished'
         self._forget_agent_run(run)
         if is_visible_conversation:
@@ -45708,6 +46642,10 @@ end run'''"""
         run = self._agent_run_for_id(run_id)
         if not run:
             return
+        if run.get('_offscreen_held'):
+            release_offscreen_view(run.get('_offscreen_view'))
+            run['_offscreen_held'] = False
+        self._clear_external_substep_for_run(run)
         config = run.get('config') if isinstance(run.get('config'), dict) else {}
         target = config.get('external_target') if isinstance(config.get('external_target'), dict) else {}
         alias = str(target.get('alias', '') or '').strip()
@@ -48276,6 +49214,9 @@ end run'''"""
         self.move_window(x_center, y_center)
         self._refresh_pin_tab_edge_state(animated=True)
         self.show()
+        # Collapse -> the guard inside this hides the side shelf; expand -> it shows
+        # again (if there are running conversations) and repositions it.
+        self._refresh_agent_conversation_shelf()
         self._schedule_background_vision_toast_relayout()
 
     def showhidedock(self):
@@ -50375,6 +51316,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.memory_retention_combo.setCurrentIndex(retention_index if retention_index >= 0 else 2)
         self.le_ui.setText(globals_store.get('ui_shortcut', DEFAULT_UI_SHORTCUT) or DEFAULT_UI_SHORTCUT)
         self.le_same_position_screenshot.setText(globals_store.get('same_position_screenshot_shortcut', '') or '')
+        self.le_edge_toggle.setText(globals_store.get('edge_toggle_shortcut', '') or '')
         self.refresh_embedding_profile_selector(globals_store.get('embedding_profile', ''))
         self.refresh_specialized_profile_selectors(globals_store.get('specialized_profiles', {}))
         self.refresh_specialized_execution_selectors(globals_store.get('specialized_execution_modes', {}))
@@ -50488,10 +51430,15 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             same_position_screenshot_shortcut = normalize_optional_shortcut_text(
                 self.le_same_position_screenshot.text()
             )
+            edge_toggle_shortcut = normalize_optional_shortcut_text(
+                self.le_edge_toggle.text()
+            )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         if same_position_screenshot_shortcut and same_position_screenshot_shortcut == ui_shortcut:
             raise ValueError('Same-position screenshot shortcut must be different from the main window shortcut.')
+        if edge_toggle_shortcut and edge_toggle_shortcut in {ui_shortcut, same_position_screenshot_shortcut}:
+            raise ValueError('Edge show/hide shortcut must be different from the other shortcuts.')
         return {
             'custom_prompt': serialize_custom_prompt_storage(self._prompt_records),
             'skills': serialize_skill_records(self._current_skill_records(), validate=True),
@@ -50551,6 +51498,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             ),
             'ui_shortcut': ui_shortcut,
             'same_position_screenshot_shortcut': same_position_screenshot_shortcut,
+            'edge_toggle_shortcut': edge_toggle_shortcut,
             'pdf_max_pages': self.pdf_pages_combo.currentData(),
             'embedding_profile': str(self.embedding_profile_combo.currentData() or '').strip(),
             'specialized_profiles': normalize_specialized_profiles(
@@ -50659,6 +51607,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.profile_name_input.setText(profile['name'])
         self.le_ui.setText(globals_store['ui_shortcut'])
         self.le_same_position_screenshot.setText(globals_store.get('same_position_screenshot_shortcut', '') or '')
+        self.le_edge_toggle.setText(globals_store.get('edge_toggle_shortcut', '') or '')
         self.refresh_profile_selector(profile['name'])
         if self.hotkey_manager is not None:
             self.hotkey_manager.reload_shortcuts()
@@ -50682,13 +51631,19 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.btn_ui.setText('Record Main window shortcut')
         self.btn_same_position_screenshot.update_theme()
         self.btn_same_position_screenshot.setText('Record Same-position shot shortcut')
+        self.btn_edge_toggle.update_theme()
+        self.btn_edge_toggle.setText('Record Edge show/hide shortcut')
 
     def begin_shortcut_recording(self, target: str):
         if self.hotkey_manager is None or not self.hotkey_manager.begin_recording(target):
             show_broccoli_message(self, 'Shortcut unavailable', 'Native shortcut listener is not ready. Check Accessibility/Input Monitoring permissions for Broccoli.')
             return
         self.reset_record_buttons()
-        target_button = self.btn_ui if target == 'ui' else self.btn_same_position_screenshot
+        target_button = {
+            'ui': self.btn_ui,
+            'same_position_screenshot': self.btn_same_position_screenshot,
+            'edge_toggle': self.btn_edge_toggle,
+        }.get(target, self.btn_ui)
         target_button.setStyleSheet('''
             QPushButton{
             background-color: #0085FF;
@@ -50709,6 +51664,8 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
     def on_shortcut_recorded(self, target: str, shortcut: str):
         if target == 'same_position_screenshot':
             self.le_same_position_screenshot.setText(shortcut)
+        elif target == 'edge_toggle':
+            self.le_edge_toggle.setText(shortcut)
         else:
             self.le_ui.setText(shortcut)
         self.reset_record_buttons()
@@ -51582,6 +52539,8 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 WebViewPanel._set_view_lifecycle_state(view, frozen)
             except Exception:
                 pass
+        # Release the run pin so the idle sweeper can later discard it for more savings.
+        release_offscreen_view(view)
 
     def _load_online_memory_view(self, view, url: str, callback):
         target = QUrl.fromUserInput(str(url or '').strip())
@@ -51589,6 +52548,8 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             if callback:
                 QTimer.singleShot(0, lambda: callback(False))
             return
+        # Pin Active for the duration of this sync (wakes a frozen/discarded view).
+        acquire_offscreen_view(view)
         try:
             active = WebViewPanel._page_lifecycle_state('Active')
             WebViewPanel._set_view_lifecycle_state(view, active)
@@ -52743,6 +53704,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 self.background_vision_max_records_input,
                 self.le_ui,
                 self.le_same_position_screenshot,
+                self.le_edge_toggle,
                 self.webfetch_download_input,
                 self.annotation_pen_color_input,
                 self.online_memory_interval_input,
@@ -53723,17 +54685,25 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.le_ui.setFixedHeight(22)
         self.btn_same_position_screenshot = MacNormalButton('Record Same-position shot shortcut', self)
         self.btn_same_position_screenshot.clicked.connect(self.record_same_position_screenshot)
+        self.btn_edge_toggle = MacNormalButton('Record Edge show/hide shortcut', self)
+        self.btn_edge_toggle.clicked.connect(self.record_edge_toggle)
         shortcut_button_w = max(
             self.btn_ui.sizeHint().width(),
             self.btn_same_position_screenshot.sizeHint().width(),
+            self.btn_edge_toggle.sizeHint().width(),
             self.btn_ui.fontMetrics().horizontalAdvance('Press shortcut...') + 28,
             self.btn_same_position_screenshot.fontMetrics().horizontalAdvance('Press shortcut...') + 28,
+            self.btn_edge_toggle.fontMetrics().horizontalAdvance('Press shortcut...') + 28,
         )
         self.btn_ui.setFixedWidth(shortcut_button_w)
         self.btn_same_position_screenshot.setFixedWidth(shortcut_button_w)
+        self.btn_edge_toggle.setFixedWidth(shortcut_button_w)
         self.le_same_position_screenshot = QLineEdit(self)
         self.le_same_position_screenshot.setPlaceholderText('Optional shortcut')
         self.le_same_position_screenshot.setFixedHeight(22)
+        self.le_edge_toggle = QLineEdit(self)
+        self.le_edge_toggle.setPlaceholderText('Optional shortcut')
+        self.le_edge_toggle.setFixedHeight(22)
         self.webfetch_download_input = QLineEdit(self)
         self.webfetch_download_input.setPlaceholderText('Browser download folder')
         self.webfetch_download_input.setFixedHeight(22)
@@ -54211,6 +55181,13 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         shortcut_row_same_position_screenshot_layout.addWidget(self.btn_same_position_screenshot)
         shortcut_row_same_position_screenshot_layout.addWidget(self.le_same_position_screenshot, 1)
         shortcut_row_same_position_screenshot.setLayout(shortcut_row_same_position_screenshot_layout)
+        shortcut_row_edge_toggle = QWidget()
+        shortcut_row_edge_toggle_layout = QHBoxLayout()
+        shortcut_row_edge_toggle_layout.setContentsMargins(0, 0, 0, 0)
+        shortcut_row_edge_toggle_layout.setSpacing(6)
+        shortcut_row_edge_toggle_layout.addWidget(self.btn_edge_toggle)
+        shortcut_row_edge_toggle_layout.addWidget(self.le_edge_toggle, 1)
+        shortcut_row_edge_toggle.setLayout(shortcut_row_edge_toggle_layout)
         terminal_shell_row = QWidget()
         terminal_shell_row_layout = QHBoxLayout()
         terminal_shell_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -54253,6 +55230,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         general_page_2_layout.setSpacing(12)
         general_page_2_layout.addWidget(shortcut_row_ui)
         general_page_2_layout.addWidget(shortcut_row_same_position_screenshot)
+        general_page_2_layout.addWidget(shortcut_row_edge_toggle)
         general_page_2_layout.addWidget(self.frame1)
         general_page_2_layout.addWidget(QLabel('Terminal shell mode'))
         general_page_2_layout.addWidget(terminal_shell_row)
@@ -54814,7 +55792,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         widgets = [
             self.profile_name_input, self.endpoint_input, self.api_key_input,
             self.model_input,
-            self.timeout_input, self.le_ui, self.le_same_position_screenshot, self.webfetch_download_input,
+            self.timeout_input, self.le_ui, self.le_same_position_screenshot, self.le_edge_toggle, self.webfetch_download_input,
             self.display_history_limit_input,
             self.external_context_limit_input,
             self.code_execution_timeout_input,
@@ -54968,6 +55946,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 ),
                 'ui_shortcut': self.le_ui.text().strip(),
                 'same_position_screenshot_shortcut': self.le_same_position_screenshot.text().strip(),
+                'edge_toggle_shortcut': self.le_edge_toggle.text().strip(),
                 'pdf_max_pages': self.pdf_pages_combo.currentData(),
                 'embedding_profile': self.embedding_profile_combo.currentData(),
                 'specialized_profiles': normalize_specialized_profiles(
@@ -55085,6 +56064,14 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
 
     def record_same_position_screenshot(self):
         target = 'same_position_screenshot'
+        if self.hotkey_manager is not None and self.hotkey_manager.record_target == target:
+            self.hotkey_manager.cancel_recording()
+            self.reset_record_buttons()
+            return
+        self.begin_shortcut_recording(target)
+
+    def record_edge_toggle(self):
+        target = 'edge_toggle'
         if self.hotkey_manager is not None and self.hotkey_manager.record_target == target:
             self.hotkey_manager.cancel_recording()
             self.reset_record_buttons()
@@ -55350,6 +56337,7 @@ if __name__ == '__main__':
     btna_same_position_screenshot.triggered.connect(w3.capture_same_position_screenshot_and_send)
     hotkey_manager.ui_hotkey_pressed.connect(w3.pin_a_tab)
     hotkey_manager.same_position_screenshot_pressed.connect(w3.capture_same_position_screenshot_and_send)
+    hotkey_manager.edge_toggle_pressed.connect(w3._toggle_edge_hide)
     app.aboutToQuit.connect(hotkey_manager.stop)
     hotkey_manager.start()
     # w3.btn0_2.clicked.connect(w3.transferview)

@@ -10,7 +10,7 @@ os.makedirs(os.path.join(SPECPATH, 'build', 'Broccoli'), exist_ok=True)
 
 block_cipher = None
 
-__version__ = '2.0.11'
+__version__ = '2.0.12'
 
 browser_automation_hiddenimports = (
     collect_submodules('browser_use')
