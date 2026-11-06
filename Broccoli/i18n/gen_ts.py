@@ -26,10 +26,17 @@ CONTEXT = 'Broccoli'
 # Strings translated through a VARIABLE (_tr(label)) rather than a literal, so
 # the ast extractor cannot see them. Keep in sync with the source tables noted.
 EXTRA_SOURCE_STRINGS = [
+    # CONVERSATION_GROUP_COLOR_NAMES — the group settings color menu (_tr(name))
+    'Blue', 'Green', 'Orange', 'Red', 'Purple', 'Teal', 'Yellow', 'Brown',
+    # USAGE_BAR_PROVIDER_COLOR_NAMES — the provider color menus (Usage, AI tasks); Indigo since 10-31
+    'Indigo',
+    # COLLAPSED_BUTTON_ICONS — what the collapsed circle shows (Settings › Window & agent plan, 11-01)
+    'Broccoli', 'Dot', 'Custom image',
     # SPECIALIZED_CAPABILITIES labels — Models page rows (table stays English
     # at the source because the engine writes these labels into records).
     'Task reasoning', 'Web search', 'Text to speech', 'Speech to text',
     'Image generation', 'Video generation', 'Video to text', 'Terminal command',
+    'Read web page',   # SPECIALIZED_CAPABILITY_REGISTRY['web_page_read'] (2026-10-31)
     # ICLOUD_FEATURE_FLAG_SPECS labels + tooltips — Settings page 3 rows
     # (passed to _tr() through variables; keep in sync with the spec table).
     'Keep every conversation field on save',
@@ -46,7 +53,6 @@ EXTRA_SOURCE_STRINGS = [
     'Control tasks running on other devices',
     'Apple Notes mirror + iPhone Shortcuts',
     'One history across all devices',
-    'Approve high-risk actions remotely (not recommended)',
 ]
 
 # {english_source: (zh_CN, ja_JP)} — placeholders like {v} / %d must survive.
@@ -205,15 +211,18 @@ TRANSLATIONS = {
     'Stop, queue, follow-ups and comments reach the executing device as events; it confirms before anything is shown as done. (M5 · BROCCOLI_M5_REMOTE_LIFECYCLE)': (
         '停止、排队、追问和批注都以事件形式送到执行设备；它确认后才会显示为完成。（M5 · BROCCOLI_M5_REMOTE_LIFECYCLE）',
         '停止・キュー・追加質問・コメントはイベントとして実行デバイスに届き、確認されてから完了と表示されます。（M5 · BROCCOLI_M5_REMOTE_LIFECYCLE）'),
-    'Tasks sent from an iPhone Shortcut also write their finished answer into Apple Notes for reading on the phone. (M6 · BROCCOLI_M6_NOTES_SHORTCUTS)': (
-        '从 iPhone 快捷指令发来的任务，完成后的回答也会写进 Apple 备忘录，方便在手机上阅读。（M6 · BROCCOLI_M6_NOTES_SHORTCUTS）',
-        'iPhone のショートカットから送ったタスクは、完成した回答を Apple メモにも書き込み、iPhone で読めるようにします。（M6 · BROCCOLI_M6_NOTES_SHORTCUTS）'),
+    'Questions the iPhone Shortcut “Broccoli” addresses to this Mac are answered here, and each answer, or why there is none, is written into Apple Notes for reading on the phone. (M6 · BROCCOLI_M6_NOTES_SHORTCUTS)': (
+        'iPhone 快捷指令「Broccoli」里选了这台 Mac 的问题由这台 Mac 回答；每个回答，或者没答成的原因，都会写进 Apple 备忘录，方便在手机上阅读。（M6 · BROCCOLI_M6_NOTES_SHORTCUTS）',
+        'iPhone のショートカット「Broccoli」でこの Mac を選んだ質問にこの Mac が答え、回答、または答えられなかった理由を Apple メモに書き込んで iPhone で読めるようにします。（M6 · BROCCOLI_M6_NOTES_SHORTCUTS）'),
+    'Remind me on the iPhone when an answer is ready': (
+        '回答好了在 iPhone 上提醒我',
+        '回答ができたら iPhone で知らせる'),
+    'For each question from the iPhone, a reminder in the Reminders list “Broccoli” goes off about a minute after its Note is written (✅ answered, ⚠️ not answered, ⏳ waiting for you), and is ticked off by itself a day later. (M6 · BROCCOLI_M6_PHONE_REMINDERS)': (
+        '每个来自 iPhone 的问题，在它的备忘录写好约一分钟后，「提醒事项」里的「Broccoli」列表会响一次提醒（✅ 已回答、⚠️ 没答成、⏳ 等你处理），一天后自动勾掉。（M6 · BROCCOLI_M6_PHONE_REMINDERS）',
+        'iPhone からの質問ごとに、メモを書き込んでから約 1 分後にリマインダーのリスト「Broccoli」で通知します（✅ 回答済み、⚠️ 未回答、⏳ あなたの操作待ち）。1 日後に自動で完了にします。（M6 · BROCCOLI_M6_PHONE_REMINDERS）'),
     'History and search include the cloud conversations of all your devices, each conversation listed once. (M7 · BROCCOLI_M7_UNIFIED_HISTORY)': (
         '历史和搜索包含你所有设备在云端的对话，每段对话只列一次。（M7 · BROCCOLI_M7_UNIFIED_HISTORY）',
         '履歴と検索に全デバイスのクラウド上の会話を含め、各会話は 1 回だけ表示します。（M7 · BROCCOLI_M7_UNIFIED_HISTORY）'),
-    'Terminal commands, file edits and MCP writes normally must be approved on the Mac that executes them. Leave OFF unless you know exactly why. (BROCCOLI_REMOTE_HIGH_PRIVILEGE_APPROVAL)': (
-        '终端命令、文件修改和 MCP 写操作通常必须在执行它们的那台 Mac 上批准。除非你确切知道为什么，否则请保持关闭。（BROCCOLI_REMOTE_HIGH_PRIVILEGE_APPROVAL）',
-        'ターミナルコマンド、ファイル編集、MCP の書き込みは通常、実行する Mac で承認する必要があります。理由がはっきりしない限りオフのままにしてください。（BROCCOLI_REMOTE_HIGH_PRIVILEGE_APPROVAL）'),
     # ---- Follow-ups on a conversation another device owns ----
     'This Mac (move it back here)': ('这台 Mac（搬回来）', 'この Mac（ここへ戻す）'),
     'Copy to this Mac (new conversation)': ('复制到这台 Mac（新对话）', 'この Mac にコピー（新しい会話）'),
@@ -286,7 +295,6 @@ TRANSLATIONS = {
     'Control tasks running on other devices': ('控制其他设备上运行的任务', '他のデバイスで実行中のタスクを制御'),
     'Apple Notes mirror + iPhone Shortcuts': ('Apple 备忘录镜像 + iPhone 快捷指令', 'Apple メモのミラー + iPhone ショートカット'),
     'One history across all devices': ('所有设备共用一份历史', '全デバイスで 1 つの履歴'),
-    'Approve high-risk actions remotely (not recommended)': ('远程批准高风险操作（不推荐）', '高リスク操作をリモート承認（非推奨）'),
     ' · verified': (' · 已验证', ' · 検証済み'),
     '%s ⚡ Parallel · %d steps run together%s': ('%s ⚡ 并行 · %d 个步骤同时运行%s', '%s ⚡ 並列 · %d ステップを同時実行%s'),
     'API key': ('API 密钥', 'API キー'),
@@ -663,6 +671,48 @@ TRANSLATIONS = {
     'Append to prompt input': ('追加到提示词输入框', 'プロンプト入力欄に追記'),
     'Append to terminal input': ('追加到终端输入框', 'ターミナル入力欄に追記'),
     'Apple Notes': ('Apple 备忘录', 'Apple メモ'),
+    # ---- iPhone question folder + Notes notices (2026-10-27) ----
+    'Waiting for you to approve an action in Broccoli on the Mac. The answer will arrive as a separate note.': (
+        '在等你到 Mac 上的 Broccoli 里批准一个操作。回答会作为另一条备忘录送到。',
+        'Mac の Broccoli で操作の承認を待っています。回答は別のメモとして届きます。'),
+    'Stopped on the Mac before the answer was finished.': (
+        '回答还没写完，就在 Mac 上被停止了。',
+        '回答が終わる前に Mac で停止されました。'),
+    'Only text can be sent to this folder. The file "{name}" was left where it is.': (
+        '这个文件夹只收文字。文件“{name}”没有处理，原样留在那里。',
+        'このフォルダに送れるのはテキストだけです。ファイル「{name}」は処理せず、そのまま残しています。'),
+    'The Mac could not take this question. Details are in Broccoli on the Mac.': (
+        'Mac 没能接下这个问题。详细情况在 Mac 上的 Broccoli 里。',
+        'Mac がこの質問を受け付けられませんでした。詳しくは Mac の Broccoli で確認できます。'),
+    'Broccoli on the Mac quit before the answer was finished.': (
+        '回答还没写完，Mac 上的 Broccoli 就退出了。',
+        '回答が終わる前に Mac の Broccoli が終了しました。'),
+    'Not answered: something went wrong while working on it. Details are in Broccoli on the Mac.': (
+        '没答成：处理时出了问题。详细情况在 Mac 上的 Broccoli 里。',
+        '回答できませんでした：処理中に問題が起きました。詳しくは Mac の Broccoli で確認できます。'),
+    'New conversation': ('新对话', '新しい会話'),
+    '💤 (offline)': ('💤（离线）', '💤（オフライン）'),
+    'Untitled': ('未命名', '無題'),
+    'Reminders': ('提醒事项', 'リマインダー'),
+    'The conversation you chose is no longer on this Mac (deleted or archived). Your question is below; choose another conversation or a new one and ask again.': (
+        '你选的那段对话已经不在这台 Mac 上了（删掉了或归档了）。你的问题在下面；请换一段对话或选新对话，再问一次。',
+        '選んだ会話はもうこの Mac にありません（削除またはアーカイブ済み）。質問は下にあります。別の会話か新しい会話を選んで、もう一度質問してください。'),
+    'The conversation you chose now lives on another Mac. Choose that Mac in the Shortcut and ask again; your question is below.': (
+        '你选的那段对话现在在另一台 Mac 上。请在快捷指令里选那台 Mac 再问一次；你的问题在下面。',
+        '選んだ会話は今は別の Mac にあります。ショートカットでその Mac を選んで、もう一度質問してください。質問は下にあります。'),
+    'Open Notes › Broccoli › “{title}”.': (
+        '打开「备忘录」› Broccoli ›「{title}」。',
+        '「メモ」› Broccoli ›「{title}」を開いてください。'),
+    'The answer could not be written to Notes. It is in Broccoli on the Mac.': (
+        '回答没能写进备忘录，请在 Mac 上的 Broccoli 里查看。',
+        '回答をメモに書き込めませんでした。Mac の Broccoli で確認してください。'),
+    'Broccoli is not allowed to use Reminders, so the iPhone gets no reminder when an answer is ready. The Notes still arrive. Allow it in System Settings → Privacy & Security → Automation, then restart Broccoli, or turn the reminder off in Settings.': (
+        'Broccoli 没有使用「提醒事项」的权限，所以回答好了 iPhone 收不到提醒，但备忘录照常会写。请在「系统设置 → 隐私与安全性 → 自动化」里允许，然后重启 Broccoli；或者在设置里关掉这个提醒。',
+        'Broccoli にリマインダーの使用が許可されていないため、回答ができても iPhone に通知されません（メモは届きます）。「システム設定 → プライバシーとセキュリティ → オートメーション」で許可してから Broccoli を再起動するか、設定で通知をオフにしてください。'),
+    'Partial answer (incomplete)': ('已写出的部分回答（不完整）', '途中までの回答（不完全）'),
+    'Broccoli is not allowed to use Notes, so answers to questions from your iPhone cannot reach the phone. Allow it in System Settings → Privacy & Security → Automation, then restart Broccoli. The answers are still in Broccoli on this Mac.': (
+        'Broccoli 没有使用备忘录的权限，所以 iPhone 上提的问题，回答到不了手机。请在“系统设置 → 隐私与安全性 → 自动化”里允许，然后重启 Broccoli。回答仍然在这台 Mac 的 Broccoli 里。',
+        'Broccoli にメモを使う許可がないため、iPhone からの質問の回答が iPhone に届きません。「システム設定 → プライバシーとセキュリティ → オートメーション」で許可してから、Broccoli を再起動してください。回答はこの Mac の Broccoli には残っています。'),
     'Applies to app (any = all)': ('适用应用（any = 全部）', '対象アプリ（any = すべて）'),
     'Apply experience rules to Computer Use tasks': (
         '将经验规则应用于 Computer Use 任务', '経験ルールを Computer Use タスクに適用'),
@@ -800,7 +850,6 @@ TRANSLATIONS = {
         '编辑选中的技能。frontmatter 必填：name 和 description。',
         '選択したスキルを編集します。frontmatter の必須項目: name と description。'),
     'Editor': ('编辑器', 'エディタ'),
-    'Editor edit rejected': ('编辑器修改已拒绝', 'エディタの編集を却下しました'),
     'Editor file unchanged': ('编辑器文件无变化', 'エディタのファイルに変更はありません'),
     'Embed': ('向量化', '埋め込み'),
     'Embedding profile selected. Test to verify retrieval support.': (
@@ -1205,6 +1254,7 @@ TRANSLATIONS = {
     'Checking…': ('检查中…', '確認中…'),
     'Capturing the full conversation…': ('正在滚动抓取完整对话…', '会話全体をスクロールして取得しています…'),
     'full page scan ({n} windows)': ('整页扫描（{n} 个窗口）', 'ページ全体スキャン（{n} ウィンドウ）'),
+    'older messages may be missing': ('较早的消息可能没抓全', '古いメッセージが欠けている可能性があります'),
     'Web pages': ('网页', 'ウェブページ'),
     'WebFetch download folder': ('WebFetch 下载文件夹', 'WebFetch のダウンロードフォルダ'),
     'Window & startup': ('窗口与启动', 'ウィンドウと起動'),
@@ -1431,6 +1481,151 @@ TRANSLATIONS = {
     '“{name}” could not be saved: {reason}': (
         '“{name}”没能保存：{reason}',
         '「{name}」を保存できませんでした：{reason}'),
+    # 2026-10-26: AI edits are checked against the text the model saw; the history keeps every state
+    'after ai edit': ('AI 编辑后', 'AI 編集後'),
+    'unsaved edits': ('未保存的修改', '未保存の変更'),
+    'changed outside': ('外部改动', '外部での変更'),
+    'not applied': ('未生效', '未適用'),
+    'Editor edit not applied': ('AI 的修改没有写入', 'AI の編集は適用されませんでした'),
+    'Not restored': ('没有还原', '復元されませんでした'),
+    'The AI’s edit could not be used, so nothing was changed. The AI has been told why.': (
+        'AI 的修改没法使用，文件没有任何改动。原因已经告诉 AI。',
+        'AI の編集を使えなかったため、何も変更していません。理由は AI に伝えました。'),
+    'The backup copy could not be saved, so the AI’s edit was not written. Nothing was changed.': (
+        '备份没能存下来，所以没有写入 AI 的修改。文件没有任何改动。',
+        'バックアップを保存できなかったため、AI の編集は書き込んでいません。何も変更していません。'),
+    'The backup copy of “{name}” could not be saved, so nothing was restored. The file was not changed.': (
+        '“{name}”的备份没能存下来，所以没有还原。文件没有改动。',
+        '「{name}」のバックアップを保存できなかったため、復元していません。ファイルは変更していません。'),
+    'The backup copy of “{name}” could not be saved, so the file was not overwritten. Nothing was changed.': (
+        '“{name}”的备份没能存下来，所以没有覆盖文件。文件没有任何改动。',
+        '「{name}」のバックアップを保存できなかったため、ファイルを上書きしていません。何も変更していません。'),
+    'The file the AI wanted to edit is not open in the editor, so nothing was changed.': (
+        'AI 要改的文件没有在编辑器里打开，所以没有任何改动。',
+        'AI が編集しようとしたファイルがエディタで開かれていないため、何も変更していません。'),
+    'The place the AI wanted to change does not match the file’s current text, so nothing was changed. The AI has been told why.': (
+        'AI 要改的位置和文件现在的内容对不上，所以没有任何改动。原因已经告诉 AI。',
+        'AI が変更しようとした箇所がファイルの現在の内容と一致しないため、何も変更していません。理由は AI に伝えました。'),
+    'The saved copy of v{n} of “{name}” is missing or damaged, so nothing was restored. The file was not changed.': (
+        '“{name}”的 v{n} 备份不见了或已损坏，所以没有还原。文件没有改动。',
+        '「{name}」の v{n} の控えが見つからないか壊れているため、復元していません。ファイルは変更していません。'),
+    '“{name}” changed after the edit was shown to you, so the edit was not written. Nothing was changed.': (
+        '“{name}”在修改弹窗出现之后又被改过，所以没有写入这次修改。文件没有任何改动。',
+        '「{name}」は編集を表示した後に変更されたため、この編集は書き込んでいません。何も変更していません。'),
+    '“{name}” was changed after the AI read it, at the same place as the AI’s edit (now line {lines}). To be safe, nothing was written. Send your request again and the AI will work from the current text.': (
+        '“{name}”在 AI 读取之后被改过，改的地方和 AI 这次的修改撞在一起（现在的第 {lines} 行）。'
+        '为了安全，什么都没有写入。重新发送一次请求，AI 会按现在的内容来改。',
+        '「{name}」は AI が読んだ後に変更されていて、その箇所が AI の編集と重なっています（現在の {lines} 行目）。'
+        '安全のため、何も書き込んでいません。もう一度依頼を送ると、AI は現在の内容をもとに編集します。'),
+    '“{name}” was changed by another program a moment ago, so it was not overwritten. Nothing was changed.': (
+        '“{name}”刚刚被别的程序改过，所以没有覆盖。文件没有任何改动。',
+        '「{name}」は直前に別のアプリで変更されたため、上書きしていません。何も変更していません。'),
+    # 2026-10-26: Settings → Models → Models by location
+    'Models by location': ('按位置屏蔽模型', '場所別のモデル制限'),
+    'Models that may not be used at home, at the office or on another network.': (
+        '在家、在公司或其他网络下不能使用的模型。',
+        '自宅・職場・その他のネットワークで使わないモデル。'),
+    'Block models by network location': ('按网络位置屏蔽模型', 'ネットワークの場所でモデルを制限する'),
+    'Location': ('位置', '場所'),
+    'Addresses': ('地址', 'アドレス'),
+    'Add this network': ('添加当前网络', 'このネットワークを追加'),
+    'New location': ('新位置', '新しい場所'),
+    'This network': ('当前网络', 'このネットワーク'),
+    '(unnamed)': ('（未命名）', '（名前なし）'),
+    'Models blocked at “{name}”:': ('在“{name}”屏蔽的模型：', '「{name}」で使わないモデル：'),
+    'Add a location to choose the models blocked there.': ('先添加一个位置，再选择在那里屏蔽的模型。',
+                                                           '場所を追加すると、そこで使わないモデルを選べます。'),
+    'This Mac now — public: {public} · local: {lan}': ('这台 Mac 现在：公网 {public} · 局域网 {lan}',
+                                                       'この Mac の現在：グローバル {public} · ローカル {lan}'),
+    'At: {places}': ('当前位置：{places}', '現在の場所：{places}'),
+    'No location matches — nothing is blocked.': ('没有匹配的位置，不屏蔽任何模型。',
+                                                  '一致する場所はありません。制限しているモデルはありません。'),
+    'checking…': ('查询中…', '確認中…'),
+    'unavailable': ('查不到', '取得できません'),
+    "A location is one or more addresses: the public IP of the network (Broccoli asks api.ipify.org for it now and then) or this Mac's local address — exact, with * (192.168.3.*) or as a range (10.0.0.0/8). Where a location matches, the models ticked for it are never used: every model choice takes the next allowed one, and if none is left the task says so instead of using a blocked model.": (
+        '一个位置由一个或多个地址组成：网络的公网 IP（Broccoli 会不时向 api.ipify.org 查询），'
+        '或这台 Mac 的局域网地址——可以写完整地址、用 *（192.168.3.*）或网段（10.0.0.0/8）。'
+        '匹配到某个位置时，勾选的模型一律不用：每次选模型都改用下一个允许的；一个都不剩时，'
+        '任务会直接说明，而不会去用被屏蔽的模型。',
+        '場所は一つ以上のアドレスで決まります：ネットワークのグローバル IP（Broccoli が時々 '
+        'api.ipify.org に問い合わせます）、またはこの Mac のローカルアドレス——完全な形、* '
+        '（192.168.3.*）、範囲（10.0.0.0/8）で書けます。場所が一致すると、チェックしたモデルは使いません：'
+        'モデルを選ぶたびに次の使えるモデルに切り替え、一つも残らない場合は制限されたモデルを使わずにその旨を伝えます。'),
+    'Model blocked at this location': ('这个位置屏蔽了该模型', 'この場所では使えないモデル'),
+    'Every Browser Use model is blocked at this network location. Allow one in Settings → Models → Models by location.': (
+        '所有 Browser Use 模型在当前网络位置都被屏蔽了。请在 设置 → 模型 → 按位置屏蔽模型 里放开一个。',
+        'Browser Use のモデルはすべてこのネットワークの場所で制限されています。設定 → モデル → 場所別のモデル制限 で一つ許可してください。'),
+    'Every Computer Use model is blocked at this network location. Allow one in Settings → Models → Models by location.': (
+        '所有 Computer Use 模型在当前网络位置都被屏蔽了。请在 设置 → 模型 → 按位置屏蔽模型 里放开一个。',
+        'Computer Use のモデルはすべてこのネットワークの場所で制限されています。設定 → モデル → 場所別のモデル制限 で一つ許可してください。'),
+    # 2026-10-26: conversation groups
+    '(Started by a change to {file} — group “{group}”)': ('（由 {file} 的改动启动——分组“{group}”）', '（{file} の変更で開始 — グループ「{group}」）'),
+    'Add file…': ('添加文件…', 'ファイルを追加…'),
+    'Add folder': ('添加文件夹', 'フォルダを追加'),
+    'Add folder…': ('添加文件夹…', 'フォルダを追加…'),
+    'Delete group': ('删除分组', 'グループを削除'),
+    'Delete the group “{name}”? Its conversations are kept, in no group.': (
+        '删除分组“{name}”吗？里面的对话会保留，变成不属于任何分组。',
+        'グループ「{name}」を削除しますか？中の会話は残り、どのグループにも属さなくなります。'),
+    'File or folder': ('文件或文件夹', 'ファイルまたはフォルダ'),
+    'Folders and files (the background of every conversation in this group)': (
+        '文件夹和文件（本组每个对话的背景资料）', 'フォルダとファイル（このグループのすべての会話の背景資料）'),
+    'Group': ('分组', 'グループ'),
+    'Group name': ('分组名称', 'グループ名'),
+    'Group name:': ('分组名称：', 'グループ名：'),
+    'Group settings': ('分组设置', 'グループ設定'),
+    'Group settings…': ('分组设置…', 'グループ設定…'),
+    'In “{group}” — your prompts here...': ('在“{group}”里——在这里输入…', '「{group}」の中 — ここに入力…'),
+    'Move to group': ('移到分组', 'グループに移動'),
+    'New conversation in this group': ('在这个分组里新建对话', 'このグループで新しい会話'),
+    'New conversation in “{group}” — your prompt here...': ('在“{group}”里新建对话——在这里输入…',
+                                                           '「{group}」で新しい会話 — ここに入力…'),
+    'New group': ('新建分组', '新しいグループ'),
+    'New group…': ('新建分组…', '新しいグループ…'),
+    'No group': ('不属于任何分组', 'グループなし'),
+    'Not in a group': ('不在分组里', 'グループに入っていない会話'),
+    'Rename group': ('重命名分组', 'グループ名を変更'),
+    'Watch a file': ('监听文件', 'ファイルを監視'),
+    'Watch a file…': ('监听文件…', 'ファイルを監視…'),
+    'Watch a folder': ('监听文件夹', 'フォルダを監視'),
+    'Watch a folder…': ('监听文件夹…', 'フォルダを監視…'),
+    'Watched files': ('监听的文件', '監視するファイル'),
+    'What to do when it changes': ('它变了之后要做什么', '変更されたときにすること'),
+    'When a watched file changes, the model reads the change (with the instruction, if you wrote one), splits it into tasks and starts them in this group right away — in parallel when they do not touch the same things, one after another when they do. Changes made while those tasks run are not picked up again. Tasks stop at approvals unless Automatic approval is on.': (
+        '监听的文件一变，模型就读出改动（连同你写的指令），拆成任务，立刻在这个分组里开始做——互不相干的同时做，'
+        '有关联的按顺序做。这些任务运行期间的改动不会再次触发。除非打开了“自动批准”，否则任务遇到需要批准的动作会停下来等你。',
+        '監視中のファイルが変わると、モデルが変更内容（書いた指示があればそれも）を読み、タスクに分けてこのグループですぐに開始します。'
+        '互いに関係しないものは同時に、関係するものは順番に進めます。これらのタスクの実行中に起きた変更は再度は拾いません。'
+        '「自動承認」がオンでない限り、承認が必要な操作で止まります。'),
+    'Blue': ('蓝色', '青'), 'Green': ('绿色', '緑'), 'Orange': ('橙色', 'オレンジ'), 'Red': ('红色', '赤'),
+    'Purple': ('紫色', '紫'), 'Teal': ('青色', '青緑'), 'Yellow': ('黄色', '黄'), 'Brown': ('棕色', '茶'),
+    # 2026-10-27: group colour — the system colour picker
+    'Other color…': ('其他颜色…', 'その他の色…'),
+    'Custom ({color})': ('自定义（{color}）', 'カスタム（{color}）'),
+    'Group color': ('分组颜色', 'グループの色'),
+    # 2026-10-26: Settings → General → Automatic approval
+    'Automatic approval': ('自动批准', '自動承認'),
+    'Let tasks run without anyone at the screen: every action is approved, after a backup.': (
+        '让任务在没人看着时也能跑完：每个动作先备份，再自动批准。',
+        '画面の前に誰もいなくてもタスクを進めます：各操作はバックアップしてから自動で承認します。'),
+    'Approve every action automatically': ('自动批准所有动作', 'すべての操作を自動で承認する'),
+    'For tasks that run while nobody is at the screen. Terminal commands — dangerous ones such as sudo or rm -rf included — editor edits, MCP tools, Computer Use and the tool calls of Codex / Claude Code are all approved without asking, and nothing waits for a click.': (
+        '给没人在屏幕前时运行的任务用。终端命令（包括 sudo、rm -rf 这类危险命令）、编辑器修改、MCP 工具、'
+        '电脑操作，以及 Codex / Claude Code 的工具调用，全部不经询问直接批准，不会有任何地方停下来等人点。',
+        '画面の前に誰もいないときに動くタスク向けです。ターミナルコマンド（sudo や rm -rf などの危険なものも含む）、'
+        'エディタの編集、MCP ツール、Computer Use、Codex / Claude Code のツール呼び出しをすべて確認なしで承認し、'
+        'クリック待ちで止まることはありません。'),
+    "Before anything is changed, the files and folders it touches are copied into the backup folder, one folder per conversation; manifest.json in each copy says where every file came from. Clicks and typing in apps, web forms and what MCP tools send elsewhere cannot be copied: they are only written to the conversation's log.jsonl. Tasks sent from another device still need your approval.": (
+        '改动之前，会把它要动的文件和文件夹复制到备份文件夹里，每个对话一个文件夹；每份备份里的 manifest.json '
+        '写明每个文件原来在哪里。在应用里的点击和输入、网页表单、MCP 工具发到别处的内容没法复制，只会记进该对话的 '
+        'log.jsonl。从其他设备发来的任务仍然需要你批准。',
+        '変更する前に、対象のファイルやフォルダをバックアップフォルダにコピーします（会話ごとに 1 フォルダ）。'
+        '各コピーの manifest.json に元の場所が書かれています。アプリでのクリックや入力、Web フォーム、MCP ツールが外部に送る内容は'
+        'コピーできないため、その会話の log.jsonl に記録するだけです。他のデバイスから送られたタスクは引き続き承認が必要です。'),
+    'Open backup folder': ('打开备份文件夹', 'バックアップフォルダを開く'),
+    '“{model}” is blocked at this location ({place}). Allow it in Settings → Models → Models by location, or choose another model.': (
+        '“{model}”在当前位置（{place}）被屏蔽。请在 设置 → 模型 → 按位置屏蔽模型 里放开，或换一个模型。',
+        '「{model}」はこの場所（{place}）では制限されています。設定 → モデル → 場所別のモデル制限 で許可するか、別のモデルを選んでください。'),
 }
 
 
@@ -1442,6 +1637,20 @@ except ImportError:  # run from another directory
 for _source, _pair in AUDIT_TRANSLATIONS.items():
     TRANSLATIONS.setdefault(_source, _pair)
 EXTRA_SOURCE_STRINGS = list(EXTRA_SOURCE_STRINGS) + [s for s in AUDIT_EXTRA_SOURCE_STRINGS if s not in EXTRA_SOURCE_STRINGS]
+
+# Per-feature tables: i18n/translations_feature_<name>.py defines FEATURE_TRANSLATIONS (same
+# shape as TRANSLATIONS) and, optionally, FEATURE_EXTRA_SOURCE_STRINGS — one file per feature,
+# so work on several features at once never edits the table above.
+import glob
+import importlib.util
+for _feature_path in sorted(glob.glob(os.path.join(HERE, 'translations_feature_*.py'))):
+    _feature_spec = importlib.util.spec_from_file_location(os.path.basename(_feature_path)[:-3], _feature_path)
+    _feature_module = importlib.util.module_from_spec(_feature_spec)
+    _feature_spec.loader.exec_module(_feature_module)
+    for _source, _pair in getattr(_feature_module, 'FEATURE_TRANSLATIONS', {}).items():
+        TRANSLATIONS.setdefault(_source, _pair)
+    EXTRA_SOURCE_STRINGS += [s for s in getattr(_feature_module, 'FEATURE_EXTRA_SOURCE_STRINGS', [])
+                             if s not in EXTRA_SOURCE_STRINGS]
 
 
 def _feature_flag_spec_strings(tree):
@@ -1460,8 +1669,9 @@ def extract_source_strings():
     tree = ast.parse(open(SOURCE, encoding='utf-8').read())
     values = set()
     for node in ast.walk(tree):
+        # approval_tr() reads the same .qm in the language of Settings › Languages (approval windows)
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == '_tr' and node.args
+                and node.func.id in ('_tr', 'approval_tr') and node.args
                 and isinstance(node.args[0], ast.Constant)
                 and isinstance(node.args[0].value, str)):
             values.add(node.args[0].value)

@@ -1,0 +1,23 @@
+{
+  "version": "v0.83.0",
+  "published_at": "2026-10-31T10:12:05Z",
+  "release_url": "https://github.com/steipete/CodexBar/releases/tag/v0.83.0",
+  "asset": {
+    "name": "CodexBarCLI-v0.83.0-macos-arm64.tar.gz",
+    "sha256": "3fb6af9582a0b232dc1708e1d8f13985441dbe2e74903791c902d1fa8bb7c4a9",
+    "size": 14421007
+  },
+  "license_name": "MIT",
+  "license_sha256": "14293556b79940745123d0160c71d27ed0e9fe9b8a848093f3ed78f4853caafe",
+  "taken_at": "2026-11-02T14:39:43+0900",
+  "test_run": {
+    "version": "CodexBar 0.83.0",
+    "providers": 112,
+    "readings": {
+      "codex": "1 window(s)",
+      "claude": "2 window(s)",
+      "grok": "no reading here",
+      "ollama": "no reading here"
+    }
+  }
+}

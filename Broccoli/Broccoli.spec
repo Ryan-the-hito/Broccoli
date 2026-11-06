@@ -6,8 +6,51 @@
 #   Broccoli.py (= Broccoli_26new.py), browser_use_worker.py, computer_use_worker.py,
 #   computer_use_display.py, computer_use_experience.py, smooth_widgets.py,
 #   the images / icons / default .txt files below, vendor/ (xterm + mermaid.min.js),
-#   i18n/*.qm (Chinese / Japanese UI), MathJax-2.7.1/ (formulas in the Agent conversation).
+#   i18n/*.qm (Chinese / Japanese UI), MathJax-2.7.1/ (formulas in the Agent conversation),
+#   open_connector/ (2026-10-29: the built-in Open Connector server — Settings › Connected apps),
+#   codexbar/ (2026-10-30: CodexBar's command-line build for the usage bars — Settings › Usage),
+#   agentsview/ (2026-10-31: reads the AI sessions on this Mac for the AI tasks column — Settings › AI tasks).
 # A missing one stops the build (REQUIRED below) instead of shipping an app without it.
+# (Last synced from the source folder 2026-11-02, Broccoli_26new-374.)
+#
+# Open Connector: open_connector/ is refreshed from the source folder's open_connector_update.py
+# (official release build, checksum, licence check, test run). The server goes into
+# Contents/Frameworks/open_connector as an executable. SIGN IT LIKE THE APP, with the same
+# entitlements.plist (allow-jit …): it is a JavaScript engine and runs much faster with JIT —
+#     codesign --force --options runtime --timestamp --entitlements entitlements.plist \
+#         --sign "Developer ID Application: <your name> (<team id>)" \
+#         dist/Broccoli.app/Contents/Frameworks/open_connector/open-connector-darwin-arm64
+# then sign the app as usual (an app signed with --deep re-signs it the same way) and notarize.
+#
+# CodexBar: codexbar/ is refreshed with the source folder's external_update.py (update codexbar
+# --copy-to <this folder>): official release, checksum, licence check (MIT), test run. Its
+# CodexBarCLI goes into Contents/Frameworks/codexbar as an executable and must find its plug-in
+# bundle CodexBar_CodexBarCore.bundle beside it (shipped as data, linked in next to it). Sign it
+# like Open Connector:
+#     codesign --force --options runtime --timestamp --entitlements entitlements.plist \
+#         --sign "Developer ID Application: <your name> (<team id>)" \
+#         dist/Broccoli.app/Contents/Frameworks/codexbar/CodexBarCLI
+# It is the only CodexBar the app uses (no CodexBar app needed); its settings live in
+# ~/BroccoliAppPath/CodexBar/config.json.
+#
+# agentsview: agentsview/ is refreshed with external_update.py (update agentsview --copy-to <this
+# folder>): official release, checksum, licence check (MIT), test run. Its single executable goes
+# into Contents/Frameworks/agentsview (the app looks in sys._MEIPASS/agentsview). Sign it like the
+# others (it is a Go program and needs no JIT, the entitlements do no harm):
+#     codesign --force --options runtime --timestamp --entitlements entitlements.plist \
+#         --sign "Developer ID Application: <your name> (<team id>)" \
+#         dist/Broccoli.app/Contents/Frameworks/agentsview/agentsview
+# Its data lives in ~/BroccoliAppPath/AgentsView.
+#
+# Claude CLI (INCLUDE_CLAUDE_CLI): also a JavaScript engine; Anthropic ships it signed with allow-jit,
+# so once re-signed it needs the same entitlements or it may not start:
+#     codesign --force --options runtime --timestamp --entitlements entitlements.plist \
+#         --sign "Developer ID Application: <your name> (<team id>)" \
+#         dist/Broccoli.app/Contents/Frameworks/claude_agent_sdk/_bundled/claude
+#
+# Order: these four first, the app last (signing anything inside afterwards breaks the app's
+# signature). Signing the app with --deep re-signs them as well: give that command the same
+# --options runtime --timestamp --entitlements entitlements.plist, or they lose JIT.
 
 import os
 import re
@@ -44,8 +87,19 @@ REQUIRED = [
     'api.txt', 'api2.txt', 'bear.txt', 'output.txt', 'which.txt', 'command.txt', 'history.txt',
     'wp.txt', 'third.txt', 'timeout.txt', 'showref.txt', 'modelnow.txt', 'UI_short.txt', 'showhide.txt',
     'vendor/xterm/xterm.js', 'vendor/xterm/xterm.css', 'vendor/xterm/addon-fit.js', 'vendor/mermaid.min.js',
+    # 2026-10-28: the terminal tab's wide characters, renderers and clickable links
+    'vendor/xterm/addon-unicode11.js', 'vendor/xterm/addon-webgl.js', 'vendor/xterm/addon-canvas.js',
+    'vendor/xterm/addon-web-links.js',
     'i18n/broccoli_zh_CN.qm', 'i18n/broccoli_ja_JP.qm',
     'MathJax-2.7.1/MathJax.js', 'MathJax-2.7.1/config/TeX-MML-AM_CHTML.js',
+    # 2026-10-29: the built-in Open Connector server, what it was taken from and its licence
+    'open_connector/open-connector-darwin-arm64', 'open_connector/manifest.json',
+    'open_connector/LICENSE.txt', 'open_connector/NOTICE.md',
+    # 2026-10-30: CodexBar's command-line build (usage bars), its plug-in bundle and licences
+    'codexbar/CodexBarCLI', 'codexbar/manifest.json', 'codexbar/LICENSE.txt', 'codexbar/THIRD_PARTY_NOTICES',
+    'codexbar/VERSION', 'codexbar/CodexBar_CodexBarCore.bundle/Contents/Info.plist',
+    # 2026-10-31: agentsview (AI tasks column), what it was taken from and its licence
+    'agentsview/agentsview', 'agentsview/manifest.json', 'agentsview/LICENSE.txt',
 ]
 _missing = [name for name in REQUIRED if not (SPEC_DIR / name).is_file()]
 if _missing:
@@ -80,6 +134,7 @@ browser_automation_datas = (
 common_hiddenimports = [
     'PyQt6.QtWebEngineWidgets',
     'PyQt6.QtWebEngineCore',
+    'PyQt6.QtWebChannel',        # 2026-10-28: the terminal tab talks to xterm through it
     'PyQt6.QtPdf',
     'fitz',
     'pdfminer.high_level',
@@ -92,6 +147,7 @@ common_hiddenimports = [
     'smooth_widgets',
     'charset_normalizer',        # the editor's file-encoding detection
     'objc', 'AppKit', 'Foundation', 'CoreFoundation', 'Quartz', 'Vision', 'UserNotifications',
+    'Security',                  # 2026-10-29: Open Connector's key and tokens live in the keychain
     # Computer Use worker helpers (imported lazily inside the worker):
     'computer_use_display',
     'computer_use_experience',
@@ -147,6 +203,21 @@ resource_datas = [
     # formulas in the Agent conversation (config TeX-MML-AM_CHTML = CommonHTML output with the
     # woff web fonts): the 114 MB PNG image fonts and the 20 MB unminified copy are never loaded
     *folder_datas('MathJax-2.7.1', skip=('unpacked', 'fonts/HTML-CSS/TeX/png')),
+    # what the bundled Open Connector server was taken from (version, checksum) and its licence
+    ('open_connector/manifest.json', 'open_connector'),
+    ('open_connector/LICENSE.txt', 'open_connector'),
+    ('open_connector/NOTICE.md', 'open_connector'),
+    # CodexBar (usage bars): what it was taken from, its licences, and the plug-in bundle the
+    # command-line build loads from beside itself
+    ('codexbar/manifest.json', 'codexbar'),
+    ('codexbar/LICENSE.txt', 'codexbar'),
+    ('codexbar/THIRD_PARTY_NOTICES', 'codexbar'),
+    ('codexbar/VERSION', 'codexbar'),
+    *folder_datas('codexbar/CodexBar_CodexBarCore.bundle'),
+    # agentsview (AI tasks column): what it was taken from (the settings page shows its version)
+    # and its licence
+    ('agentsview/manifest.json', 'agentsview'),
+    ('agentsview/LICENSE.txt', 'agentsview'),
     *browser_automation_datas,
 ]
 
@@ -159,11 +230,22 @@ if INCLUDE_CLAUDE_CLI:
     # where the SDK looks for it: <package>/_bundled/claude
     claude_cli_binaries.append((str(_claude_cli), 'claude_agent_sdk/_bundled'))
 
+# the Open Connector server: an executable, next to its manifest (the app looks in
+# sys._MEIPASS/open_connector); never UPX-compressed (it carries its JavaScript bundle inside)
+OPEN_CONNECTOR_BINARY = 'open-connector-darwin-arm64'
+open_connector_binaries = [(str(SPEC_DIR / 'open_connector' / OPEN_CONNECTOR_BINARY), 'open_connector')]
+# CodexBar's command-line build (usage bars): an executable in sys._MEIPASS/codexbar; not UPX-compressed
+CODEXBAR_BINARY = 'CodexBarCLI'
+codexbar_binaries = [(str(SPEC_DIR / 'codexbar' / CODEXBAR_BINARY), 'codexbar')]
+# agentsview (AI tasks column): an executable in sys._MEIPASS/agentsview; not UPX-compressed
+AGENTSVIEW_BINARY = 'agentsview'
+agentsview_binaries = [(str(SPEC_DIR / 'agentsview' / AGENTSVIEW_BINARY), 'agentsview')]
+
 
 a = Analysis(
     ['Broccoli.py', 'browser_use_worker.py', 'computer_use_worker.py'],
     pathex=[str(SPEC_DIR)],
-    binaries=claude_cli_binaries,
+    binaries=claude_cli_binaries + open_connector_binaries + codexbar_binaries + agentsview_binaries,
     datas=resource_datas,
     hiddenimports=common_hiddenimports,
     hookspath=[],
@@ -252,7 +334,7 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=[OPEN_CONNECTOR_BINARY, CODEXBAR_BINARY, AGENTSVIEW_BINARY],
     name='Broccoli',
 )
 app = BUNDLE(
@@ -270,6 +352,6 @@ app = BUNDLE(
         'LSBackgroundOnly': True,
         'NSHighResolutionCapable': True,
         # Apple Notes and other apps are driven through osascript (macOS asks the user once)
-        'NSAppleEventsUsageDescription': 'Broccoli reads and writes your Apple Notes and controls other apps when you ask it to.',
+        'NSAppleEventsUsageDescription': 'Broccoli reads and writes your Apple Notes and Reminders and controls other apps when you ask it to.',
     },
 )
