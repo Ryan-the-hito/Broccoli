@@ -143,8 +143,7 @@ All of Broccoli's data is in this folder:
 Each person's things are in `Users/<user>/` inside it (yours is `Users/owner/`):
 
 - `Conversations/`: one JSON file per conversation, with its attachments in a folder next to it.
-- `CustomPrompt.txt`: your saved prompts. Sets are separated by `---`; the name and the content each go inside a pair of `<|` `|>`.
-- `lang.txt`: the languages for Translate, Polish, Summarize and the other modes, one per line (edit them in Settings › Languages; the first one is your main language).
+- `CustomPrompt.txt`, `lang.txt`: plain-text copies of your saved prompts and your language list, so you can read them outside the app. To change them, use Settings › Prompts and Settings › Languages: both files are rewritten from the settings every time.
 - `Wiki/`, `Retrieval/`, `Editor/`…: the small Wiki, the search index, the editor's history and so on.
 
 To save a conversation, rest the pointer on **Transfer**: **🔻 Save** writes a Markdown file, and **🔺 Share** offers Full Markdown, Task Capsule or Screenshot.
@@ -351,13 +350,7 @@ When you upgrade from an old version, whatever is in `~/BroccoliAppPath` and `~/
    - ⌃⌥A: the AI tasks column
    - Screenshot, same-position screenshot and the collapsed circle have no shortcut by default; set them if you like
 
-6. **Custom prompts**: write them in Settings › Prompts › Saved prompts in the format below, then pick Customize in the mode drop-down.
-
-```
-<|Name 1|><|Content 1…|>
----
-<|Name 2|><|Content 2…|>
-```
+6. **Custom prompts**: open Settings › Prompts › Saved prompts, click **New**, give the prompt a name in the list, write it in **Prompt body** below, then click **Save**. Wherever the body says `{text}`, what you type in the prompt goes in. To use one, pick Customize in the mode drop-down, then pick the prompt.
 
 7. **Questions from iPhone**: first turn on iCloud (Settings › General › History & iCloud). On the iPhone, use the "Broccoli" shortcut, or save a question into Broccoli's questions folder in iCloud. This Mac answers it, and the answer is written into Notes. In Settings you decide separately whether your other Macs, your iPhone and other people may send tasks to this Mac.
 
