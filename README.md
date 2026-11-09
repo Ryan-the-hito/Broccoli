@@ -126,7 +126,8 @@ Broccoli 是 2023 年 2 月我花三天时间做的一个小软件。2026 年的
 - **Open Connector**：在「设置 › 已连接的应用」连接其他应用，密钥存在钥匙串里，每个动作都要你批准。
 - **用量条**：蓝条上方的彩色条显示每家 AI 套餐用了多少（内置 CodexBar）。
 - **AI 任务圆点**：鼠标旁的小圆点显示这台 Mac 上正在跑的 Claude Code / Codex 会话，悬停展开成一列胶囊。
-- **iPhone 提问**：从 iPhone 的提问文件夹或「Broccoli」快捷指令发问题给 Mac，回答写进「备忘录」。
+- **iPhone 提问**：在 iPhone 上运行「Broccoli」快捷指令，选一台 Mac、选一个对话、输入问题，回答会写进「备忘录」（见下面「使用说明」第 7 条）。
+- **浏览器脚本**：两个油猴脚本。Broccoli Bridge 在任意网页右下角放一个 🥦 按钮，把选中的文字、网址和你的问题发给 Broccoli；Broccoli WebFetch 把网页正文收集起来，交给 Broccoli 当附件（见「使用说明」第 8 条）。
 - **一台 Mac 多人用**：每人一份自己的设置和对话，在设置里切换用户；也可以通过 iCloud 文件夹把这台 Mac 共享给别人。
 - **问题分支树**：任何一个问题都能分出新的分支，整棵树画成一张图。
 - **编辑器和阅读器**：AI 的改动按底稿核对，冲突时停下来；保存时保留原文件的编码和换行。
@@ -352,7 +353,18 @@ Broccoli 的数据都在这个文件夹里：
 
 6. **自定义提示词**：打开「设置 › 提示词 › 已存提示词」，点「新」，在列表里给它起个名字，在下面的「提示词正文」里写内容，最后点「保存」。正文里写 `{text}` 的地方，会换成你在输入框里输入的文字。用的时候在模式下拉里选「自定义」，再选一条提示词。
 
-7. **iPhone 提问**：要先打开 iCloud（「设置 › 通用 › 历史与 iCloud」）。iPhone 上用「Broccoli」快捷指令，或者把问题存进 iCloud 里 Broccoli 的提问文件夹，这台 Mac 会接着回答，回答写进「备忘录」。设置里可以分别决定：你的其他 Mac、你的 iPhone、别人，谁能给这台 Mac 发任务。
+7. **iPhone 提问**：在 iPhone 上运行一个叫「Broccoli」的快捷指令：选一台 Mac → 选新对话或那台 Mac 最近的某个对话 → 输入问题。Mac 回答后，答案写进「备忘录 › Broccoli」，iPhone 上还会响一条提醒。
+   1. 准备：iPhone 和 Mac 登录同一个 Apple 账户，都打开 iCloud 云盘；Broccoli 的「设置 › 通用 › 历史与 iCloud」里，「iCloud 远程任务」下的「Apple 备忘录镜像 + iPhone 快捷指令」保持打开（默认就是开的）。
+   2. 在每台 Mac 上重新打开一次 Broccoli，等 15 秒，它会在 iCloud 云盘的「快捷指令」文件夹里建好 Broccoli 文件夹。
+   3. 在 iPhone 的「文件」App 里，按住「iCloud 云盘 › 快捷指令 › Broccoli」文件夹，点「保持下载」。
+   4. 拿到快捷指令：有人分享过 iCloud 链接，点链接添加就行（这个快捷指令里没有任何名字和设备编号）；或者照 [完整搭建步骤](docs/IPHONE_SHORTCUT_SETUP_zh.md) 自己做一个。
+   5. 第一次回答时，Mac 会问 Broccoli 能否控制「备忘录」和「提醒事项」，都点「好」。
+
+   设置里还可以分别决定：你的其他 Mac、你的 iPhone、别人，谁能给这台 Mac 发任务。
+
+8. **浏览器脚本**：先在浏览器里装 [Tampermonkey](https://www.tampermonkey.net/)（油猴），再点下面的链接，Tampermonkey 会弹出安装页。两个脚本都要 Broccoli 开着才有用。
+   - [Broccoli Bridge](https://github.com/Ryan-the-hito/Broccoli/raw/main/userscripts/broccoli-bridge.user.js)：网页右下角出现一个 🥦 按钮。先选中一段文字（不选也行），点 🥦，在弹出的小框里写问题，点「Send to Broccoli」或按 ⌘↩。标题、网址、选中的文字和问题会一起填进 Broccoli 当前页面的输入框并发送。右下角提示「Sent to Broccoli ✓」就是发出去了；提示「Broccoli not running」说明 Broccoli 没开。
+   - [Broccoli WebFetch](https://github.com/Ryan-the-hito/Broccoli/raw/main/userscripts/broccoli-webfetch.user.js)：网页上出现一个圆按钮，展开后可以「➕ Add Current Page」收集当前页、「📄 Export JSON」导出、「🗑 Clear All」清空（Tampermonkey 菜单里也有这三项）。先在 Broccoli 的「设置 › 通用 › 网页与文件」里填好「WebFetch 下载文件夹」（填浏览器的下载文件夹）。导出的文件一下载到那里，Broccoli 就会把它收进「智能体」页上方的 WebFetch 面板；勾选要用的网页，下一次提问就会带上它们。
 
 <details>
 <summary>旧版使用说明（v1，已过时）</summary>

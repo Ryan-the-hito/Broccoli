@@ -126,7 +126,8 @@ Click the blue bar at the top and Broccoli shrinks into a glass circle. The circ
 - **Open Connector**: connect other apps in Settings › Connected apps. Keys stay in the keychain, and you approve each action.
 - **Usage bars**: coloured bars above the blue bar show how much of each AI plan you have used (CodexBar built in).
 - **AI task dots**: small dots beside the pointer show the Claude Code / Codex sessions running on this Mac; hover to open them as a column of capsules.
-- **Questions from iPhone**: send a question to your Mac with the "Broccoli" shortcut or the questions folder; the answer is written into Notes.
+- **Questions from iPhone**: run the "Broccoli" shortcut on your iPhone, choose a Mac and a conversation, type your question, and the answer is written into Notes (see item 7 under How to use).
+- **Browser scripts**: two userscripts. Broccoli Bridge puts a 🥦 button in the corner of any web page that sends the selected text, the address and your question to Broccoli; Broccoli WebFetch collects the text of web pages and hands it to Broccoli as attachments (see item 8 under How to use).
 - **One Mac, several people**: everyone gets their own settings and conversations; switch users in Settings, or share this Mac with someone through an iCloud folder.
 - **Question branch tree**: any question can branch off, and the whole tree is drawn as a graph.
 - **Editor and reader**: AI changes are checked against the original and stop on a conflict; saving keeps the file's own encoding and line endings.
@@ -352,7 +353,18 @@ When you upgrade from an old version, whatever is in `~/BroccoliAppPath` and `~/
 
 6. **Custom prompts**: open Settings › Prompts › Saved prompts, click **New**, give the prompt a name in the list, write it in **Prompt body** below, then click **Save**. Wherever the body says `{text}`, what you type in the prompt goes in. To use one, pick Customize in the mode drop-down, then pick the prompt.
 
-7. **Questions from iPhone**: first turn on iCloud (Settings › General › History & iCloud). On the iPhone, use the "Broccoli" shortcut, or save a question into Broccoli's questions folder in iCloud. This Mac answers it, and the answer is written into Notes. In Settings you decide separately whether your other Macs, your iPhone and other people may send tasks to this Mac.
+7. **Questions from iPhone**: run a shortcut called "Broccoli" on your iPhone: choose a Mac → choose a new conversation or one of that Mac's recent ones → type your question. When the Mac has answered, the answer is in Notes › Broccoli, and a reminder goes off on the iPhone.
+   1. Before you start: the iPhone and the Mac are signed in to the same Apple Account, with iCloud Drive on for both. In Broccoli's Settings › General › History & iCloud, under "iCloud remote tasks", keep "Apple Notes mirror + iPhone Shortcuts" on (it is on by default).
+   2. On each Mac, open Broccoli again and wait 15 seconds: it makes a Broccoli folder in the Shortcuts folder of iCloud Drive.
+   3. In the Files app on the iPhone, touch and hold iCloud Drive › Shortcuts › Broccoli and tap Keep Downloaded.
+   4. Get the shortcut: if someone has shared an iCloud link, tap it to add the shortcut (it holds no names or device codes); or build it yourself with the [step-by-step guide](docs/IPHONE_SHORTCUT_SETUP.md).
+   5. The first time it answers, the Mac asks whether Broccoli may control Notes and Reminders; click OK both times.
+
+   In Settings you also decide separately whether your other Macs, your iPhone and other people may send tasks to this Mac.
+
+8. **Browser scripts**: install [Tampermonkey](https://www.tampermonkey.net/) in your browser, then click a link below and Tampermonkey opens its install page. Both scripts need Broccoli to be running.
+   - [Broccoli Bridge](https://github.com/Ryan-the-hito/Broccoli/raw/main/userscripts/broccoli-bridge.user.js): a 🥦 button appears in the bottom-right corner of web pages. Select some text (or not), click 🥦, write your question in the small box, then click "Send to Broccoli" or press ⌘↩. The title, address, selected text and question go into the prompt of Broccoli's current tab and are sent. "Sent to Broccoli ✓" means it went through; "Broccoli not running" means Broccoli isn't open.
+   - [Broccoli WebFetch](https://github.com/Ryan-the-hito/Broccoli/raw/main/userscripts/broccoli-webfetch.user.js): a round button appears on web pages. Open it to "➕ Add Current Page", "📄 Export JSON" or "🗑 Clear All" (the same three are in the Tampermonkey menu). First, in Broccoli's Settings › General › Web & files, set "WebFetch download folder" to your browser's download folder. As soon as an exported file lands there, Broccoli takes it into the WebFetch panel at the top of the Agent tab; tick the pages you want and your next question takes them along.
 
 <details>
 <summary>The old usage notes (v1, out of date)</summary>
