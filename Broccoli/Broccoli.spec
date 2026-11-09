@@ -11,7 +11,8 @@
 #   codexbar/ (2026-10-30: CodexBar's command-line build for the usage bars — Settings › Usage),
 #   agentsview/ (2026-10-31: reads the AI sessions on this Mac for the AI tasks column — Settings › AI tasks).
 # A missing one stops the build (REQUIRED below) instead of shipping an app without it.
-# (Last synced from the source folder 2026-11-02, Broccoli_26new-374.)
+# (Last synced from the source folder 2026-11-09, Broccoli_26new-421 = 2.0.17; Open Connector v1.9.9,
+#  CodexBar v0.84.0, agentsview v0.46.1 — all three the latest releases on 2026-11-09.)
 #
 # Open Connector: open_connector/ is refreshed from the source folder's open_connector_update.py
 # (official release build, checksum, licence check, test run). The server goes into
@@ -48,9 +49,17 @@
 #         --sign "Developer ID Application: <your name> (<team id>)" \
 #         dist/Broccoli.app/Contents/Frameworks/claude_agent_sdk/_bundled/claude
 #
-# Order: these four first, the app last (signing anything inside afterwards breaks the app's
-# signature). Signing the app with --deep re-signs them as well: give that command the same
-# --options runtime --timestamp --entitlements entitlements.plist, or they lose JIT.
+# QtWebEngine placeholder version (2026-11-07; put in by the end of this spec, the reason is there):
+# a tiny do-nothing library that `codesign --deep` on the app does NOT reach. Sign it with the same
+# identity (no entitlements: it never runs):
+#     codesign --force --options runtime --timestamp \
+#         --sign "Developer ID Application: <your name> (<team id>)" \
+#         dist/Broccoli.app/Contents/Frameworks/PyQt6/Qt6/lib/QtWebEngineCore.framework/Versions/Resources
+#
+# Order: these five first, the app last (signing anything inside afterwards breaks the app's
+# signature). Signing the app with --deep re-signs the first four as well (not the placeholder): give
+# that command the same --options runtime --timestamp --entitlements entitlements.plist, or they
+# lose JIT. Check before notarizing: codesign --verify --deep --strict dist/Broccoli.app (silent = good).
 
 import os
 import re
@@ -95,6 +104,9 @@ REQUIRED = [
     # 2026-10-29: the built-in Open Connector server, what it was taken from and its licence
     'open_connector/open-connector-darwin-arm64', 'open_connector/manifest.json',
     'open_connector/LICENSE.txt', 'open_connector/NOTICE.md',
+    # 2026-11-07: from v1.9.9 on LICENSE.txt is "Apache 2.0 with OOMOL conditions" and points at the
+    # full Apache 2.0 text, shipped beside it
+    'open_connector/LICENSE-APACHE-2.0.txt',
     # 2026-10-30: CodexBar's command-line build (usage bars), its plug-in bundle and licences
     'codexbar/CodexBarCLI', 'codexbar/manifest.json', 'codexbar/LICENSE.txt', 'codexbar/THIRD_PARTY_NOTICES',
     'codexbar/VERSION', 'codexbar/CodexBar_CodexBarCore.bundle/Contents/Info.plist',
@@ -207,6 +219,7 @@ resource_datas = [
     ('open_connector/manifest.json', 'open_connector'),
     ('open_connector/LICENSE.txt', 'open_connector'),
     ('open_connector/NOTICE.md', 'open_connector'),
+    ('open_connector/LICENSE-APACHE-2.0.txt', 'open_connector'),
     # CodexBar (usage bars): what it was taken from, its licences, and the plug-in bundle the
     # command-line build loads from beside itself
     ('codexbar/manifest.json', 'codexbar'),
@@ -241,6 +254,28 @@ codexbar_binaries = [(str(SPEC_DIR / 'codexbar' / CODEXBAR_BINARY), 'codexbar')]
 AGENTSVIEW_BINARY = 'agentsview'
 agentsview_binaries = [(str(SPEC_DIR / 'agentsview' / AGENTSVIEW_BINARY), 'agentsview')]
 
+
+# QtWebEngine's stray "version" in the BUILD environment (2026-11-09; the build failed with
+# "QtWebEngine placeholder: … already exists"). Running Broccoli from source lets Chromium create the
+# same empty QtWebEngineCore.framework/Versions/Resources inside the venv's PyQt6 (the reason is at
+# the end of this spec). PyInstaller's Qt hook takes the LAST name in Versions/ as the framework's
+# version — "Resources" sorts after "A" — and puts QtWebEngine's helper app and its resources (65 MB)
+# under Versions/Resources instead of Versions/A, where the framework's links point: the packaged
+# app's web pages would not work. An EMPTY extra folder there holds nothing (Chromium makes it again
+# whenever it likes) and is removed before the analysis; anything else stops the build.
+import PyQt6 as _pyqt6
+_webengine_versions = Path(_pyqt6.__file__).parent / 'Qt6' / 'lib' / 'QtWebEngineCore.framework' / 'Versions'
+if _webengine_versions.is_dir():
+    # (the wheel ships only Versions/A; PyInstaller makes Versions/Current itself)
+    for _entry in sorted(_webengine_versions.iterdir()):
+        if _entry.name != 'Current' and _entry.is_dir() and not _entry.is_symlink() and not any(_entry.iterdir()):
+            _entry.rmdir()
+            print('Removed an empty stray QtWebEngine version folder from the build environment:', _entry)
+    _versions_left = sorted(e.name for e in _webengine_versions.iterdir() if e.name != 'Current')
+    if len(_versions_left) != 1:
+        raise RuntimeError(f'{_webengine_versions} holds {_versions_left}, not one version: PyInstaller would '
+                           'package QtWebEngine under the last one. Remove the one that is not part of PyQt6 '
+                           '(PyQt6 ships "A") and build again.')
 
 a = Analysis(
     ['Broccoli.py', 'browser_use_worker.py', 'computer_use_worker.py'],
@@ -341,8 +376,11 @@ app = BUNDLE(
     coll,
     name='Broccoli.app',
     icon='Broccolidsk.icns',
-    # the in-app updater accepts only a bundle with exactly this identifier (BROCCOLI_UPDATE_BUNDLE_ID)
-    bundle_identifier='Broccoli',
+    # the in-app updater accepts only a bundle with exactly this identifier (BROCCOLI_UPDATE_BUNDLE_ID =
+    # BROCCOLI_BUNDLE_ID in Broccoli.py). Reverse-DNS like Raspberry's since 2026-11-07 (was 'Broccoli'):
+    # an app with the old id updates to the first build with this one by hand, once; macOS asks again
+    # for its permissions (Accessibility, Screen Recording, Automation …), which belong to the bundle id.
+    bundle_identifier='com.ryanthehito.broccoli',
     version=__version__,
     info_plist={
         'CFBundleShortVersionString': __version__,
@@ -355,3 +393,76 @@ app = BUNDLE(
         'NSAppleEventsUsageDescription': 'Broccoli reads and writes your Apple Notes and Reminders and controls other apps when you ask it to.',
     },
 )
+
+# QtWebEngine placeholder version (2026-11-07). Without it the installed app's signature breaks the
+# first time a page in Broccoli's web view asks for the camera / microphone list (claude.ai does,
+# a few seconds after loading): Chromium then starts its video-capture helper, the only web helper
+# that runs WITHOUT a sandbox on macOS, and while starting it creates an empty
+# QtWebEngineCore.framework/Versions/Resources (Chromium's guess of the locales folder, made before
+# Qt tells it the real one; sandboxed helpers try too but may not write). Everything in Versions/
+# counts as a framework version and an empty folder is never a valid one, so the app then fails
+# `codesign --verify` with "embedded framework contains modified or invalid version".
+# Fix: ship that folder as a tiny but complete version: a do-nothing library + the framework's own
+# Info.plist. Chromium finds it already there and writes nothing; signed with the same Developer ID
+# it is a valid version. Nothing ever loads it. Sign it first (notes at the top of this spec).
+# Pre-creating an EMPTY folder or a symlink does not work (tested: invalid version / unsealed).
+QTWEBENGINE_PLACEHOLDER_SOURCE = 'void broccoli_qtwebengine_placeholder_version(void) {}\n'
+
+
+def add_qtwebengine_placeholder_version(bundle_path):
+    import shutil
+    import subprocess
+    import tempfile
+
+    framework = os.path.join(bundle_path, 'Contents', 'Frameworks', 'PyQt6', 'Qt6', 'lib',
+                             'QtWebEngineCore.framework')
+    real_binary = os.path.join(framework, 'Versions', 'A', 'QtWebEngineCore')
+    real_info = os.path.join(framework, 'Versions', 'A', 'Resources', 'Info.plist')
+    placeholder = os.path.join(framework, 'Versions', 'Resources')
+    for needed in (real_binary, real_info):
+        if not os.path.isfile(needed):
+            raise RuntimeError(f'QtWebEngine placeholder: {needed} is missing')
+    # QtWebEngine itself must sit in Versions/A (where the framework's links point), not elsewhere
+    for needed in (os.path.join(framework, 'Versions', 'A', 'Helpers', 'QtWebEngineProcess.app'),
+                   os.path.join(framework, 'Versions', 'A', 'Resources', 'qtwebengine_resources.pak')):
+        if not os.path.exists(needed):
+            raise RuntimeError(
+                f'QtWebEngine was packaged in the wrong place: {needed} is missing'
+                + (f' (it went to {placeholder}: an extra folder in the build environment\'s '
+                   'QtWebEngineCore.framework/Versions — see the check before Analysis)'
+                   if os.path.isdir(placeholder) else '') + '. Build again.')
+    if os.path.lexists(placeholder):
+        raise RuntimeError(f'QtWebEngine placeholder: {placeholder} already exists')
+
+    # the same architectures and minimum macOS as the real library
+    archs = subprocess.run(['lipo', '-archs', real_binary], check=True, capture_output=True,
+                           text=True).stdout.split()
+    minos = re.search(r'^\s*minos\s+([0-9.]+)',
+                      subprocess.run(['otool', '-l', real_binary], check=True, capture_output=True,
+                                     text=True).stdout, re.M)
+    if not archs or not minos:
+        raise RuntimeError('QtWebEngine placeholder: cannot read the architecture / minimum macOS of '
+                           + real_binary)
+
+    os.makedirs(os.path.join(placeholder, 'Resources'))
+    with tempfile.TemporaryDirectory() as tmp:
+        source = os.path.join(tmp, 'placeholder.c')
+        with open(source, 'w', encoding='utf-8') as fh:
+            fh.write(QTWEBENGINE_PLACEHOLDER_SOURCE)
+        command = ['xcrun', 'clang', '-dynamiclib']
+        for arch in archs:
+            command += ['-arch', arch]
+        command += [f'-mmacosx-version-min={minos.group(1)}',
+                    '-install_name', '@rpath/QtWebEngineCore.framework/Versions/Resources/QtWebEngineCore',
+                    '-o', os.path.join(placeholder, 'QtWebEngineCore'), source]
+        result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode:
+        shutil.rmtree(placeholder, ignore_errors=True)
+        raise RuntimeError('QtWebEngine placeholder: clang failed (it needs the Xcode Command Line '
+                           'Tools: xcode-select --install)\n' + result.stderr)
+    shutil.copy2(real_info, os.path.join(placeholder, 'Resources', 'Info.plist'))
+    print('QtWebEngine placeholder version added:', placeholder)
+    print('  sign it with your Developer ID BEFORE signing the app (notes at the top of Broccoli.spec)')
+
+
+add_qtwebengine_placeholder_version(app.name)

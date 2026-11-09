@@ -112,6 +112,10 @@ It will not use the AI model open in this web page.</source>
         <translation>（なし）</translation>
     </message>
     <message>
+        <source>(no URL)</source>
+        <translation>（URL なし）</translation>
+    </message>
+    <message>
         <source>(no explanation provided)</source>
         <translation>（説明はありません）</translation>
     </message>
@@ -124,12 +128,24 @@ It will not use the AI model open in this web page.</source>
         <translation>（なし）</translation>
     </message>
     <message>
+        <source>(not on this Mac)</source>
+        <translation>（この Mac にはありません）</translation>
+    </message>
+    <message>
         <source>(unnamed)</source>
         <translation>（名前なし）</translation>
     </message>
     <message>
+        <source>- Change: {path}</source>
+        <translation>- 変更：{path}</translation>
+    </message>
+    <message>
         <source>- Command: {command}</source>
         <translation>- コマンド：{command}</translation>
+    </message>
+    <message>
+        <source>- Delete: {path}</source>
+        <translation>- 削除：{path}</translation>
     </message>
     <message>
         <source>- Details: {details}</source>
@@ -138,6 +154,10 @@ It will not use the AI model open in this web page.</source>
     <message>
         <source>- File: {path}</source>
         <translation>- ファイル：{path}</translation>
+    </message>
+    <message>
+        <source>- New file: {path}</source>
+        <translation>- 新しいファイル：{path}</translation>
     </message>
     <message>
         <source>- Other arguments: {details}</source>
@@ -408,8 +428,8 @@ It will not use the AI model open in this web page.</source>
         <translation>ウェブを追加</translation>
     </message>
     <message>
-        <source>Added to the task queue</source>
-        <translation>タスクキューに追加しました</translation>
+        <source>Added from the conversation “{title}” (Broccoli’s coordinator handed it over): {note}</source>
+        <translation>会話「{title}」から（Broccoli の総合調整が引き継ぎ）：{note}</translation>
     </message>
     <message>
         <source>Added. Fill in the fields and press Save.</source>
@@ -526,6 +546,22 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>永続メモリに保存済みです：{text}</translation>
     </message>
     <message>
+        <source>Already organizing. Try again in a moment.</source>
+        <translation>整理中です。しばらくしてからもう一度お試しください。</translation>
+    </message>
+    <message>
+        <source>Also called</source>
+        <translation>別名</translation>
+    </message>
+    <message>
+        <source>Also called: {names}</source>
+        <translation>別名：{names}</translation>
+    </message>
+    <message>
+        <source>Also does: {steps}</source>
+        <translation>ほかにも担当：{steps}</translation>
+    </message>
+    <message>
         <source>Always</source>
         <translation>常に表示</translation>
     </message>
@@ -560,6 +596,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
     <message>
         <source>Answering @{alias} ...</source>
         <translation>@{alias} に回答中 ...</translation>
+    </message>
+    <message>
+        <source>Answering another task through the coordinator</source>
+        <translation>総合調整を通じてほかのタスクに回答しています</translation>
     </message>
     <message>
         <source>Append</source>
@@ -654,6 +694,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>アーカイブした会話と、ディスクの空きを作るための会話の完全削除。</translation>
     </message>
     <message>
+        <source>Archived. Restore it in Archive &amp; delete history to use it again.</source>
+        <translation>アーカイブ済み。「アーカイブと履歴の完全削除」で復元すると、また使われます。</translation>
+    </message>
+    <message>
         <source>Args</source>
         <translation>引数</translation>
     </message>
@@ -694,6 +738,14 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>{device} にこの会話をここへ移動するよう依頼しました。向こうで何も実行していなければ移動します。</translation>
     </message>
     <message>
+        <source>Asking another task through the coordinator</source>
+        <translation>総合調整を通じてほかのタスクに質問しています</translation>
+    </message>
+    <message>
+        <source>Asking chat page for memory...</source>
+        <translation>チャットページにメモリを問い合わせ中…</translation>
+    </message>
+    <message>
         <source>Asking model to choose tools, round {n}</source>
         <translation>モデルにツールを選ばせています（{n} 回目）</translation>
     </message>
@@ -716,6 +768,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
     <message>
         <source>Attachments / fetched pages</source>
         <translation>添付ファイル / 取得したページ</translation>
+    </message>
+    <message>
+        <source>Attachments cannot be sent to a shared Mac yet. Send the question without them.</source>
+        <translation>共有された Mac には、まだ添付ファイルを送れません。添付なしで質問を送ってください。</translation>
     </message>
     <message>
         <source>Attachments:</source>
@@ -834,6 +890,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>自動承認</translation>
     </message>
     <message>
+        <source>Automatically delete screenshots older than {days} days</source>
+        <translation>{days} 日より前のスクリーンショットを自動で削除する</translation>
+    </message>
+    <message>
         <source>Autonomous mode</source>
         <translation>全自動モード</translation>
     </message>
@@ -844,6 +904,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
     <message>
         <source>Available after the diagram milestone</source>
         <translation>ダイアグラムのマイルストーン後に利用可能</translation>
+    </message>
+    <message>
+        <source>Available once sharing with other people is built.</source>
+        <translation>ほかの人との共有機能ができてから使えます。</translation>
     </message>
     <message>
         <source>Awaiting command approval</source>
@@ -914,6 +978,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>基本</translation>
     </message>
     <message>
+        <source>Basic info</source>
+        <translation>基本情報</translation>
+    </message>
+    <message>
         <source>Bearer key</source>
         <translation>Bearer キー</translation>
     </message>
@@ -922,12 +990,20 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>Bearer トークン</translation>
     </message>
     <message>
+        <source>Being changed by “{title}”</source>
+        <translation>「{title}」が変更中</translation>
+    </message>
+    <message>
         <source>Bigger than this, nothing is copied: the command asks for your approval instead and says why. Read-only commands are never copied; a folder copied earlier in the same task and unchanged since is not copied again. Default 500 MB.</source>
         <translation>これより大きい場合はコピーしません。代わりにコマンドが理由を添えて承認を求めます。読み取り専用のコマンドはコピーしません。同じタスク内で以前コピーし、その後変わっていないフォルダは再コピーしません。既定は 500 MB。</translation>
     </message>
     <message>
         <source>Block models by network location</source>
         <translation>ネットワークの場所でモデルを制限する</translation>
+    </message>
+    <message>
+        <source>Blocked here, uses {model}</source>
+        <translation>ここでは使用不可、{model} を使います</translation>
     </message>
     <message>
         <source>Blue</source>
@@ -966,8 +1042,16 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>Broccoli の Agent</translation>
     </message>
     <message>
+        <source>Broccoli closes and opens again as {name}, with {name}'s own settings, memory and conversations.</source>
+        <translation>Broccoli を閉じて {name} として開き直します。{name} 自身の設定・記憶・会話を使います。</translation>
+    </message>
+    <message>
         <source>Broccoli could not launch or connect to the fixed Browser Use Chrome instance. Check the CDP URL port and Chrome profile folder.</source>
         <translation>Broccoli は固定の Browser Use Chrome インスタンスを起動または接続できませんでした。CDP URL のポートと Chrome プロファイルフォルダを確認してください。</translation>
+    </message>
+    <message>
+        <source>Broccoli in the middle of its grid (main window open)</source>
+        <translation>メインウィンドウ表示中、グリッド中央に Broccoli を表示</translation>
     </message>
     <message>
         <source>Broccoli is not allowed to use Notes, so answers to questions from your iPhone cannot reach the phone. Allow it in System Settings → Privacy &amp; Security → Automation, then restart Broccoli. The answers are still in Broccoli on this Mac.</source>
@@ -1012,6 +1096,18 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
     <message>
         <source>Broccoli was updated to v{v}.</source>
         <translation>Broccoli は v{v} にアップデートされました。</translation>
+    </message>
+    <message>
+        <source>Broccoli wrote {n} change(s); Claude Code is checking them…</source>
+        <translation>Broccoli が {n} 件の変更を書き込みました。Claude Code が確認中…</translation>
+    </message>
+    <message>
+        <source>Broccoli wrote {n} change(s); Codex is checking them…</source>
+        <translation>Broccoli が {n} 件の変更を書き込みました。Codex が確認中…</translation>
+    </message>
+    <message>
+        <source>Broccoli’s coordinator added a request from “{title}”.</source>
+        <translation>Broccoli の総合調整が「{title}」からの依頼を追加しました。</translation>
     </message>
     <message>
         <source>Brown</source>
@@ -1162,8 +1258,16 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>ショートカットを変更…</translation>
     </message>
     <message>
+        <source>Changed at {time} by {who}</source>
+        <translation>{time} に{who}が変更</translation>
+    </message>
+    <message>
         <source>Changes apply immediately. A BROCCOLI_* environment variable overrides its switch.</source>
         <translation>変更は即座に適用されます。明示的に設定された BROCCOLI_* 環境変数はスイッチより優先されます。</translation>
+    </message>
+    <message>
+        <source>Changing a file</source>
+        <translation>ファイルを変更しています</translation>
     </message>
     <message>
         <source>Chat and ask</source>
@@ -1332,6 +1436,14 @@ Broccoli はこのプロファイルで別の Chrome ウィンドウを起動し
         <translation>内容を変えずに、Web ページ/ターミナル UI のノイズを除去して Markdown を復元します。</translation>
     </message>
     <message>
+        <source>Cleaner failed, used raw extraction.</source>
+        <translation>整理に失敗したため、抽出したままの内容を使いました。</translation>
+    </message>
+    <message>
+        <source>Cleaner failed, used raw extraction: {error}</source>
+        <translation>整理に失敗したため、抽出したままの内容を使いました：{error}</translation>
+    </message>
+    <message>
         <source>Cleaner prompt</source>
         <translation>クリーナープロンプト</translation>
     </message>
@@ -1344,12 +1456,24 @@ Broccoli はこのプロファイルで別の Chrome ウィンドウを起動し
         <translation>外部回答の書式を整えています...</translation>
     </message>
     <message>
+        <source>Cleaning extracted memory...</source>
+        <translation>抽出したメモリを整理中…</translation>
+    </message>
+    <message>
         <source>Clear</source>
         <translation>クリア</translation>
     </message>
     <message>
         <source>Clear attachments after send</source>
         <translation>送信後に添付ファイルをクリア</translation>
+    </message>
+    <message>
+        <source>Clear every model this conversation chose itself? It then follows its group, or Settings.</source>
+        <translation>この会話が自分で選んだモデルをすべて消しますか？以後はグループか設定に従います。</translation>
+    </message>
+    <message>
+        <source>Clear every model this group chose? Its conversations then follow Settings (a conversation's own choices stay).</source>
+        <translation>このグループが選んだモデルをすべて消しますか？会話は以後、設定に従います（会話自身の選択はそのまま）。</translation>
     </message>
     <message>
         <source>Click Discover to read tools, resources, and prompts from this MCP endpoint.</source>
@@ -1420,6 +1544,10 @@ Broccoli はこのプロファイルで別の Chrome ウィンドウを起動し
         <translation>最小化ボタンのアイコン</translation>
     </message>
     <message>
+        <source>Collapsed button shortcut must be different from the other shortcuts.</source>
+        <translation>最小化ボタンのショートカットは、他のショートカットと別にしてください。</translation>
+    </message>
+    <message>
         <source>Collision-proof conversation IDs</source>
         <translation>衝突しない会話 ID</translation>
     </message>
@@ -1450,6 +1578,10 @@ Broccoli はこのプロファイルで別の Chrome ウィンドウを起動し
     <message>
         <source>Command finished with exit code {code}</source>
         <translation>コマンド終了（終了コード {code}）</translation>
+    </message>
+    <message>
+        <source>Command history</source>
+        <translation>コマンド履歴</translation>
     </message>
     <message>
         <source>Command running...</source>
@@ -1502,6 +1634,10 @@ Broccoli はこのプロファイルで別の Chrome ウィンドウを起動し
     <message>
         <source>Computer Use experience rules</source>
         <translation>Computer Use 経験ルール</translation>
+    </message>
+    <message>
+        <source>Concept</source>
+        <translation>概念</translation>
     </message>
     <message>
         <source>Connect devices through iCloud</source>
@@ -1564,6 +1700,18 @@ Broccoli はこのプロファイルで別の Chrome ウィンドウを起動し
 Reason: {reason}</source>
         <translation>繰り返しの web_search リクエストを矛盾の調停に切り替えました。
 理由：{reason}</translation>
+    </message>
+    <message>
+        <source>Coordinator answered “{a}” from what it knows about “{b}”</source>
+        <translation>総合調整が「{b}」について把握している内容で「{a}」に回答</translation>
+    </message>
+    <message>
+        <source>Coordinator decided for “{a}”: {decision}</source>
+        <translation>総合調整が「{a}」について判断：{decision}</translation>
+    </message>
+    <message>
+        <source>Coordinator log</source>
+        <translation>総合調整の記録</translation>
     </message>
     <message>
         <source>Copies the managed profile's cookies and local storage into each isolated parallel Chrome, so logged-in sites can be searched by several parallel steps. Turn on after verifying on your machine.</source>
@@ -1634,6 +1782,10 @@ Reason: {reason}</source>
         <translation>ショートカットを一覧できませんでした：{msg}</translation>
     </message>
     <message>
+        <source>Could not make the shared folder: {error}</source>
+        <translation>共有フォルダを作れませんでした：{error}</translation>
+    </message>
+    <message>
         <source>Could not open the PDF: %s</source>
         <translation>PDF を開けませんでした: %s</translation>
     </message>
@@ -1668,6 +1820,10 @@ Reason: {reason}</source>
     <message>
         <source>Could not rasterize the page</source>
         <translation>ページをラスタライズできませんでした</translation>
+    </message>
+    <message>
+        <source>Could not reach the shared folder: {error}</source>
+        <translation>共有フォルダにアクセスできません：{error}</translation>
     </message>
     <message>
         <source>Could not read it just now: {reason}</source>
@@ -1794,6 +1950,14 @@ Reason: {reason}</source>
         <translation>カスタムプロンプト</translation>
     </message>
     <message>
+        <source>Cut</source>
+        <translation>カット</translation>
+    </message>
+    <message>
+        <source>Date</source>
+        <translation>日付</translation>
+    </message>
+    <message>
         <source>Debug</source>
         <translation>デバッグ</translation>
     </message>
@@ -1870,12 +2034,24 @@ Reason: {reason}</source>
         <translation>この会話を完全に削除しますか？</translation>
     </message>
     <message>
+        <source>Delete this entry?</source>
+        <translation>この項目を削除しますか？</translation>
+    </message>
+    <message>
         <source>Delete {n} conversations permanently?</source>
         <translation>この {n} 件の会話を完全に削除しますか？</translation>
     </message>
     <message>
+        <source>Delete {n} entries?</source>
+        <translation>{n} 件の項目を削除しますか？</translation>
+    </message>
+    <message>
         <source>Delete, keep backups</source>
         <translation>削除（バックアップは残す）</translation>
+    </message>
+    <message>
+        <source>Deleted</source>
+        <translation>削除済み</translation>
     </message>
     <message>
         <source>Deleted {name}.</source>
@@ -1884,6 +2060,10 @@ Reason: {reason}</source>
     <message>
         <source>Deleted {n} · freed {size}</source>
         <translation>{n} 件を削除 · {size} を解放</translation>
+    </message>
+    <message>
+        <source>Delete…</source>
+        <translation>削除…</translation>
     </message>
     <message>
         <source>Deleting… {done} of {total}</source>
@@ -1984,8 +2164,16 @@ Endpoint URL is empty.</source>
         <translation>完了</translation>
     </message>
     <message>
+        <source>Done before this task (in other conversations):</source>
+        <translation>このタスクの前に（別の会話で）済んだこと：</translation>
+    </message>
+    <message>
         <source>Done — answer ready ({count} chars).</source>
         <translation>完了 — 回答の準備ができました（{count} 文字）。</translation>
+    </message>
+    <message>
+        <source>Done: {new} new, {updated} updated.</source>
+        <translation>完了：新規 {new} 件、更新 {updated} 件。</translation>
     </message>
     <message>
         <source>Don’t watch</source>
@@ -2336,6 +2524,10 @@ Endpoint URL is empty.</source>
         <translation>追加ヘッダー</translation>
     </message>
     <message>
+        <source>Extracting read page text...</source>
+        <translation>読み取りページのテキストを抽出中…</translation>
+    </message>
+    <message>
         <source>Extraction complete ({count} chars) — cleaning up answer…</source>
         <translation>抽出完了（{count} 文字）— 回答を整えています…</translation>
     </message>
@@ -2364,6 +2556,14 @@ Endpoint URL is empty.</source>
         <translation>フォールバック：{failed} が使えないため {used} を使用</translation>
     </message>
     <message>
+        <source>Favorite commands</source>
+        <translation>お気に入りコマンド</translation>
+    </message>
+    <message>
+        <source>Favorites</source>
+        <translation>お気に入り</translation>
+    </message>
+    <message>
         <source>File</source>
         <translation>ファイル</translation>
     </message>
@@ -2380,6 +2580,18 @@ Endpoint URL is empty.</source>
         <translation>ファイルまたはフォルダ</translation>
     </message>
     <message>
+        <source>File write complete.</source>
+        <translation>ファイルへの書き込みが完了しました。</translation>
+    </message>
+    <message>
+        <source>File write failed: {error}</source>
+        <translation>ファイルへの書き込み失敗：{error}</translation>
+    </message>
+    <message>
+        <source>Files this task changes: {files}</source>
+        <translation>このタスクが変更するファイル：{files}</translation>
+    </message>
+    <message>
         <source>Final answer</source>
         <translation>最終回答</translation>
     </message>
@@ -2390,6 +2602,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Final response failed</source>
         <translation>最終回答が失敗</translation>
+    </message>
+    <message>
+        <source>Finder shows the folder for {name}. Right-click it › Share › Share Folder, choose {name}, set "Only people you invite" and "Can make changes", then send the invitation.</source>
+        <translation>Finder で {name} 用のフォルダを選択しました。右クリック › 共有 › フォルダを共有 で {name} を選び、「招待した人のみ」と「変更可能」にして招待を送ってください。</translation>
     </message>
     <message>
         <source>Finding apps and actions runs without asking. An action that changes something — sending, creating, deleting — asks you first, and "Always" covers only that one action. Apps that use a key or a token work right away; apps you sign in to on a web page (Gmail, Slack, Google…) need an OAuth app of your own on this self-hosted connector. Needs "MCP tools" to be on (External context &amp; MCP).</source>
@@ -2436,6 +2652,50 @@ Endpoint URL is empty.</source>
         <translation>Browser Use の選択に従う</translation>
     </message>
     <message>
+        <source>Follow Browser Use: {model}</source>
+        <translation>Browser Use に従う：{model}</translation>
+    </message>
+    <message>
+        <source>Follow Default chat: {model}</source>
+        <translation>既定のチャットに従う：{model}</translation>
+    </message>
+    <message>
+        <source>Follow Planner / Router: {model}</source>
+        <translation>プランナーに従う：{model}</translation>
+    </message>
+    <message>
+        <source>Follow Settings</source>
+        <translation>設定に従う</translation>
+    </message>
+    <message>
+        <source>Follow Settings for all</source>
+        <translation>すべて設定に従う</translation>
+    </message>
+    <message>
+        <source>Follow Settings: {model}</source>
+        <translation>設定に従う：{model}</translation>
+    </message>
+    <message>
+        <source>Follow Sub agent: {model}</source>
+        <translation>サブエージェントに従う：{model}</translation>
+    </message>
+    <message>
+        <source>Follow default</source>
+        <translation>既定に従う</translation>
+    </message>
+    <message>
+        <source>Follow defaults</source>
+        <translation>既定に従う</translation>
+    </message>
+    <message>
+        <source>Follow defaults for all</source>
+        <translation>すべて既定に従う</translation>
+    </message>
+    <message>
+        <source>Follow group: {model}</source>
+        <translation>グループに従う：{model}</translation>
+    </message>
+    <message>
         <source>For each question from the iPhone, a reminder in the Reminders list “Broccoli” goes off about a minute after its Note is written (✅ answered, ⚠️ not answered, ⏳ waiting for you), and is ticked off by itself a day later. (M6 · BROCCOLI_M6_PHONE_REMINDERS)</source>
         <translation>iPhone からの質問ごとに、メモを書き込んでから約 1 分後にリマインダーのリスト「Broccoli」で通知します（✅ 回答済み、⚠️ 未回答、⏳ あなたの操作待ち）。1 日後に自動で完了にします。（M6 · BROCCOLI_M6_PHONE_REMINDERS）</translation>
     </message>
@@ -2472,6 +2732,22 @@ Endpoint URL is empty.</source>
 {lang}</source>
         <translation>翻訳元:
 {lang}</translation>
+    </message>
+    <message>
+        <source>From: Settings</source>
+        <translation>設定元：設定</translation>
+    </message>
+    <message>
+        <source>From: group “{name}”</source>
+        <translation>設定元：グループ「{name}」</translation>
+    </message>
+    <message>
+        <source>From: this conversation</source>
+        <translation>設定元：この会話</translation>
+    </message>
+    <message>
+        <source>From: this group</source>
+        <translation>設定元：このグループ</translation>
     </message>
     <message>
         <source>Full</source>
@@ -2634,6 +2910,10 @@ Endpoint URL is empty.</source>
         <translation>グループ：{name}</translation>
     </message>
     <message>
+        <source>Guest</source>
+        <translation>ゲスト</translation>
+    </message>
+    <message>
         <source>Hello from Broccoli</source>
         <translation>Broccoli へようこそ</translation>
     </message>
@@ -2652,6 +2932,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Hide storage engine switches</source>
         <translation>ストレージエンジンのスイッチを隠す</translation>
+    </message>
+    <message>
+        <source>Hide the web prompt box</source>
+        <translation>ウェブページの質問欄を隠す</translation>
     </message>
     <message>
         <source>High</source>
@@ -2782,8 +3066,16 @@ Endpoint URL is empty.</source>
         <translation>{name} のサインインを取り込んでいます… CodexBar がブラウザの保存データを使うことを macOS が確認してきたら、「常に許可」をクリックしてください。</translation>
     </message>
     <message>
+        <source>In a group: follow the group; otherwise follow Settings.</source>
+        <translation>グループ内ではグループに、それ以外は設定に従います。</translation>
+    </message>
+    <message>
         <source>In history</source>
         <translation>履歴に表示</translation>
+    </message>
+    <message>
+        <source>In use</source>
+        <translation>使用中</translation>
     </message>
     <message>
         <source>In “{group}” — your prompts here...</source>
@@ -2822,12 +3114,20 @@ Endpoint URL is empty.</source>
         <translation>設定が無効です</translation>
     </message>
     <message>
+        <source>Invite a person</source>
+        <translation>人を招待</translation>
+    </message>
+    <message>
         <source>Is it true?</source>
         <translation>本当？</translation>
     </message>
     <message>
         <source>It asks for administrator rights (sudo and the like): Broccoli never runs that without you.</source>
         <translation>管理者権限（sudo など）を使おうとしています。Broccoli はあなたの確認なしにこれを実行しません。</translation>
+    </message>
+    <message>
+        <source>It clicks and types in the background and shows its own cursor. Your mouse moves only when nothing else works, for example a web button that reacts only to a real click.</source>
+        <translation>バックグラウンドでクリックや入力をし、専用のカーソルを表示します。ほかの方法がどれも使えないとき（本物のクリックにしか反応しない Web ボタンなど）だけ、あなたのマウスを動かします。</translation>
     </message>
     <message>
         <source>It goes into the list “Broccoli” in iCloud and rings a minute later, so your iPhone, iPad and Watch get it too. It does not ring if you have already looked at the conversation on the Mac, and it is ticked off by itself a day later. Questions sent from the iPhone Shortcut have their own reminder and get no second one.</source>
@@ -2864,6 +3164,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Keep every conversation field on save</source>
         <translation>保存時に会話フィールドをすべて保持</translation>
+    </message>
+    <message>
+        <source>Keep the Broccoli iCloud folder downloaded on this Mac</source>
+        <translation>iCloud の Broccoli フォルダをこの Mac に常にダウンロードしておく</translation>
     </message>
     <message>
         <source>Keep the editor window always on top</source>
@@ -2946,6 +3250,18 @@ Endpoint URL is empty.</source>
         <translation>好みを {n} 件記憶しました · 設定 → メモリ</translation>
     </message>
     <message>
+        <source>Let my iPhone send questions to this Mac</source>
+        <translation>自分の iPhone からこの Mac への質問送信を許可</translation>
+    </message>
+    <message>
+        <source>Let my other Macs send tasks to this Mac</source>
+        <translation>自分のほかの Mac からこの Mac へのタスク送信を許可</translation>
+    </message>
+    <message>
+        <source>Let other people send tasks to this Mac</source>
+        <translation>ほかの人からこの Mac へのタスク送信を許可</translation>
+    </message>
+    <message>
         <source>Let tasks run without anyone at the screen: every action is approved, after a backup.</source>
         <translation>画面の前に誰もいなくてもタスクを進めます：各操作はバックアップしてから自動で承認します。</translation>
     </message>
@@ -2968,6 +3284,14 @@ Endpoint URL is empty.</source>
     <message>
         <source>Lexicon entry is not available.</source>
         <translation>このエントリは利用できません。</translation>
+    </message>
+    <message>
+        <source>Like Finder's Keep Downloaded: macOS no longer moves Broccoli's iCloud files to the cloud only, so nothing waits for a download. Uses as much disk space as the folder holds.</source>
+        <translation>Finder の「ダウンロードしたままにする」と同じです。macOS が Broccoli の iCloud ファイルをクラウドだけに移さなくなるので、ダウンロードを待つことがありません。フォルダの大きさ分のディスク容量を使います。</translation>
+    </message>
+    <message>
+        <source>Links</source>
+        <translation>リンク</translation>
     </message>
     <message>
         <source>Load earlier messages</source>
@@ -3066,12 +3390,20 @@ Endpoint URL is empty.</source>
         <translation>MCP {name}: 検索ステップ {step} を計画中</translation>
     </message>
     <message>
+        <source>Main agent</source>
+        <translation>メインエージェント</translation>
+    </message>
+    <message>
         <source>Main window unavailable</source>
         <translation>メインウィンドウを利用できません</translation>
     </message>
     <message>
         <source>Make an independent copy here. {device} keeps the original; the two no longer sync.</source>
         <translation>ここに独立したコピーを作ります。元の会話は {device} に残り、以後は同期しません。</translation>
+    </message>
+    <message>
+        <source>Make the selected entries one entry (the top one keeps its name).</source>
+        <translation>選んだ項目を 1 つにまとめます（いちばん上の項目の名前を残します）。</translation>
     </message>
     <message>
         <source>Manage…</source>
@@ -3146,12 +3478,40 @@ Endpoint URL is empty.</source>
         <translation>メモリエンドポイント</translation>
     </message>
     <message>
+        <source>Memory exceeds the input limit; sending in {count} parts...</source>
+        <translation>メモリが入力の上限を超えているため、{count} 回に分けて送信中…</translation>
+    </message>
+    <message>
         <source>Memory notes</source>
         <translation>メモリノート</translation>
     </message>
     <message>
+        <source>Mentioned in</source>
+        <translation>登場した会話</translation>
+    </message>
+    <message>
+        <source>Merge</source>
+        <translation>統合</translation>
+    </message>
+    <message>
+        <source>Merge failed, used remote memory.</source>
+        <translation>統合に失敗したため、Web 側のメモリを使いました。</translation>
+    </message>
+    <message>
+        <source>Merge failed, used remote memory: {error}</source>
+        <translation>統合に失敗したため、Web 側のメモリを使いました：{error}</translation>
+    </message>
+    <message>
         <source>Merge prompt</source>
         <translation>マージプロンプト</translation>
+    </message>
+    <message>
+        <source>Merge {n} entries into “{name}”?</source>
+        <translation>{n} 件の項目を「{name}」に統合しますか？</translation>
+    </message>
+    <message>
+        <source>Merging with local memory...</source>
+        <translation>ローカルのメモリと統合中…</translation>
     </message>
     <message>
         <source>Mermaid capture failed: %s</source>
@@ -3286,6 +3646,10 @@ Endpoint URL is empty.</source>
         <translation>自宅・職場・その他のネットワークで使わないモデル。</translation>
     </message>
     <message>
+        <source>Models…</source>
+        <translation>モデル…</translation>
+    </message>
+    <message>
         <source>Modify</source>
         <translation>変更</translation>
     </message>
@@ -3322,6 +3686,10 @@ Endpoint URL is empty.</source>
         <translation>Web 検索はすでに複数回実行されています。</translation>
     </message>
     <message>
+        <source>My note</source>
+        <translation>メモ</translation>
+    </message>
+    <message>
         <source>Name</source>
         <translation>名前</translation>
     </message>
@@ -3334,8 +3702,16 @@ Endpoint URL is empty.</source>
         <translation>名前は Web / Localhost バーの「+」メニューに表示されます。変更は保存後に反映されます。</translation>
     </message>
     <message>
+        <source>Name of the person who will use Broccoli on this Mac:</source>
+        <translation>この Mac で Broccoli を使う人の名前：</translation>
+    </message>
+    <message>
         <source>Name:</source>
         <translation>名前:</translation>
+    </message>
+    <message>
+        <source>Names, people and ideas from your conversations, and where they came up.</source>
+        <translation>会話に出てきた名前・人物・概念と、それが登場した会話。</translation>
     </message>
     <message>
         <source>Native shortcut listener is not ready. Check Accessibility/Input Monitoring permissions for Broccoli.</source>
@@ -3426,6 +3802,10 @@ Endpoint URL is empty.</source>
         <translation>新しいプロファイル</translation>
     </message>
     <message>
+        <source>New user</source>
+        <translation>新しいユーザ</translation>
+    </message>
+    <message>
         <source>Next instruction to run after the current answer...</source>
         <translation>現在の回答の後に実行する次の指示…</translation>
     </message>
@@ -3464,6 +3844,18 @@ Endpoint URL is empty.</source>
     <message>
         <source>No available screen found for capturing.</source>
         <translation>キャプチャできる画面が見つかりません。</translation>
+    </message>
+    <message>
+        <source>No changes yet</source>
+        <translation>まだ変更はありません</translation>
+    </message>
+    <message>
+        <source>No conversations today to organize.</source>
+        <translation>今日は整理する会話がありません。</translation>
+    </message>
+    <message>
+        <source>No copy of “{name}” was kept, so this change cannot be undone.</source>
+        <translation>「{name}」のコピーが残っていないため、この変更は取り消せません。</translation>
     </message>
     <message>
         <source>No current flow</source>
@@ -3506,6 +3898,10 @@ Endpoint URL is empty.</source>
         <translation>ファイルなし</translation>
     </message>
     <message>
+        <source>No file is in use</source>
+        <translation>使用中のファイルはありません</translation>
+    </message>
+    <message>
         <source>No file open</source>
         <translation>ファイルが開かれていません</translation>
     </message>
@@ -3546,6 +3942,10 @@ Endpoint URL is empty.</source>
         <translation>一致する設定はありません</translation>
     </message>
     <message>
+        <source>No model is set up yet.</source>
+        <translation>モデルがまだ設定されていません。</translation>
+    </message>
+    <message>
         <source>No online memory source selected.</source>
         <translation>オンラインメモリのソースが選択されていません。</translation>
     </message>
@@ -3568,6 +3968,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>No questions yet.</source>
         <translation>まだ質問がありません。</translation>
+    </message>
+    <message>
+        <source>No read URL yet. Fill in “Read URL / file” on the Memory endpoints page of Settings.</source>
+        <translation>まだ読み取り URL がありません。設定の「メモリエンドポイント」ページで「読み取り URL / ファイル」を入力してください。</translation>
     </message>
     <message>
         <source>No read target</source>
@@ -3630,6 +4034,10 @@ Endpoint URL is empty.</source>
         <translation>有効な前回のスクリーンショット範囲がありません。</translation>
     </message>
     <message>
+        <source>No write URL yet. Fill in “Write URL / file” on the Memory endpoints page of Settings.</source>
+        <translation>まだ書き込み URL がありません。設定の「メモリエンドポイント」ページで「書き込み URL / ファイル」を入力してください。</translation>
+    </message>
+    <message>
         <source>No write target</source>
         <translation>書き込み先なし</translation>
     </message>
@@ -3660,6 +4068,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>グループに入っていない会話</translation>
     </message>
     <message>
+        <source>Not on this Mac: {name}</source>
+        <translation>この Mac にはありません：{name}</translation>
+    </message>
+    <message>
         <source>Not probed yet (probes after Save)</source>
         <translation>未プローブ（保存後にプローブします）</translation>
     </message>
@@ -3680,6 +4092,18 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>保存されませんでした</translation>
     </message>
     <message>
+        <source>Not undone</source>
+        <translation>取り消していません</translation>
+    </message>
+    <message>
+        <source>Not written: “{name}” is being changed by another conversation right now.</source>
+        <translation>書き込みませんでした：「{name}」は別の会話が変更中です。</translation>
+    </message>
+    <message>
+        <source>Not written: “{name}” is being written by something else right now.</source>
+        <translation>書き込みませんでした：「{name}」は別の処理が書き込み中です。</translation>
+    </message>
+    <message>
         <source>Notes / traits</source>
         <translation>メモ / 特徴</translation>
     </message>
@@ -3694,6 +4118,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     <message>
         <source>Nothing to translate</source>
         <translation>翻訳する内容がありません</translation>
+    </message>
+    <message>
+        <source>Nothing yet</source>
+        <translation>まだ記録はありません</translation>
     </message>
     <message>
         <source>Notifications for Broccoli are turned off in System Settings, so there is no sound either.</source>
@@ -3736,6 +4164,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>オフです。</translation>
     </message>
     <message>
+        <source>Off: the middle of the grid stays empty while the main window is open. With the main window in the collapsed button, the middle always shows Broccoli.</source>
+        <translation>オフにすると、メインウィンドウ表示中はグリッドの中央が空になります。メインウィンドウが最小化ボタンに入っている間は、中央に常に Broccoli が表示されます。</translation>
+    </message>
+    <message>
         <source>Old</source>
         <translation>旧</translation>
     </message>
@@ -3746,6 +4178,14 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     <message>
         <source>On</source>
         <translation>オン</translation>
+    </message>
+    <message>
+        <source>On a Mac with Broccoli: type your question, then choose 🎛️ Move to › {device}. The answer comes back into the same conversation.</source>
+        <translation>Broccoli のある Mac では：質問を入力し、🎛️ Move to › {device} を選びます。回答は同じ会話に戻ってきます。</translation>
+    </message>
+    <message>
+        <source>On an iPhone: make a Shortcut with two actions, "Ask for Input" and "Save File". In Save File, turn off "Ask Where to Save" and choose this folder's Questions folder. Run it to ask; the answer appears in the Answers folder under the same name (open it in the Files app).</source>
+        <translation>iPhone では：「入力を要求」と「ファイルを保存」の 2 つのアクションでショートカットを作ります。「ファイルを保存」で「保存先を尋ねる」をオフにし、このフォルダの Questions フォルダを選びます。実行すると質問でき、回答は同じ名前で Answers フォルダに入ります（「ファイル」App で開きます）。</translation>
     </message>
     <message>
         <source>On by default. While the editor is open, its open files (current, incl. unsaved text) are attached to @web / @localhost / @terminal requests so those targets can propose edits. Turn off if you do not want editor files leaving for unrelated @ requests.</source>
@@ -3788,8 +4228,24 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>このフォルダに送れるのはテキストだけです。ファイル「{name}」は処理せず、そのまま残しています。</translation>
     </message>
     <message>
+        <source>Only the Wiki entry goes; the conversations it links to stay. It can come back if a later conversation talks about it again.</source>
+        <translation>削除されるのは Wiki の項目だけで、リンク先の会話は残ります。今後の会話でまた話題になると、再び作られることがあります。</translation>
+    </message>
+    <message>
         <source>Only the device that owns this conversation can move it.</source>
         <translation>この会話を移動できるのは、所有しているデバイスだけです。</translation>
+    </message>
+    <message>
+        <source>Only this Mac's owner can change this.</source>
+        <translation>この Mac の持ち主だけが変更できます。</translation>
+    </message>
+    <message>
+        <source>Only this Mac's owner can send tasks to the owner's other Macs.</source>
+        <translation>この Mac の持ち主だけが、持ち主のほかの Mac にタスクを送れます。</translation>
+    </message>
+    <message>
+        <source>Only this change ({time}) is taken back; what was changed later elsewhere in the file stays. A copy of the file is kept first.</source>
+        <translation>この変更（{time}）だけを取り消します。その後ファイルのほかの場所で行われた変更はそのまま残ります。取り消す前にファイルのコピーを保存します。</translation>
     </message>
     <message>
         <source>Only when one is close to its limit</source>
@@ -3840,6 +4296,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>アプリで開く</translation>
     </message>
     <message>
+        <source>Open Link in Default Browser</source>
+        <translation>デフォルトのブラウザでリンクを開く</translation>
+    </message>
+    <message>
         <source>Open Notes › Broccoli › “{title}”.</source>
         <translation>「メモ」› Broccoli ›「{title}」を開いてください。</translation>
     </message>
@@ -3858,6 +4318,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     <message>
         <source>Open console</source>
         <translation>コンソールを開く</translation>
+    </message>
+    <message>
+        <source>Open conversation</source>
+        <translation>会話を開く</translation>
     </message>
     <message>
         <source>Open each task in a new Chrome tab/window</source>
@@ -3888,6 +4352,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>キューにプロンプトを追加する前に、Agent の会話を開くか開始してください。</translation>
     </message>
     <message>
+        <source>Open share window</source>
+        <translation>共有ウインドウを開く</translation>
+    </message>
+    <message>
         <source>Open source page</source>
         <translation>元のページを開く</translation>
     </message>
@@ -3908,8 +4376,16 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>@{alias} を開いています...</translation>
     </message>
     <message>
+        <source>Opening read URL...</source>
+        <translation>読み取り URL を開いています…</translation>
+    </message>
+    <message>
         <source>Opening the installer…</source>
         <translation>インストーラを開いています…</translation>
+    </message>
+    <message>
+        <source>Opening write URL...</source>
+        <translation>書き込み URL を開いています…</translation>
     </message>
     <message>
         <source>Operational form: {kind} · {status}</source>
@@ -3940,12 +4416,36 @@ GITHUB_PERSONAL_ACCESS_TOKEN=...</translation>
         <translation>オレンジ</translation>
     </message>
     <message>
+        <source>Organize now</source>
+        <translation>今すぐ整理</translation>
+    </message>
+    <message>
+        <source>Organize today’s conversations now. Tonight’s pass still runs.</source>
+        <translation>今日の会話を今すぐ整理します。今夜の自動整理もいつもどおり行われます。</translation>
+    </message>
+    <message>
+        <source>Organized every night. Changes here are saved right away.</source>
+        <translation>毎晩自動で整理されます。ここでの変更はすぐに保存されます。</translation>
+    </message>
+    <message>
+        <source>Organizing failed. Tonight’s pass will try again.</source>
+        <translation>整理に失敗しました。今夜の自動整理でもう一度試します。</translation>
+    </message>
+    <message>
+        <source>Organizing today’s conversations…</source>
+        <translation>今日の会話を整理しています…</translation>
+    </message>
+    <message>
         <source>Other</source>
         <translation>その他</translation>
     </message>
     <message>
         <source>Other color…</source>
         <translation>その他の色…</translation>
+    </message>
+    <message>
+        <source>Other names, separated by commas</source>
+        <translation>ほかの呼び方（カンマ区切り）</translation>
     </message>
     <message>
         <source>Output {n}</source>
@@ -4040,12 +4540,20 @@ GITHUB_PERSONAL_ACCESS_TOKEN=...</translation>
         <translation>ユーザー・好み・背景・長期的な事実に関する永続メモリ。</translation>
     </message>
     <message>
+        <source>Person</source>
+        <translation>人物</translation>
+    </message>
+    <message>
         <source>Phase</source>
         <translation>フェーズ</translation>
     </message>
     <message>
         <source>Pin window position</source>
         <translation>ウィンドウ位置を固定</translation>
+    </message>
+    <message>
+        <source>Place</source>
+        <translation>場所</translation>
     </message>
     <message>
         <source>Plan</source>
@@ -4200,6 +4708,10 @@ Goal: {goal}</source>
         <translation>プロファイル: {name}</translation>
     </message>
     <message>
+        <source>Project</source>
+        <translation>プロジェクト</translation>
+    </message>
+    <message>
         <source>Prompt body</source>
         <translation>プロンプト本文</translation>
     </message>
@@ -4232,8 +4744,16 @@ Goal: {goal}</source>
         <translation>プロバイダ</translation>
     </message>
     <message>
+        <source>Pull failed: no memory text was extracted.</source>
+        <translation>プル失敗：メモリのテキストを抽出できませんでした。</translation>
+    </message>
+    <message>
         <source>Pull now</source>
         <translation>今すぐプル</translation>
+    </message>
+    <message>
+        <source>Pulled to local memory.</source>
+        <translation>ローカルのメモリにプルしました。</translation>
     </message>
     <message>
         <source>Purple</source>
@@ -4242,6 +4762,10 @@ Goal: {goal}</source>
     <message>
         <source>Push now</source>
         <translation>今すぐプッシュ</translation>
+    </message>
+    <message>
+        <source>Push skipped: local memory is empty.</source>
+        <translation>プッシュをスキップ：ローカルのメモリが空です。</translation>
     </message>
     <message>
         <source>Question</source>
@@ -4304,6 +4828,10 @@ Goal: {goal}</source>
         <translation>再解析</translation>
     </message>
     <message>
+        <source>Re-planning: another conversation is changing what this plan relies on</source>
+        <translation>再計画：この計画が頼る部分を別の会話が変更中です</translation>
+    </message>
+    <message>
         <source>Re-translate This Sentence</source>
         <translation>この文を再翻訳</translation>
     </message>
@@ -4324,8 +4852,40 @@ Goal: {goal}</source>
         <translation>読み取り URL / ファイル</translation>
     </message>
     <message>
+        <source>Read complete.</source>
+        <translation>読み取り完了。</translation>
+    </message>
+    <message>
+        <source>Read failed: URL did not load.</source>
+        <translation>読み取り失敗：URL を読み込めませんでした。</translation>
+    </message>
+    <message>
+        <source>Read failed: chat page did not enable Send ({reason}).</source>
+        <translation>読み取り失敗：チャットページの送信ボタンが有効になりませんでした（{reason}）。</translation>
+    </message>
+    <message>
+        <source>Read failed: no memory text was extracted.</source>
+        <translation>読み取り失敗：メモリのテキストを抽出できませんでした。</translation>
+    </message>
+    <message>
+        <source>Read failed: {error}</source>
+        <translation>読み取り失敗：{error}</translation>
+    </message>
+    <message>
         <source>Read prompt</source>
         <translation>読み取りプロンプト</translation>
+    </message>
+    <message>
+        <source>Read skipped: file path is empty.</source>
+        <translation>読み取りをスキップ：ファイルのパスが空です。</translation>
+    </message>
+    <message>
+        <source>Read skipped: read URL is empty.</source>
+        <translation>読み取りをスキップ：読み取り URL が空です。</translation>
+    </message>
+    <message>
+        <source>Read skipped: the chat page is busy ({reason}); it is read again on the next sync.</source>
+        <translation>読み取りをスキップ：チャットページが処理中です（{reason}）。次回の同期で読み直します。</translation>
     </message>
     <message>
         <source>Read web page</source>
@@ -4356,6 +4916,10 @@ Goal: {goal}</source>
         <translation>使用量</translation>
     </message>
     <message>
+        <source>Reading a file</source>
+        <translation>ファイルを読んでいます</translation>
+    </message>
+    <message>
         <source>Reading attached documents</source>
         <translation>添付ドキュメントを読み込み中</translation>
     </message>
@@ -4368,12 +4932,20 @@ Goal: {goal}</source>
         <translation>エディタのファイルを読み込み中</translation>
     </message>
     <message>
+        <source>Reading memory file...</source>
+        <translation>メモリファイルを読み込み中…</translation>
+    </message>
+    <message>
         <source>Reading sessions with the built-in agentsview {version}.</source>
         <translation>内蔵の agentsview {version} でセッションを読み取っています。</translation>
     </message>
     <message>
         <source>Reading web page: {url}</source>
         <translation>Web ページを読み込み中：{url}</translation>
+    </message>
+    <message>
+        <source>Reading what other tasks are doing</source>
+        <translation>ほかのタスクの状況を確認しています</translation>
     </message>
     <message>
         <source>Reading with the CodexBar built into Broccoli ({version}). Turn providers on and sign in under Usage providers, the next page.</source>
@@ -4412,6 +4984,10 @@ Goal: {goal}</source>
         <translation>推論の強さ：{effort}</translation>
     </message>
     <message>
+        <source>Recent changes</source>
+        <translation>最近の変更</translation>
+    </message>
+    <message>
         <source>Rechecking @{alias} after refresh...</source>
         <translation>再読み込み後に @{alias} を再確認中...</translation>
     </message>
@@ -4422,6 +4998,10 @@ Goal: {goal}</source>
     <message>
         <source>Record AI tasks shortcut</source>
         <translation>AI タスクのキーを記録</translation>
+    </message>
+    <message>
+        <source>Record Collapsed button shortcut</source>
+        <translation>最小化ボタンのショートカットを記録</translation>
     </message>
     <message>
         <source>Record Edge show/hide shortcut</source>
@@ -4912,6 +5492,10 @@ Query: {query}</source>
         <translation>別のデバイスで実行</translation>
     </message>
     <message>
+        <source>Runs on that Mac with its tools and its owner's approval rules. The answer comes back here.</source>
+        <translation>その Mac で、その Mac のツールと持ち主の承認ルールで実行します。回答はここに戻ってきます。</translation>
+    </message>
+    <message>
         <source>Runs on {device} — Send goes there</source>
         <translation>{device} で実行 — 送信はそちらへ</translation>
     </message>
@@ -5084,6 +5668,10 @@ Query: {query}</source>
         <translation>スクリーンショットをターミナルの添付に追加しました。ターミナルは自動送信に対応していません。</translation>
     </message>
     <message>
+        <source>Screenshots taken with Broccoli and by Computer Use. Each conversation keeps its own copy of the screenshots sent in it, so old answers still show them.</source>
+        <translation>Broccoli で撮ったスクリーンショットと、コンピューター操作中に撮ったものです。会話に送ったスクリーンショットは会話ごとに別に保存されているので、過去の回答の画像は消えません。</translation>
+    </message>
+    <message>
         <source>Search</source>
         <translation>検索</translation>
     </message>
@@ -5134,6 +5722,10 @@ Query: {query}</source>
     <message>
         <source>Search shortcuts</source>
         <translation>ショートカットを検索</translation>
+    </message>
+    <message>
+        <source>Search the Wiki</source>
+        <translation>Wiki を検索</translation>
     </message>
     <message>
         <source>Section notes done: {done} of {total}</source>
@@ -5228,6 +5820,14 @@ Query: {query}</source>
         <translation>Web ページへ送信</translation>
     </message>
     <message>
+        <source>Sending memory part {part}/{total}...</source>
+        <translation>メモリを送信中（{part}/{total}）…</translation>
+    </message>
+    <message>
+        <source>Sending memory to write URL...</source>
+        <translation>メモリを書き込み URL に送信中…</translation>
+    </message>
+    <message>
         <source>Sending prompt to @{alias}...</source>
         <translation>@{alias} にプロンプトを送信中...</translation>
     </message>
@@ -5244,8 +5844,8 @@ Query: {query}</source>
         <translation>審査で差し戻し</translation>
     </message>
     <message>
-        <source>Sent to main chat</source>
-        <translation>メインチャットに送信しました</translation>
+        <source>Sent to a new conversation</source>
+        <translation>新しい会話に送りました</translation>
     </message>
     <message>
         <source>Server: {name}</source>
@@ -5266,6 +5866,10 @@ Query: {query}</source>
     <message>
         <source>Set up an API profile in Settings, then press Retry.</source>
         <translation>設定で API プロファイルを設定してから「再試行」を押してください。</translation>
+    </message>
+    <message>
+        <source>Settings</source>
+        <translation>設定</translation>
     </message>
     <message>
         <source>Several saved lines match "{text}"; nothing was removed. Send {command} with one whole line:</source>
@@ -5356,6 +5960,10 @@ Query: {query}</source>
         <translation>翻訳パネルを表示</translation>
     </message>
     <message>
+        <source>Show Whole Change</source>
+        <translation>変更全体を表示</translation>
+    </message>
+    <message>
         <source>Show floating vision window</source>
         <translation>フローティングビジョンウィンドウを表示</translation>
     </message>
@@ -5372,8 +5980,20 @@ Query: {query}</source>
         <translation>カードをもう一度表示</translation>
     </message>
     <message>
+        <source>Show the collapsed button while the main window is open</source>
+        <translation>メインウィンドウ表示中も最小化ボタンを表示</translation>
+    </message>
+    <message>
+        <source>Show the web prompt box</source>
+        <translation>ウェブページの質問欄を表示</translation>
+    </message>
+    <message>
         <source>Show usage bars above the window</source>
         <translation>ウインドウ上部に使用量バーを表示</translation>
+    </message>
+    <message>
+        <source>Show where you can click when the pointer rests on an edge</source>
+        <translation>端にポインタを置くと、クリックできる場所を表示</translation>
     </message>
     <message>
         <source>Sign in: {name}</source>
@@ -5464,6 +6084,10 @@ Reason: {reason}</source>
     <message>
         <source>Snooze hidden pages when idle</source>
         <translation>アイドル時に非表示ページを休止</translation>
+    </message>
+    <message>
+        <source>Sources</source>
+        <translation>出典</translation>
     </message>
     <message>
         <source>Specialized pipeline stopped by planner review.</source>
@@ -5582,6 +6206,10 @@ Goal: {goal}</source>
         <translation>ステップレビューの一時停止</translation>
     </message>
     <message>
+        <source>Step {n}: {goal}</source>
+        <translation>ステップ {n}：{goal}</translation>
+    </message>
+    <message>
         <source>Step-specific context retrieval failed: {error}</source>
         <translation>ステップ専用コンテキストの検索に失敗しました：{error}</translation>
     </message>
@@ -5604,6 +6232,10 @@ Goal: {goal}</source>
     <message>
         <source>Stop edge auto-hide</source>
         <translation>画面端の自動非表示を停止</translation>
+    </message>
+    <message>
+        <source>Stop sharing</source>
+        <translation>共有を停止</translation>
     </message>
     <message>
         <source>Stop the task first</source>
@@ -5674,12 +6306,28 @@ Goal: {goal}</source>
         <translation>厳格さ</translation>
     </message>
     <message>
+        <source>Sub agent</source>
+        <translation>サブエージェント</translation>
+    </message>
+    <message>
         <source>Suggest the next question after each answer</source>
         <translation>回答後に次の質問を予測する</translation>
     </message>
     <message>
         <source>Summarize</source>
         <translation>要約</translation>
+    </message>
+    <message>
+        <source>Switch and reopen</source>
+        <translation>切り替えて開き直す</translation>
+    </message>
+    <message>
+        <source>Switch user</source>
+        <translation>ユーザを切り替え</translation>
+    </message>
+    <message>
+        <source>Switched off, this Mac shows as offline to that sender, and what it sends waits in iCloud until you switch it on again.</source>
+        <translation>オフにした相手からはこの Mac がオフラインに見え、送られたものはオンに戻すまで iCloud で待ちます。</translation>
     </message>
     <message>
         <source>Sync current web conversation to API</source>
@@ -5720,6 +6368,10 @@ Goal: {goal}</source>
     <message>
         <source>Target display: {target}</source>
         <translation>対象ディスプレイ：{target}</translation>
+    </message>
+    <message>
+        <source>Target is busy ({reason}); nothing was sent. Retrying in {minutes} min (attempt {attempt}/{max}).</source>
+        <translation>書き込み先が処理中です（{reason}）。何も送信していません。{minutes} 分後に再試行します（{attempt}/{max} 回目）。</translation>
     </message>
     <message>
         <source>Target language</source>
@@ -5764,10 +6416,6 @@ Goal: {goal}</source>
         <translation>タスク台帳（クラッシュ復旧）</translation>
     </message>
     <message>
-        <source>Task queue running</source>
-        <translation>タスクキュー実行中</translation>
-    </message>
-    <message>
         <source>Task reasoning</source>
         <translation>タスク推論</translation>
     </message>
@@ -5782,6 +6430,10 @@ Goal: {goal}</source>
     <message>
         <source>Teal</source>
         <translation>青緑</translation>
+    </message>
+    <message>
+        <source>Telling the coordinator which files come next</source>
+        <translation>次に変更するファイルを総合調整に伝えています</translation>
     </message>
     <message>
         <source>Terminal</source>
@@ -5912,6 +6564,14 @@ Goal: {goal}</source>
         <translation>オンラインメモリが読み書きする URL とファイル。</translation>
     </message>
     <message>
+        <source>The Wiki could not be read.</source>
+        <translation>Wiki を読み込めませんでした。</translation>
+    </message>
+    <message>
+        <source>The active profile</source>
+        <translation>現在のプロファイル</translation>
+    </message>
+    <message>
         <source>The agent will control the real local desktop through CuaDriver.</source>
         <translation>エージェントは CuaDriver を通じてこの Mac の実際のデスクトップを操作します。</translation>
     </message>
@@ -5938,6 +6598,10 @@ Goal: {goal}</source>
     <message>
         <source>The browser could not finish downloading {name}.</source>
         <translation>ブラウザは {name} のダウンロードを完了できませんでした。</translation>
+    </message>
+    <message>
+        <source>The change could not be undone.</source>
+        <translation>この変更を取り消せませんでした。</translation>
     </message>
     <message>
         <source>The column opens where you let go. Other right-clicks show their menu on release; right-button dragging (some games, 3D apps) does not work while this is on.</source>
@@ -6024,6 +6688,10 @@ Goal: {goal}</source>
         <translation>前回のアップデートをインストールできませんでした（{reason}）。「今すぐ更新」で再試行してください。</translation>
     </message>
     <message>
+        <source>The main window opens History, Links, Settings and more from strips along its edges. With this on, resting the pointer on one shows the strip in glass and a small label with what it opens.</source>
+        <translation>メインウィンドウの端にある帯から、履歴・リンク・設定などを開けます。オンにすると、帯にポインタを置いたときに帯がガラスで表示され、何が開くかを小さなラベルで示します。</translation>
+    </message>
+    <message>
         <source>The model did not finish in time (limits: {seconds} seconds without any data, {minutes} minutes per request).</source>
         <translation>モデルが時間内に完了しませんでした（上限：データが {seconds} 秒届かない、または 1 回のリクエストが {minutes} 分を超える）。</translation>
     </message>
@@ -6040,6 +6708,10 @@ Goal: {goal}</source>
         <translation>モデルが空の回答を返しました。</translation>
     </message>
     <message>
+        <source>The model’s answer could not be read. Tonight’s pass will try again.</source>
+        <translation>モデルの回答を読み取れませんでした。今夜の自動整理でもう一度試します。</translation>
+    </message>
+    <message>
         <source>The notifications for “answer ready”, “run failed” and “waiting for you” use the system notification sound. Focus modes keep them silent.</source>
         <translation>「回答ができました」「失敗しました」「あなたを待っています」の通知でシステムの通知音を鳴らします。集中モード中は鳴りません。</translation>
     </message>
@@ -6050,6 +6722,10 @@ Goal: {goal}</source>
     <message>
         <source>The place the AI wanted to change does not match the file’s current text, so nothing was changed. The AI has been told why.</source>
         <translation>AI が変更しようとした箇所がファイルの現在の内容と一致しないため、何も変更していません。理由は AI に伝えました。</translation>
+    </message>
+    <message>
+        <source>The plan steps that only write text use it; a tool with no model of its own uses it too. Empty = Default chat.</source>
+        <translation>文章だけを書く計画のステップが使います。モデル未設定のツールもこれを使います。空欄 = 既定のチャット。</translation>
     </message>
     <message>
         <source>The presentation has no slides.</source>
@@ -6116,6 +6792,18 @@ Goal: {goal}</source>
         <translation>Web ページで送信ボタンが有効にならなかったため、オンラインメモリのプロンプトは送信されずページに残っています。</translation>
     </message>
     <message>
+        <source>Their name (only shown on this Mac):</source>
+        <translation>相手の名前（この Mac にだけ表示）：</translation>
+    </message>
+    <message>
+        <source>Their names become other names of “{name}”, and their sources and notes move into it.</source>
+        <translation>それぞれの名前は「{name}」の別名になり、出典とメモも移ります。</translation>
+    </message>
+    <message>
+        <source>Their tasks use</source>
+        <translation>相手のタスクで使う</translation>
+    </message>
+    <message>
         <source>There is no conversation content to summarize.</source>
         <translation>要約できる会話内容がありません。</translation>
     </message>
@@ -6180,6 +6868,14 @@ Goal: {goal}</source>
         <translation>このキャッシュページはアイドル状態のため破棄されました。@target を一度実行して再読み込みしてから表示してください。</translation>
     </message>
     <message>
+        <source>This change cannot be undone.</source>
+        <translation>この変更は取り消せません。</translation>
+    </message>
+    <message>
+        <source>This change is no longer in the record.</source>
+        <translation>この変更は記録に残っていません。</translation>
+    </message>
+    <message>
         <source>This color is too close to the red that marks a bar at 80 % or more, so it could not tell you when a provider is nearly used up. Choose another one.</source>
         <translation>この色は「80% 以上」を示す赤に近すぎるため、使い切りそうなときに見分けられません。別の色を選んでください。</translation>
     </message>
@@ -6192,8 +6888,16 @@ Goal: {goal}</source>
         <translation>この会話には続きを実行する所有デバイスがありません。</translation>
     </message>
     <message>
+        <source>This conversation is archived. Restore it in Archive &amp; delete history to open it.</source>
+        <translation>この会話はアーカイブ済みです。「アーカイブと履歴の完全削除」で復元すると開けます。</translation>
+    </message>
+    <message>
         <source>This conversation is being moved to another device; changes wait until the move finishes.</source>
         <translation>この会話は別のデバイスへ移動中です。変更は移動が終わるまで待機します。</translation>
+    </message>
+    <message>
+        <source>This conversation is not on this Mac.</source>
+        <translation>この会話はこの Mac にありません。</translation>
     </message>
     <message>
         <source>This conversation lives on {device}, so changes here are not saved. Use 🎛️ Move to → This Mac to edit it here, or Copy to this Mac for your own copy.</source>
@@ -6222,6 +6926,10 @@ Goal: {goal}</source>
     <message>
         <source>This device has no mapping for the current logical agent; its Default Profile will run.</source>
         <translation>このデバイスには現在の論理エージェントのマッピングがないため、デフォルトプロファイルで実行されます。</translation>
+    </message>
+    <message>
+        <source>This folder lets you use {device} with Broccoli.</source>
+        <translation>このフォルダで、Broccoli から {device} を使えます。</translation>
     </message>
     <message>
         <source>This frees {size}. The attachments, run logs and task records go too, and so does the copy in iCloud — on every device. This cannot be undone.</source>
@@ -6258,6 +6966,10 @@ Goal: {goal}</source>
     <message>
         <source>This release has no installer package; use the Github button.</source>
         <translation>このリリースにはインストーラがありません。Github ボタンを使ってください。</translation>
+    </message>
+    <message>
+        <source>This source is already syncing.</source>
+        <translation>このソースはすでに同期中です。</translation>
     </message>
     <message>
         <source>Time comment</source>
@@ -6410,6 +7122,18 @@ Goal: {goal}</source>
         <translation>利用不可: {error}</translation>
     </message>
     <message>
+        <source>Undo</source>
+        <translation>取り消す</translation>
+    </message>
+    <message>
+        <source>Undo This Change</source>
+        <translation>この変更を取り消す</translation>
+    </message>
+    <message>
+        <source>Undo this change to “{name}”?</source>
+        <translation>「{name}」へのこの変更を取り消しますか？</translation>
+    </message>
+    <message>
         <source>Unfiled</source>
         <translation>未分類</translation>
     </message>
@@ -6448,6 +7172,10 @@ Goal: {goal}</source>
     <message>
         <source>Untitled</source>
         <translation>無題</translation>
+    </message>
+    <message>
+        <source>Untitled conversation</source>
+        <translation>無題の会話</translation>
     </message>
     <message>
         <source>Untitled task</source>
@@ -6550,12 +7278,20 @@ Goal: {goal}</source>
         <translation>外部コンテキスト / MCP ソースを使用</translation>
     </message>
     <message>
+        <source>Use its own cursor (don't move my mouse)</source>
+        <translation>専用のカーソルを使う（自分のマウスを動かさない）</translation>
+    </message>
+    <message>
         <source>Use memory retrieval</source>
         <translation>メモリ検索を使用</translation>
     </message>
     <message>
         <source>Use this Chrome window to open pages, sign in, and prepare background tabs. When "Open each task in a new Chrome tab/window" is off, Browser Use will continue from this instance.</source>
         <translation>この Chrome ウィンドウでページを開き、サインインし、バックグラウンドタブを準備してください。「各タスクを新しい Chrome タブ/ウィンドウで開く」がオフの場合、Browser Use はこのインスタンスから続行します。</translation>
+    </message>
+    <message>
+        <source>User</source>
+        <translation>ユーザ</translation>
     </message>
     <message>
         <source>User added a note for the next checkpoint.</source>
@@ -6642,6 +7378,14 @@ Goal: {goal}</source>
         <translation>ビジョン</translation>
     </message>
     <message>
+        <source>Waiting for chat response...</source>
+        <translation>チャットの返答を待っています…</translation>
+    </message>
+    <message>
+        <source>Waiting for it: {titles}</source>
+        <translation>これを待っている：{titles}</translation>
+    </message>
+    <message>
         <source>Waiting for target device…</source>
         <translation>送信先デバイスを待っています…</translation>
     </message>
@@ -6658,8 +7402,16 @@ Goal: {goal}</source>
         <translation>あなたの対応待ち — {title}</translation>
     </message>
     <message>
+        <source>Waiting for “{title}” to finish</source>
+        <translation>「{title}」の完了待ち</translation>
+    </message>
+    <message>
         <source>Waiting {seconds}s for Plan edits before execution.</source>
         <translation>実行前にプランを編集できるよう {seconds} 秒待機しています。</translation>
+    </message>
+    <message>
+        <source>Waiting: “{title}” is changing {files}</source>
+        <translation>待機中：「{title}」が {files} を変更中</translation>
     </message>
     <message>
         <source>Watch</source>
@@ -6746,12 +7498,16 @@ Goal: {goal}</source>
         <translation>変更されたときにすること</translation>
     </message>
     <message>
+        <source>What was said</source>
+        <translation>話した内容</translation>
+    </message>
+    <message>
         <source>When Claude Code, Codex or another AI tool on this Mac (in VS Code, a terminal or Broccoli) or Broccoli’s own agent finishes a turn, a column of dots appears beside the pointer: grey = still running, green = done. Point at it to see the tasks; click one to go there. The sound is the one under Completion alerts. The built-in agentsview reads the sessions; nothing leaves this Mac.</source>
         <translation>この Mac の Claude Code・Codex などの AI ツール（VS Code、ターミナル、Broccoli 内）や Broccoli 自身の Agent が 1 ターン終えると、ポインタの横に点が縦に並びます：グレー = 実行中、緑 = 完了。ポインタを乗せるとタスクが見え、クリックでそこへ移動します。音は「完了通知」の設定に従います。セッションは内蔵の agentsview が読み取り、データはこの Mac から出ません。</translation>
     </message>
     <message>
-        <source>When a watched file changes, the model reads the change (with the instruction, if you wrote one), splits it into tasks and starts them in this group right away — in parallel when they do not touch the same things, one after another when they do. Changes made while those tasks run are not picked up again. Tasks stop at approvals unless Automatic approval is on.</source>
-        <translation>監視中のファイルが変わると、モデルが変更内容（書いた指示があればそれも）を読み、タスクに分けてこのグループですぐに開始します。互いに関係しないものは同時に、関係するものは順番に進めます。これらのタスクの実行中に起きた変更は再度は拾いません。「自動承認」がオンでない限り、承認が必要な操作で止まります。</translation>
+        <source>When a watched file changes, the model reads the change (with the instruction, if you wrote one) and splits it into tasks: each task is its own conversation in this group. They run at the same time unless they change the same files or one needs another's result — then they wait for each other. What the tasks write is not taken as a new change; a change you make while they run is picked up when they are done. Tasks stop at approvals unless Automatic approval is on.</source>
+        <translation>監視中のファイルが変わると、モデルが変更内容（説明があればそれも）を読んでタスクに分けます。各タスクはこのグループの会話の一つです。同じファイルを変更する場合や、ほかのタスクの結果が必要な場合を除き、同時に進みます（その場合は互いに待ちます）。タスク自身が書き込んだ内容は新しい変更として扱いません。タスクの実行中にあなたが加えた変更は、それらが終わってから処理します。自動承認がオフなら、タスクは承認のところで止まって待ちます。</translation>
     </message>
     <message>
         <source>When the mouse is over the blue strip</source>
@@ -6766,8 +7522,8 @@ Goal: {goal}</source>
         <translation>チャット、計画、埋め込み、各専門ステップをどのプロファイルが担当するか。</translation>
     </message>
     <message>
-        <source>Will run right after the current turn</source>
-        <translation>現在のターンの直後に実行されます</translation>
+        <source>Wiki</source>
+        <translation>Wiki</translation>
     </message>
     <message>
         <source>Window</source>
@@ -6810,12 +7566,48 @@ Goal: {goal}</source>
         <translation>書き込み URL / ファイル</translation>
     </message>
     <message>
+        <source>Write failed: URL did not load.</source>
+        <translation>書き込み失敗：URL を読み込めませんでした。</translation>
+    </message>
+    <message>
+        <source>Write failed: chat page did not enable Send ({reason}).</source>
+        <translation>書き込み失敗：チャットページの送信ボタンが有効になりませんでした（{reason}）。</translation>
+    </message>
+    <message>
         <source>Write prompt</source>
         <translation>書き込みプロンプト</translation>
     </message>
     <message>
+        <source>Write sent. Check the web page if confirmation is needed.</source>
+        <translation>書き込みを送信しました。確認が必要な場合は Web ページを見てください。</translation>
+    </message>
+    <message>
+        <source>Write skipped: file path is empty.</source>
+        <translation>書き込みをスキップ：ファイルのパスが空です。</translation>
+    </message>
+    <message>
+        <source>Write skipped: the target stayed busy through {max} retries; nothing was sent.</source>
+        <translation>書き込みをスキップ：{max} 回再試行しても書き込み先が処理中のままだったため、何も送信していません。</translation>
+    </message>
+    <message>
+        <source>Write skipped: write URL is empty.</source>
+        <translation>書き込みをスキップ：書き込み URL が空です。</translation>
+    </message>
+    <message>
+        <source>Write skipped: write method is disabled.</source>
+        <translation>書き込みをスキップ：書き込み方法がオフです。</translation>
+    </message>
+    <message>
+        <source>Writing memory file...</source>
+        <translation>メモリファイルに書き込み中…</translation>
+    </message>
+    <message>
         <source>Writing the Task Capsule from {total} section notes…</source>
         <translation>{total} 区間のメモからタスクカプセルを作成しています…</translation>
+    </message>
+    <message>
+        <source>Written each night from your conversations. Once you change it, it stays as you wrote it.</source>
+        <translation>毎晩、会話をもとに書かれます。一度書き換えると、あなたが書いたとおりに残ります。</translation>
     </message>
     <message>
         <source>Yellow</source>
@@ -6832,6 +7624,10 @@ Goal: {goal}</source>
     <message>
         <source>You should set your accounts in Settings.</source>
         <translation>設定でアカウントを設定してください。</translation>
+    </message>
+    <message>
+        <source>Your own note. Never changed or removed automatically.</source>
+        <translation>あなた自身のメモ。自動で変更・削除されることはありません。</translation>
     </message>
     <message>
         <source>Your own text in permanent memory can be changed in Settings → Memory.</source>
@@ -6860,6 +7656,14 @@ Goal: {goal}</source>
     <message>
         <source>[Agent command timed out]</source>
         <translation>[エージェントのコマンドがタイムアウトしました]</translation>
+    </message>
+    <message>
+        <source>[Broccoli wrote these files for Claude Code: {files}]</source>
+        <translation>［Broccoli が Claude Code の代わりに書き込んだファイル：{files}］</translation>
+    </message>
+    <message>
+        <source>[Broccoli wrote these files for Codex: {files}]</source>
+        <translation>［Broccoli が Codex の代わりに書き込んだファイル：{files}］</translation>
     </message>
     <message>
         <source>[Command finished with exit code {code}]</source>
@@ -6974,6 +7778,10 @@ Goal: {goal}</source>
         <translation>検索用ファイルを削除できませんでした</translation>
     </message>
     <message>
+        <source>a task of another user</source>
+        <translation>ほかのユーザーのタスク</translation>
+    </message>
+    <message>
         <source>active</source>
         <translation>有効</translation>
     </message>
@@ -7000,6 +7808,10 @@ Goal: {goal}</source>
     <message>
         <source>another move of this conversation is in progress</source>
         <translation>この会話の別の移動が進行中です</translation>
+    </message>
+    <message>
+        <source>applies from the next question</source>
+        <translation>次の質問から反映</translation>
     </message>
     <message>
         <source>audio</source>
@@ -7062,6 +7874,10 @@ Goal: {goal}</source>
         <translation>重大</translation>
     </message>
     <message>
+        <source>deleted</source>
+        <translation>削除</translation>
+    </message>
+    <message>
         <source>dirty editor buffer</source>
         <translation>エディタの未保存の変更</translation>
     </message>
@@ -7072,6 +7888,10 @@ Goal: {goal}</source>
     <message>
         <source>discovery failed</source>
         <translation>ディスカバリー失敗</translation>
+    </message>
+    <message>
+        <source>drop as a duplicate</source>
+        <translation>重複のため取り消し</translation>
     </message>
     <message>
         <source>dsl 'when' has unknown fields: {fields}</source>
@@ -7154,6 +7974,10 @@ Goal: {goal}</source>
         <translation>目標達成</translation>
     </message>
     <message>
+        <source>hand over</source>
+        <translation>相手に引き継ぐ</translation>
+    </message>
+    <message>
         <source>held at {n}s</source>
         <translation>{n} 秒で保留</translation>
     </message>
@@ -7176,6 +8000,10 @@ Goal: {goal}</source>
     <message>
         <source>iCloud remote tasks are turned off.</source>
         <translation>iCloud リモートタスクはオフです。</translation>
+    </message>
+    <message>
+        <source>iPhone</source>
+        <translation>iPhone</translation>
     </message>
     <message>
         <source>image</source>
@@ -7224,6 +8052,10 @@ Goal: {goal}</source>
     <message>
         <source>just now</source>
         <translation>たった今</translation>
+    </message>
+    <message>
+        <source>last question {time}</source>
+        <translation>最後の質問 {time}</translation>
     </message>
     <message>
         <source>levels unknown</source>
@@ -7278,6 +8110,10 @@ Goal: {goal}</source>
         <translation>不足：{value}</translation>
     </message>
     <message>
+        <source>new file</source>
+        <translation>新しいファイル</translation>
+    </message>
+    <message>
         <source>next candidate</source>
         <translation>次の候補</translation>
     </message>
@@ -7318,6 +8154,10 @@ Goal: {goal}</source>
         <translation>応答なし</translation>
     </message>
     <message>
+        <source>not shared yet — open the share window</source>
+        <translation>まだ共有されていません — 共有ウインドウを開いてください</translation>
+    </message>
+    <message>
         <source>note</source>
         <translation>メモ</translation>
     </message>
@@ -7340,6 +8180,10 @@ Goal: {goal}</source>
     <message>
         <source>open</source>
         <translation>未解決</translation>
+    </message>
+    <message>
+        <source>outside Broccoli</source>
+        <translation>Broccoli の外</translation>
     </message>
     <message>
         <source>payload must be an object</source>
@@ -7374,6 +8218,10 @@ Goal: {goal}</source>
         <translation>元 {raw} / レビュー後 {reviewed}</translation>
     </message>
     <message>
+        <source>re-plan</source>
+        <translation>再計画</translation>
+    </message>
+    <message>
         <source>readonly</source>
         <translation>読み取り専用</translation>
     </message>
@@ -7392,6 +8240,10 @@ Goal: {goal}</source>
     <message>
         <source>relocate_margins '{key}' must be a number in [0, 400]</source>
         <translation>relocate_margins の '{key}' は [0, 400] の数値である必要があります</translation>
+    </message>
+    <message>
+        <source>renamed</source>
+        <translation>名前変更</translation>
     </message>
     <message>
         <source>retrieval</source>
@@ -7416,6 +8268,10 @@ Goal: {goal}</source>
     <message>
         <source>run</source>
         <translation>実行</translation>
+    </message>
+    <message>
+        <source>run alongside</source>
+        <translation>並行して実行</translation>
     </message>
     <message>
         <source>saving took too long there</source>
@@ -7502,6 +8358,10 @@ Goal: {goal}</source>
         <translation>リクエストの期限が切れました</translation>
     </message>
     <message>
+        <source>the screen</source>
+        <translation>画面</translation>
+    </message>
+    <message>
         <source>the task records could not be deleted</source>
         <translation>タスク記録を削除できませんでした</translation>
     </message>
@@ -7516,6 +8376,10 @@ Goal: {goal}</source>
     <message>
         <source>unavailable</source>
         <translation>取得できません</translation>
+    </message>
+    <message>
+        <source>undone</source>
+        <translation>取り消し済み</translation>
     </message>
     <message>
         <source>unknown</source>
@@ -7542,12 +8406,24 @@ Goal: {goal}</source>
         <translation>動画</translation>
     </message>
     <message>
+        <source>wait</source>
+        <translation>待つ</translation>
+    </message>
+    <message>
         <source>waiting</source>
         <translation>待機中</translation>
     </message>
     <message>
+        <source>waiting for the first question</source>
+        <translation>最初の質問を待っています</translation>
+    </message>
+    <message>
         <source>waiting for your approval</source>
         <translation>承認待ち</translation>
+    </message>
+    <message>
+        <source>waits for “{title}”</source>
+        <translation>「{title}」待ち</translation>
     </message>
     <message>
         <source>watchdog is unavailable.</source>
@@ -7564,6 +8440,10 @@ Goal: {goal}</source>
     <message>
         <source>yes</source>
         <translation>はい</translation>
+    </message>
+    <message>
+        <source>you</source>
+        <translation>あなた</translation>
     </message>
     <message>
         <source>{archived} archived · {archived_size}  |  {total} on this Mac · {total_size}</source>
@@ -7600,6 +8480,14 @@ Goal: {goal}</source>
     <message>
         <source>{days} days</source>
         <translation>{days} 日</translation>
+    </message>
+    <message>
+        <source>{device} (shared with you)</source>
+        <translation>{device}（あなたに共有）</translation>
+    </message>
+    <message>
+        <source>{device} could not answer this question.</source>
+        <translation>{device} はこの質問に回答できませんでした。</translation>
     </message>
     <message>
         <source>{device} could not move the conversation here ({reason}).</source>
@@ -7646,6 +8534,10 @@ Goal: {goal}</source>
         <translation>{device} から失敗の報告がありましたが、詳細はありません。</translation>
     </message>
     <message>
+        <source>{files} passed to “{a}” (it asked for them)</source>
+        <translation>{files} を「{a}」に渡しました（先に依頼したため）</translation>
+    </message>
+    <message>
         <source>{hours} h {minutes} min left</source>
         <translation>あと {hours} 時間 {minutes} 分</translation>
     </message>
@@ -7686,6 +8578,10 @@ Goal: {goal}</source>
         <translation>{name}（無効）</translation>
     </message>
     <message>
+        <source>{name} can no longer send tasks to this Mac, and their shared folder leaves your iCloud Drive (a copy stays on this Mac). Their conversations here stay.</source>
+        <translation>{name} はこの Mac にタスクを送れなくなり、共有フォルダはあなたの iCloud Drive から外れます（この Mac にコピーが残ります）。ここでの会話は残ります。</translation>
+    </message>
+    <message>
         <source>{name} history</source>
         <translation>{name} 履歴</translation>
     </message>
@@ -7716,6 +8612,10 @@ Goal: {goal}</source>
     <message>
         <source>{n} chars</source>
         <translation>{n} 文字</translation>
+    </message>
+    <message>
+        <source>{n} entries</source>
+        <translation>{n} 件</translation>
     </message>
     <message>
         <source>{n} favorite{s}</source>
@@ -7778,6 +8678,10 @@ Goal: {goal}</source>
         <translation>{p} ページ · {b} バッチ</translation>
     </message>
     <message>
+        <source>{shown} of {total}</source>
+        <translation>{shown} / {total}</translation>
+    </message>
+    <message>
         <source>{size} of it are auto-approve backups. “Delete, keep backups” leaves them in the backup folder.</source>
         <translation>そのうち {size} は自動承認のバックアップです。「削除（バックアップは残す）」を選ぶとバックアップフォルダに残ります。</translation>
     </message>
@@ -7818,6 +8722,34 @@ Goal: {goal}</source>
         <translation>{window}：{percent}% 使用 · {time} にリセット</translation>
     </message>
     <message>
+        <source>“{a}” answered “{b}”: {answer}</source>
+        <translation>「{a}」が「{b}」に回答：{answer}</translation>
+    </message>
+    <message>
+        <source>“{a}” asked “{b}”: {question}</source>
+        <translation>「{a}」が「{b}」に質問：{question}</translation>
+    </message>
+    <message>
+        <source>“{a}” gave back {files}</source>
+        <translation>「{a}」が {files} を解放</translation>
+    </message>
+    <message>
+        <source>“{a}” is next in line for {file} after “{b}”</source>
+        <translation>「{a}」が「{b}」の次に {file} を待っています</translation>
+    </message>
+    <message>
+        <source>“{a}” reserved {files}</source>
+        <translation>「{a}」が {files} を予約</translation>
+    </message>
+    <message>
+        <source>“{a}” started after waiting {s} s</source>
+        <translation>「{a}」が {s} 秒待ってから開始</translation>
+    </message>
+    <message>
+        <source>“{a}” waits for “{b}” ({files})</source>
+        <translation>「{a}」が「{b}」を待っています（{files}）</translation>
+    </message>
+    <message>
         <source>“{model}” is blocked at this location ({place}). Allow it in Settings → Models → Models by location, or choose another model.</source>
         <translation>「{model}」はこの場所（{place}）では制限されています。設定 → モデル → 場所別のモデル制限 で許可するか、別のモデルを選んでください。</translation>
     </message>
@@ -7826,8 +8758,28 @@ Goal: {goal}</source>
         <translation>「{name}」は編集を表示した後に変更されたため、この編集は書き込んでいません。何も変更していません。</translation>
     </message>
     <message>
+        <source>“{name}” could not be changed back: {why}</source>
+        <translation>「{name}」を元に戻せませんでした：{why}</translation>
+    </message>
+    <message>
         <source>“{name}” could not be saved: {reason}</source>
         <translation>「{name}」を保存できませんでした：{reason}</translation>
+    </message>
+    <message>
+        <source>“{name}” exists again, so it was not put back.</source>
+        <translation>「{name}」がまた存在するため、戻しませんでした。</translation>
+    </message>
+    <message>
+        <source>“{name}” is being changed by a running task right now, so it was not saved. Try again in a moment.</source>
+        <translation>「{name}」は実行中のタスクが変更中のため、保存しませんでした。少し待ってからもう一度お試しください。</translation>
+    </message>
+    <message>
+        <source>“{name}” is being changed by “{title}” right now. Undo the change when that task is done.</source>
+        <translation>「{name}」は「{title}」が変更中です。そのタスクが終わってから取り消してください。</translation>
+    </message>
+    <message>
+        <source>“{name}” is not a text file.</source>
+        <translation>「{name}」はテキストファイルではありません。</translation>
     </message>
     <message>
         <source>“{name}” is read-only, so it was not saved.</source>
@@ -7838,12 +8790,44 @@ Goal: {goal}</source>
         <translation>「{name}」は {encoding} で保存されていて、新しい文字の一部（{chars}）を保存できません。代わりに UTF-8 で保存しますか？</translation>
     </message>
     <message>
+        <source>“{name}” no longer contains the text the AI wanted to change, so nothing was written.</source>
+        <translation>「{name}」には AI が変更しようとした文字がもうないため、何も書き込みませんでした。</translation>
+    </message>
+    <message>
+        <source>“{name}” no longer exists, so this change cannot be undone.</source>
+        <translation>「{name}」がもう存在しないため、この変更は取り消せません。</translation>
+    </message>
+    <message>
         <source>“{name}” was changed after the AI read it, at the same place as the AI’s edit (now line {lines}). To be safe, nothing was written. Send your request again and the AI will work from the current text.</source>
         <translation>「{name}」は AI が読んだ後に変更されていて、その箇所が AI の編集と重なっています（現在の {lines} 行目）。安全のため、何も書き込んでいません。もう一度依頼を送ると、AI は現在の内容をもとに編集します。</translation>
     </message>
     <message>
+        <source>“{name}” was changed again at the same place since, so this change was not undone.</source>
+        <translation>「{name}」の同じ箇所がその後また変更されたため、この変更は取り消していません。</translation>
+    </message>
+    <message>
+        <source>“{name}” was changed again since, and the text right after this change was not kept, so it cannot be undone on its own.</source>
+        <translation>「{name}」はその後また変更され、この変更直後の内容が残っていないため、この変更だけを取り消すことはできません。</translation>
+    </message>
+    <message>
         <source>“{name}” was changed by another program a moment ago, so it was not overwritten. Nothing was changed.</source>
         <translation>「{name}」は直前に別のアプリで変更されたため、上書きしていません。何も変更していません。</translation>
+    </message>
+    <message>
+        <source>“{name}” was changed by someone else at the same place, so this change was not written. It will be redone from the current text.</source>
+        <translation>「{name}」の同じ箇所が別の変更で書き換えられたため、今回の変更は書き込みませんでした。現在の内容からやり直します。</translation>
+    </message>
+    <message>
+        <source>“{name}” was changed by someone else, so it was not deleted.</source>
+        <translation>「{name}」は別の変更で書き換えられたため、削除しませんでした。</translation>
+    </message>
+    <message>
+        <source>“{name}” was changed since it was created, so it was not deleted.</source>
+        <translation>「{name}」は作成後に変更されたため、削除しませんでした。</translation>
+    </message>
+    <message>
+        <source>“{name}” was renamed or moved again since, so this change cannot be undone.</source>
+        <translation>「{name}」はその後また名前変更か移動されたため、この変更は取り消せません。</translation>
     </message>
     <message>
         <source>… {n} more conversation{s} (nothing deleted · search finds all · limit adjustable in Settings)</source>
@@ -7870,6 +8854,10 @@ Goal: {goal}</source>
         <translation>⏳ 回答中「{question}」· {detail} · クリックで戻る</translation>
     </message>
     <message>
+        <source>⏳ Sent to {device}. The answer appears here when it is ready.</source>
+        <translation>⏳ {device} に送りました。回答ができるとここに表示されます。</translation>
+    </message>
+    <message>
         <source>⏳ The agent stopped and is waiting for you · click here to see it</source>
         <translation>⏳ Agent が止まってあなたを待っています · クリックで表示</translation>
     </message>
@@ -7884,6 +8872,10 @@ Goal: {goal}</source>
     <message>
         <source>⏸ **Approve?** — Codex wants to run:</source>
         <translation>⏸ **承認しますか？** — Codex が実行しようとしています：</translation>
+    </message>
+    <message>
+        <source>⏸ **Approve?** — {who} proposes these changes; Broccoli writes them (a copy of each file is kept first):</source>
+        <translation>⏸ **承認しますか？** — {who} が次の変更を提案しています。書き込むのは Broccoli です（書き込む前に各ファイルの元の内容を保存します）：</translation>
     </message>
     <message>
         <source>⏸ **Seems stalled** — still active, but no new output for about {seconds} seconds and no tool is running. Reply "interrupt" to stop this turn, or reply anything else to feed it in and continue; you can also wait a little longer.</source>
@@ -7954,10 +8946,6 @@ Goal: {goal}</source>
         <translation>🎛️ Move to 失敗</translation>
     </message>
     <message>
-        <source>🏷️ Tag</source>
-        <translation>🏷️ タグ</translation>
-    </message>
-    <message>
         <source>👀 Show/Hide dock icon</source>
         <translation>👀 Dock アイコンを表示/非表示</translation>
     </message>
@@ -7972,6 +8960,10 @@ Goal: {goal}</source>
     <message>
         <source>📌 Board · %d facts · %d disputed · %d proposed</source>
         <translation>📌 ボード · 事実 %d 件 · 異論 %d 件 · 提案 %d 件</translation>
+    </message>
+    <message>
+        <source>📝 Your note reached the running step: {notes}</source>
+        <translation>📝 追加したメモを実行中のステップに届けました：{notes}</translation>
     </message>
     <message>
         <source>📥 Queue</source>
@@ -8008,6 +9000,10 @@ Goal: {goal}</source>
     <message>
         <source>🥦 Start Broccoli!</source>
         <translation>🥦 Broccoli を起動！</translation>
+    </message>
+    <message>
+        <source>🧠 Models</source>
+        <translation>🧠 モデル</translation>
     </message>
     <message>
         <source>🧾 Queue</source>

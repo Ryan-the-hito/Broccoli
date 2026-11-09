@@ -70,7 +70,12 @@ PROGRESS_PREFIX = "__BROCCOLI_COMPUTER_USE_PROGRESS__"
 INSTALL_COMMAND = '/bin/bash -c "$(curl -fsSL https://cua.ai/driver/install.sh)"'
 WINDOW_OBSERVE_TOOL = "get_window_state"
 APPS_OBSERVE_TOOLS = ("list_apps", "get_accessibility_tree")
-WINDOW_OBSERVE_MAX_ELEMENTS = 400
+# 2026-11-09: 400 cut a Safari form off at element 206 (the tab sidebar is
+# walked first; the page's dropdown was element 207 of 1151), so the model only
+# had pixels for the whole form. The walk is depth-first and bounded by time,
+# and _model_elements_json still caps what the model reads.
+WINDOW_OBSERVE_MAX_ELEMENTS = 1500
+WINDOW_OBSERVE_TIMEOUT_MS = 3000
 TREE_TEXT_LIMIT = 8000
 MODEL_ELEMENTS_TEXT_LIMIT = 12000
 APPS_TEXT_LIMIT = 4000
@@ -151,6 +156,40 @@ def _emit_result(payload: dict) -> None:
 
 def _emit_progress(payload: dict) -> None:
     _emit(PROGRESS_PREFIX, payload)
+
+
+# Add note while the task runs (2026-11-07): Broccoli writes every note of the run into
+# config["live_notes_path"]; the ones in config["live_notes_skip"] were already in the task.
+def _take_live_notes(config: dict, applied: set) -> list[dict]:
+    path = str(config.get("live_notes_path", "") or "").strip()
+    if not path:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return []
+    fresh = []
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict):
+            continue
+        note_id = str(item.get("id", "") or "").strip()
+        text = str(item.get("text", "") or "").strip()
+        if note_id and text and note_id not in applied:
+            applied.add(note_id)
+            fresh.append({"id": note_id, "text": text})
+    return fresh
+
+
+def _live_notes_prompt(notes: list[dict]) -> str:
+    if not notes:
+        return ""
+    numbered = "\n".join(f"{index}. {item['text']}" for index, item in enumerate(notes, start=1))
+    return (
+        "USER INSTRUCTIONS ADDED WHILE THIS TASK WAS RUNNING (apply them from now on; where they conflict "
+        "with the task above or with each other, the newest wins; the safety rules above still apply):\n"
+        + numbered + "\n\n"
+    )
 
 
 def _positive_int(value: Any, default: int) -> int:
@@ -1671,19 +1710,51 @@ def _model_elements_json(elements: list[dict], limit: int = MODEL_ELEMENTS_TEXT_
         "button", "field", "text", "checkbox", "radio", "link", "menuitem",
         "slider", "switch", "cell", "row", "tab", "pop", "combo", "increment",
     )
+    # A web page (2026-11-09): WebKit lists AXShowMenu/AXScrollToVisible on
+    # every node and the browser's tab sidebar comes first in tree order, so the
+    # old "any action = interactive" rule filled the budget with sidebar rows and
+    # left the page's form controls out. With web content present: the page's
+    # controls (and an open popup's menu items) first, then the page's text
+    # (field labels), then the browser's own controls.
+    has_web_content = any(
+        isinstance(item, dict) and item.get("in_web_content") is True for item in elements or []
+    )
+    web_flags = [   # indexed like _tree_order (enumerate over every entry)
+        bool(isinstance(item, dict) and item.get("in_web_content") is True)
+        for item in elements or []
+    ]
+
+    def is_control(role: str) -> bool:
+        return any(marker in role for marker in interactive_markers) and "statictext" not in role
 
     def priority(item: dict) -> tuple[int, int]:
         role = str(item.get("role", "") or "").lower()
+        order = int(item.get("_tree_order", 0) or 0)
+        if has_web_content:
+            in_web = web_flags[order] if 0 <= order < len(web_flags) else False
+            if role in {"axmenu", "axmenuitem"} or (in_web and is_control(role)):
+                return (0, order)
+            if in_web:
+                return (1, order)
+            if is_control(role):
+                return (2, order)
+            return (3, order)
         actionable = bool(item.get("actions")) or any(marker in role for marker in interactive_markers)
-        return (0 if actionable else 1, int(item.get("_tree_order", 0) or 0))
+        return (0 if actionable else 1, order)
 
+    # The JSON of a list is "[" + ",".join(items) + "]" with these separators,
+    # so the size is summed instead of re-encoding the whole list per element
+    # (the tree can now hold 1500 elements).
+    budget = max(256, int(limit))
     selected: list[dict] = []
+    used = 2
     for item in sorted(compact, key=priority):
-        candidate = [*selected, item]
-        encoded = json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))
-        if len(encoded) > max(256, int(limit)):
+        item_size = len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+        added = item_size + (1 if selected else 0)
+        if used + added > budget:
             continue
-        selected = candidate
+        selected.append(item)
+        used += added
     for item in selected:
         item.pop("_tree_order", None)
     return json.dumps(selected, ensure_ascii=False, separators=(",", ":")), max(0, len(compact) - len(selected))
@@ -3467,7 +3538,13 @@ def _transient_foreground_authorized(
     }
 
 
-def _window_delivery_ladder_exhausted(actions: list[dict], window_context: dict) -> bool:
+def _window_delivery_ladder_exhausted(
+        actions: list[dict], window_context: dict, since_index: int = 0) -> bool:
+    """True when the operation the model is CURRENTLY on failed on both rungs.
+
+    ``since_index``: actions before it are spent evidence (the visual arbiter
+    already looked at them and vetoed the abort).
+    """
     required = {
         ("window_pixel", "background"),
         ("window_pixel", "foreground"),
@@ -3475,7 +3552,9 @@ def _window_delivery_ladder_exhausted(actions: list[dict], window_context: dict)
     pid = window_context.get("pid") if isinstance(window_context, dict) else None
     window_id = window_context.get("window_id") if isinstance(window_context, dict) else None
     relevant = []
-    for item in reversed(actions or []):
+    items = list(actions or [])
+    for index in range(len(items) - 1, max(0, int(since_index or 0)) - 1, -1):
+        item = items[index]
         if not isinstance(item, dict):
             continue
         grounded = item.get("window") if isinstance(item.get("window"), dict) else {}
@@ -3487,8 +3566,16 @@ def _window_delivery_ladder_exhausted(actions: list[dict], window_context: dict)
             # last proven effect (a task was once killed by two stale
             # no-effect clicks AFTER the final write had already confirmed).
             break
-        if item.get("effect_status") != EFFECT_ABSENT \
-                or not _action_was_delivered_unverified(item):
+        if not _action_was_delivered_unverified(item):
+            continue
+        if item.get("effect_status") != EFFECT_ABSENT:
+            if not relevant:
+                # The newest delivered input on this window is not a proven
+                # no-effect: the model has moved on to another operation (a web
+                # field typed by pixels settles INDETERMINATE, never CONFIRMED).
+                # A dropdown that failed earlier must not end the task now
+                # (2026-11-09: the phone number was typed, then the task died).
+                return False
             continue
         relevant.append(item)
         if len(relevant) >= 6:
@@ -3511,6 +3598,269 @@ def _window_delivery_ladder_exhausted(actions: list[dict], window_context: dict)
         delivery = str(arguments.get("delivery_mode", "background") or "background").lower()
         rungs.add((str(item.get("address_mode", "") or ""), delivery))
     return required <= rungs
+
+
+# ── Own cursor (Ryan, 2026-11-09) ────────────────────────────────────────────
+# Only mouse MOVEMENT is managed. The driver's transient-foreground retry of a
+# pixel action moves the user's real pointer ("hardware pointer moved to the
+# target, HID event tap"); a key escalation only fronts the window for a moment
+# and is left as it was. With own_cursor on, a pixel action without effect
+# first gets the background route that really differs from it; the pointer
+# may move only when no such route exists or it was tried ("allowed when
+# unavoidable" is the default Ryan chose).
+OWN_CURSOR_POPUP_ROLES = {"axpopupbutton", "axcombobox", "axmenubutton"}
+OWN_CURSOR_TEXT_ROLES = {"axtextfield", "axtextarea", "axsearchfield", "axsecuretextfield"}
+OWN_CURSOR_PRESS_ROLES = {
+    "axbutton", "axlink", "axcheckbox", "axradiobutton", "axmenuitem",
+    "axdisclosuretriangle", "axtab", "axcell", "axrow", "axswitch", "axtogglebutton",
+}
+OWN_CURSOR_KEY_TOOLS = {"press_key", "hotkey"}
+
+
+def _pointer_moving_retry(action: dict) -> bool:
+    """Would a transient-foreground retry of this action move the real pointer?"""
+    if not isinstance(action, dict):
+        return False
+    return bool(
+        str(action.get("address_mode", "") or "") in PIXEL_ADDRESS_MODES
+        and str(action.get("tool", "") or "").lower() not in OWN_CURSOR_KEY_TOOLS
+    )
+
+
+def _pixel_cursor_evidence(tool: str, address_mode: str, delivery_mode: str) -> dict:
+    """Truthful cursor record for a pixel/key delivery.
+
+    The driver reports a foreground pixel action as "hardware pointer moved to
+    the target"; the log used to say real_pointer_moved: False for it.
+    """
+    moved = bool(
+        str(delivery_mode or "").lower() == "foreground"
+        and _pointer_moving_retry({"tool": tool, "address_mode": address_mode})
+    )
+    return {
+        "available": address_mode in PIXEL_ADDRESS_MODES,
+        "mode": "real_pointer_foreground" if moved else "driver_pixel_session_overlay",
+        "real_pointer_moved": moved,
+    }
+
+
+def _pixel_action_screen_point(action: dict) -> tuple[float, float] | None:
+    """Screen point (in points) of a window-pixel action, from the driver-space x/y."""
+    if not isinstance(action, dict):
+        return None
+    arguments = action.get("driver_arguments") if isinstance(action.get("driver_arguments"), dict) \
+        else action.get("arguments") if isinstance(action.get("arguments"), dict) else {}
+    x = arguments.get("x", arguments.get("from_x"))
+    y = arguments.get("y", arguments.get("from_y"))
+    window = action.get("window") if isinstance(action.get("window"), dict) else {}
+    geometry = window.get("geometry") if isinstance(window.get("geometry"), dict) else {}
+    bounds = _rect(geometry.get("cg_bounds")) or _rect(window.get("bounds"))
+    metrics = geometry.get("metrics") if isinstance(geometry.get("metrics"), dict) else {}
+    try:
+        x = float(x)
+        y = float(y)
+        scale_x = float(metrics.get("png_scale_x", 1.0) or 1.0)
+        scale_y = float(metrics.get("png_scale_y", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        return None
+    if bounds is None or scale_x <= 0 or scale_y <= 0:
+        return None
+    return bounds["x"] + x / scale_x, bounds["y"] + y / scale_y
+
+
+def _element_label(element: dict) -> str:
+    return _clip(str(element.get("label") or element.get("value") or "").strip(), 80)
+
+
+def _own_cursor_route_key(window: dict, element: dict) -> tuple:
+    return (
+        window.get("pid") if isinstance(window, dict) else None,
+        window.get("window_id") if isinstance(window, dict) else None,
+        str(element.get("role", "") or "").lower(),
+        _element_label(element),
+    )
+
+
+def _own_cursor_background_route(action: dict, elements: list[dict]) -> dict | None:
+    """The untried background route for a pixel action that had no effect, or None.
+
+    None = moving the user's mouse is unavoidable: no control under the point
+    (canvas, custom drawing), or the pixel click already ran the same AX press
+    ("PX hit-test pressed ... via AX"; tested 2026-11-09 on a WebKit page: a
+    background element-token press and a background pixel press behave the same
+    on buttons and links). A dropdown (keys) and a text field (type_text by
+    token, read back through AX) are real alternatives.
+    """
+    if not _pointer_moving_retry(action):
+        return None
+    point = _pixel_action_screen_point(action)
+    if point is None:
+        return None
+    roles = OWN_CURSOR_POPUP_ROLES | OWN_CURSOR_TEXT_ROLES | OWN_CURSOR_PRESS_ROLES
+    best: dict | None = None
+    best_area = 0.0
+    for element in elements or []:
+        if not isinstance(element, dict) or not element.get("element_token"):
+            continue
+        role = str(element.get("role", "") or "").lower()
+        if role not in roles:
+            continue
+        frame = _rect(element.get("frame"))
+        if frame is None or frame["width"] <= 0 or frame["height"] <= 0:
+            continue
+        if not (frame["x"] - 1 <= point[0] <= frame["x"] + frame["width"] + 1
+                and frame["y"] - 1 <= point[1] <= frame["y"] + frame["height"] + 1):
+            continue
+        area = frame["width"] * frame["height"]
+        if best is None or area < best_area:
+            best, best_area = element, area
+    if best is None:
+        return None
+    role = str(best.get("role", "") or "").lower()
+    if role in OWN_CURSOR_POPUP_ROLES:
+        route = "popup"
+    elif role in OWN_CURSOR_TEXT_ROLES:
+        route = "text"
+    else:
+        delivered_text = (
+            str(action.get("result", "") or "") + " " + str(action.get("raw_summary", "") or "")
+        ).lower()
+        if "hit-test pressed" in delivered_text or "via ax" in delivered_text:
+            return None
+        route = "press"
+    window = action.get("window") if isinstance(action.get("window"), dict) else {}
+    return {
+        "route": route,
+        "element_token": str(best.get("element_token", "") or ""),
+        "role": str(best.get("role", "") or ""),
+        "label": _element_label(best),
+        "key": list(_own_cursor_route_key(window, best)),
+    }
+
+
+def _own_cursor_route_element(route: dict, elements: list[dict]) -> dict | None:
+    """The same control in the current snapshot (tokens go stale every read)."""
+    if not isinstance(route, dict):
+        return None
+    role = str(route.get("role", "") or "").lower()
+    label = str(route.get("label", "") or "")
+    for element in elements or []:
+        if isinstance(element, dict) and element.get("element_token") \
+                and str(element.get("role", "") or "").lower() == role \
+                and _element_label(element) == label:
+            return element
+    return None
+
+
+def _own_cursor_route_text(route: dict, element: dict | None) -> str:
+    if element is None:
+        return (
+            f"the {route.get('role') or 'control'} '{route.get('label', '')}' is not in this snapshot's "
+            "element list any more."
+        )
+    token = str(element.get("element_token", "") or "")
+    name = f"{element.get('role')} '{_element_label(element)}' (element_token {token})"
+    kind = str(route.get("route", "") or "")
+    if kind == "popup":
+        return (
+            f"{name} is a dropdown. Use set_value on it with the exact option text. If set_value is "
+            "refused, click it by element_token; the next snapshot lists its AXMenuItem rows in order, "
+            "then press_key 'down' or 'up' (with pid and window_id) once per turn up to the wanted row and "
+            "press_key 'return'. Check the dropdown's value afterwards. Never pixel-click a menu option."
+        )
+    if kind == "text":
+        return f"{name} is a text field: type_text with this element_token (it focuses the field itself; no click first)."
+    return f"click {name} by element_token (a background accessibility press)."
+
+
+def _own_cursor_prompt(deferred: dict, elements: list[dict], actions: list[dict]) -> str:
+    """The per-turn note for a mouse-moving retry that is held back."""
+    if not isinstance(deferred, dict) or not deferred:
+        return ""
+    route = deferred.get("route") if isinstance(deferred.get("route"), dict) else {}
+    label = str(deferred.get("label", "") or "previous pixel action")
+    element = _own_cursor_route_element(route, elements)
+    tried = _background_route_tried(actions, deferred.get("window") or {})
+    if element is not None and not tried:
+        return (
+            f"\nOWN CURSOR - NO CHANGE AFTER YOUR {label}: the user is working with the real mouse, so the "
+            "worker does not move it while a background route is untried. Look at the screenshot first; if the "
+            "effect is there, continue and do NOT repeat it. Otherwise "
+            + _own_cursor_route_text(route, element)
+            + " Only if that also has no effect, send your original pixel call again unchanged: the worker then "
+            "retries it once in the transient foreground, which moves the user's mouse once.\n"
+        )
+    return (
+        f"\nOWN CURSOR: the background route for your {label} "
+        + ("was tried" if tried else "is no longer available")
+        + ". If the target still did not change, send your original pixel call again unchanged: the worker then "
+        "retries it once in the transient foreground (this moves the user's mouse once). Otherwise continue.\n"
+    )
+
+
+def _no_effect_failure_text(actions: list[dict], window_context: dict, arbiter_verdict: str = "") -> str:
+    """CU_ACTION_NO_EFFECT message: the stuck action, and what still may have landed."""
+    pid = window_context.get("pid") if isinstance(window_context, dict) else None
+    window_id = window_context.get("window_id") if isinstance(window_context, dict) else None
+    stuck = None
+    for item in reversed(actions or []):
+        grounded = item.get("window") if isinstance(item, dict) and isinstance(item.get("window"), dict) else {}
+        if isinstance(item, dict) and item.get("effect_status") == EFFECT_ABSENT \
+                and grounded.get("pid") == pid and grounded.get("window_id") == window_id:
+            stuck = item
+            break
+    stuck_label = _weak_absence_label(stuck) if stuck else "the last action"
+    route = stuck.get("own_cursor_route") if isinstance(stuck, dict) else None
+    if isinstance(route, dict) and route.get("role"):
+        stuck_label += f" on {route.get('role')} '{route.get('label', '')}'"
+    landed = sum(
+        1 for item in actions or []
+        if isinstance(item, dict) and item.get("effect_status") in {EFFECT_CONFIRMED, EFFECT_INDETERMINATE}
+        and item.get("driver_attempted") is True
+    )
+    text = (
+        f"CU_ACTION_NO_EFFECT: {stuck_label} had no visible effect, neither in the background nor in the one "
+        "transient-foreground retry, so the worker stopped instead of repeating it. "
+    )
+    confirmed = sum(
+        1 for item in actions or []
+        if isinstance(item, dict) and item.get("effect_status") == EFFECT_CONFIRMED
+        and item.get("driver_attempted") is True
+    )
+    if landed:
+        text += (
+            f"{landed} earlier input(s) in this task were delivered and may have taken effect"
+            + (" (some were confirmed, so permissions are not the cause)" if confirmed else "")
+            + "; check the final screenshot before redoing anything."
+        )
+    else:
+        text += "No input in this task was confirmed."
+    if arbiter_verdict:
+        text += " Last visual check: " + _clip(arbiter_verdict, 300)
+    return text
+
+
+def _background_route_tried(actions: list[dict], window: dict) -> bool:
+    """Has element/key input reached this window since its last confirmed effect?
+
+    Before or after the failed pixel action: a model that already pressed the
+    control by element_token and then fell back to pixels has tried the
+    background route, and is not sent back to it.
+    """
+    pid = window.get("pid") if isinstance(window, dict) else None
+    window_id = window.get("window_id") if isinstance(window, dict) else None
+    for item in reversed(list(actions or [])):
+        if not isinstance(item, dict):
+            continue
+        grounded = item.get("window") if isinstance(item.get("window"), dict) else {}
+        if grounded.get("pid") != pid or grounded.get("window_id") != window_id:
+            continue
+        if item.get("effect_status") == EFFECT_CONFIRMED:
+            return False
+        if item.get("driver_attempted") is True \
+                and str(item.get("address_mode", "") or "") in {"element_ax", "key"}:
+            return True
+    return False
 
 
 def _verify_action_effect(
@@ -4800,7 +5150,8 @@ async def _run(config: dict, evidence: dict) -> dict:
             "started": False,
             "reason": (
                 "selected display is not main" if explicit_main is False
-                else isolation_unavailable or "signed cua-driver 0.8.3 isolation path unavailable"
+                else isolation_unavailable
+                or "task-private desktop isolation is not available with this CuaDriver version"
             ),
         }
     result: dict | None = None
@@ -4949,6 +5300,14 @@ async def _run_with_driver(
     # fingerprint. It runs only after the model, having seen the screenshot,
     # re-sends the identical operation: {"source_index", "rung", "label"}.
     weak_absence_retry: dict = {}
+    # Own cursor (see OWN_CURSOR_* above): a mouse-moving retry held back until
+    # the model has tried the background route. {"source_index", "rung",
+    # "label", "route", "window"}; the routes already tried stay tried.
+    own_cursor = config.get("own_cursor", True) is not False
+    own_cursor_deferred: dict = {}
+    own_cursor_routes_tried: set = set()
+    # The visual arbiter's veto spends the no-effect evidence it looked at.
+    ladder_evidence_floor = 0
     insert_fallback_source_index: int | None = None
     private_insert_grant: dict = {}
     unknown_launch_binding: dict = {}
@@ -5816,6 +6175,8 @@ async def _run_with_driver(
                                 "window_id": binding.window_id,
                                 "max_elements": WINDOW_OBSERVE_MAX_ELEMENTS,
                             }
+                            if "timeout_ms" in _schema_properties(window_tool["inputSchema"]):
+                                observe_args["timeout_ms"] = WINDOW_OBSERVE_TIMEOUT_MS
                             # cua-driver 0.35 returns only tree_markdown by default. Without
                             # an explicit "both" the structured elements are empty, and
                             # token validation, geometry and the pixel path all fail.
@@ -6010,6 +6371,10 @@ async def _run_with_driver(
                         # Dock restarts; give the desktop a moment to settle.
                         await asyncio.sleep(2.0)
 
+                live_notes_applied = {
+                    str(item) for item in (config.get("live_notes_skip") or []) if str(item or "").strip()
+                }
+                live_notes_used: list[dict] = []
                 for step in range(1, max_steps + 1):
                     if _cancelled(config):
                         return _cancelled_result(config, evidence)
@@ -6234,6 +6599,7 @@ async def _run_with_driver(
                                     insert_fallback_source_index = None
                                 foreground_grant = {}
                                 weak_absence_retry = {}
+                                own_cursor_deferred = {}
                                 no_effect_streak = 0
                                 no_effect_counts.clear()
                                 effect_calls_since_confirmation = 0
@@ -6314,13 +6680,58 @@ async def _run_with_driver(
                                             "label": _weak_absence_label(pending_record),
                                         }
                                         pending_record["foreground_retry"] = "awaiting_model_confirmation"
+                                    own_cursor_route = (
+                                        _own_cursor_background_route(pending_record, elements)
+                                        if own_cursor and (foreground_grant or weak_absence_retry)
+                                        else None
+                                    )
+                                    if own_cursor_route is not None and tuple(
+                                            own_cursor_route.get("key") or ()
+                                    ) not in own_cursor_routes_tried and not _background_route_tried(
+                                            actions, window_context):
+                                        # Own cursor: the next rung would move the user's
+                                        # mouse, but a background route exists that this
+                                        # pixel action did not use. Hand it to the model
+                                        # first; an identical re-send after it (or once the
+                                        # control is gone) schedules the mouse-moving retry.
+                                        foreground_grant = {}
+                                        weak_absence_retry = {}
+                                        own_cursor_deferred = {
+                                            "source_index": pending_action_index,
+                                            "rung": _rung_tuple(pending_record.get("rung_key")),
+                                            "label": _weak_absence_label(pending_record),
+                                            "route": own_cursor_route,
+                                            "window": {
+                                                "pid": window_context.get("pid"),
+                                                "window_id": window_context.get("window_id"),
+                                            },
+                                        }
+                                        pending_record["foreground_retry"] = "deferred_own_cursor"
+                                        pending_record["own_cursor_route"] = _json_safe(own_cursor_route)
+                                        _emit_progress({
+                                            "step": step,
+                                            "actions": ["own_cursor"],
+                                            "target": binding.label,
+                                            "mode": "own cursor",
+                                            "outcome": EFFECT_PENDING,
+                                            "notice": (
+                                                "The background click had no effect. Trying the "
+                                                + own_cursor_route.get("route", "background")
+                                                + " route in the background before moving your mouse."
+                                            ),
+                                        })
                                 # A coarse-only verdict is handed to the model, which may judge
                                 # from the screenshot that the effect is there and finish; the
                                 # action still reports as unverified. Exact absences keep
                                 # blocking completion.
                                 unresolved_action_failure = not (
-                                    weak_absence_retry
-                                    and weak_absence_retry.get("source_index") == pending_action_index
+                                    (
+                                        weak_absence_retry
+                                        and weak_absence_retry.get("source_index") == pending_action_index
+                                    ) or (
+                                        own_cursor_deferred
+                                        and own_cursor_deferred.get("source_index") == pending_action_index
+                                    )
                                 )
                             else:
                                 copy_selection_grant = {}
@@ -6820,11 +7231,9 @@ async def _run_with_driver(
                                         if isinstance(grant.get("copy_selection_authorization"), dict)
                                         else {}
                                     ),
-                                    "cursor": {
-                                        "available": foreground_address_mode == "window_pixel",
-                                        "mode": "driver_pixel_session_overlay",
-                                        "real_pointer_moved": False,
-                                    },
+                                    "cursor": _pixel_cursor_evidence(
+                                        foreground_name, foreground_address_mode, "foreground",
+                                    ),
                                     "clipboard": _json_safe(foreground_clipboard_evidence),
                                     "session": driver_session,
                                     "target_identity": str(grant.get("target_identity", "") or ""),
@@ -6868,7 +7277,15 @@ async def _run_with_driver(
                                     "target": binding.label,
                                     "mode": "transient foreground retry",
                                     "outcome": foreground_effect,
-                                    "notice": "Background delivery proved ineffective; performing one exact transient-foreground retry and restoring the prior app.",
+                                    "notice": (
+                                        "No background route worked; moving your mouse once for this "
+                                        "transient-foreground retry, then restoring the prior app."
+                                        if _pointer_moving_retry({
+                                            "tool": foreground_name, "address_mode": foreground_address_mode,
+                                        }) else
+                                        "Background delivery proved ineffective; performing one exact "
+                                        "transient-foreground retry and restoring the prior app."
+                                    ),
                                 })
                                 if foreground_effect in {EFFECT_PENDING, EFFECT_INDETERMINATE}:
                                     pending_action_index = foreground_index
@@ -7291,7 +7708,9 @@ async def _run_with_driver(
                         ))
                         geometry = window_context.get("geometry") \
                             if isinstance(window_context.get("geometry"), dict) else {}
-                        ladder_exhausted = _window_delivery_ladder_exhausted(actions, window_context)
+                        ladder_exhausted = _window_delivery_ladder_exhausted(
+                            actions, window_context, since_index=ladder_evidence_floor,
+                        )
                         can_desktop_rescue = bool(
                             ladder_exhausted
                             and not desktop_fallback.get("desktop_attempted")
@@ -7584,7 +8003,7 @@ async def _run_with_driver(
                             """
                             nonlocal visual_arbiter_used, insert_rescue_directive
                             nonlocal no_effect_streak, effect_calls_since_confirmation
-                            nonlocal unresolved_action_failure
+                            nonlocal unresolved_action_failure, ladder_evidence_floor
                             if visual_arbiter_used or not data_url:
                                 return False
                             visual_arbiter_used = True
@@ -7623,6 +8042,10 @@ async def _run_with_driver(
                             no_effect_counts.clear()
                             effect_calls_since_confirmation = 0
                             unresolved_action_failure = False
+                            # The veto spends the no-effect evidence it just looked at;
+                            # without this the same old evidence ended the task on the
+                            # very next turn (2026-11-09, Safari form).
+                            ladder_evidence_floor = len(actions)
                             insert_rescue_directive = (
                                 "\nVISUAL ARBITER VERDICT: " + _clip(verdict_text, 300) + "\n"
                                 "The screen visibly contradicts the stuck diagnosis. If the task is "
@@ -7662,12 +8085,15 @@ async def _run_with_driver(
                                     boundary = "the grounded target is not proven to be on the main display"
                                 else:
                                     boundary = "the window is no longer pixel-aligned"
-                                raise _FatalTaskError(
-                                    "CU_ACTION_NO_EFFECT: the exact background-window and transient-foreground "
-                                    "delivery rungs produced no visible progress or semantic progress; " + boundary + ". "
-                                    "No additional input was sent. This evidence does not identify an application "
-                                    "framework as the cause."
-                                )
+                                # 2026-11-09: the old text put the desktop-rescue boundary
+                                # ("isolation path is unavailable") into the message, and the
+                                # final answer turned that into "check your permissions" while
+                                # the name and phone fields had been filled. Say which action
+                                # got stuck and that earlier inputs may have landed.
+                                evidence["no_effect_boundary"] = boundary
+                                raise _FatalTaskError(_no_effect_failure_text(
+                                    actions, window_context, str(evidence.get("visual_arbiter", "") or ""),
+                                ))
                         if no_effect_streak >= NO_EFFECT_LIMIT:
                             if desktop_fallback.get("active") and desktop_fallback.get("desktop_attempted"):
                                 # The one rescue snapshot still needs its single
@@ -7738,6 +8164,10 @@ async def _run_with_driver(
                                     + "\n".join(f"- {line}" for line in deduped_lines[:8])
                                     + "\n"
                                 )
+                        fresh_notes = _take_live_notes(config, live_notes_applied)   # Add note, before this model call
+                        if fresh_notes:
+                            live_notes_used.extend(fresh_notes)
+                            _emit_progress({"step": step, "notes_applied": fresh_notes})
                         instruction = (
                             "You are Broccoli's local desktop automation agent. All policy and task instructions are in this user message; "
                             "do not rely on a system role. The worker owns every observation/list/get tool and gives you one fresh snapshot per turn. "
@@ -7746,7 +8176,21 @@ async def _run_with_driver(
                             "Make at most ONE state-changing call this turn; after it, wait for the next fresh snapshot. Do not call finish in the same turn as an action. "
                             "Prefer structured element_token addressing, then element_index; use x/y only for surfaces absent from the element list. "
                             "Clicks report verified:false by design, so verify effects only in the NEXT snapshot/tree. "
-                            "Use this strict ladder across fresh snapshots: background AX element_token/index first. Only when the target is absent "
+                            "WEB PAGES (Safari, Chrome, embedded web views): the page's form controls are in the element list "
+                            "(AXTextField/AXTextArea, AXPopUpButton = a dropdown/HTML select, AXCheckBox, AXRadioButton, AXButton, "
+                            "AXLink) and work in the background by element_token: click buttons, links and checkboxes by "
+                            "element_token; type into a field with type_text and its element_token (it focuses the field; no "
+                            "click first); choose a dropdown option with set_value and the exact option text, or, if set_value "
+                            "is refused, click the dropdown by element_token, then press_key 'down' or 'up' (pid and window_id) "
+                            "once per turn up to the wanted AXMenuItem row and press_key 'return'. Never pixel-click a dropdown "
+                            "or one of its options. "
+                            + (
+                                "OWN CURSOR IS ON: the user keeps working with the real mouse. Background routes never move "
+                                "it; the worker moves it only for a transient-foreground retry when no background route is "
+                                "left. "
+                                if own_cursor else ""
+                            )
+                            + "Use this strict ladder across fresh snapshots: background AX element_token/index first. Only when the target is absent "
                             "from AX, or the next fresh observation proves that AX delivery had no effect, and the worker reports ALIGNED geometry, "
                             "may you use window x/y. After one exact background window-pixel or key action has a fresh EFFECT_ABSENT result "
                             "(an element-addressed press_key/hotkey counts: the worker drops the stale focus handle per the driver docs), "
@@ -7779,7 +8223,9 @@ async def _run_with_driver(
                             "After that visible selection, a real Cmd+C may overwrite the user's system clipboard; the worker will disclose and "
                             "fingerprint it, then keep newly copied text only in the same task-private transfer buffer for insert_captured_text. "
                             "A secondary or ambiguous display has no desktop fallback in cua-driver 0.8.3. Never change driver configuration/recordings. "
-                            f"Task:\n{str(config.get('task', '')).strip()}\n\nStep {step}/{max_steps}. "
+                            f"Task:\n{str(config.get('task', '')).strip()}\n\n"
+                            + _live_notes_prompt(live_notes_used)
+                            + f"Step {step}/{max_steps}. "
                             f"Current target: {binding.label or '[not bound yet]'}. Driver session: {driver_session}. "
                             + (
                                 f"Original screenshot size: {original_size[0]}x{original_size[1]}; display scale ratio: {ratio:.6f}. "
@@ -7801,6 +8247,7 @@ async def _run_with_driver(
                                 "again; the worker will then deliver it once in the transient foreground.\n"
                                 if weak_absence_retry else ""
                             )
+                            + _own_cursor_prompt(own_cursor_deferred, elements, actions)
                             + (
                                 "\nAN AMBIGUOUS APP-INPUT DELIVERY REMAINS UNRESOLVED: do not replay that exact "
                                 "click/key/paste/create/write operation. Inspect the visible state and use a "
@@ -8597,6 +9044,44 @@ async def _run_with_driver(
                                         )
                                         verdict = "refuse"
                                         refusal = str(structured_error["message"])
+                                    elif own_cursor_deferred and rung_key in attempted_rungs \
+                                            and rung_key == own_cursor_deferred.get("rung"):
+                                        deferred_route = own_cursor_deferred.get("route") or {}
+                                        route_element = _own_cursor_route_element(deferred_route, elements)
+                                        if route_element is None or _background_route_tried(
+                                                actions, own_cursor_deferred.get("window") or {}):
+                                            # The background route was tried (or its control is
+                                            # gone): moving the mouse is now unavoidable, which
+                                            # Ryan allows by default. One exact retry, as before.
+                                            own_cursor_routes_tried.add(tuple(deferred_route.get("key") or ()))
+                                            foreground_grant_source_index = int(own_cursor_deferred["source_index"])
+                                            own_cursor_deferred = {}
+                                            foreground_retry_scheduled = True
+                                            quota_deferred = True
+                                            error_code = "CU_FOREGROUND_RETRY_SCHEDULED"
+                                            structured_error = _policy_error(
+                                                error_code,
+                                                "Confirmed: no background route worked, so the worker will deliver "
+                                                "this operation once in the transient foreground right after the "
+                                                "next fresh observation (this moves the user's mouse once). Do not "
+                                                "send it again; check the result in the next snapshot.",
+                                                stage="routing", retriable=False,
+                                                rung=list(rung_key),
+                                                snapshot_id=window_context.get("snapshot_id"),
+                                            )
+                                        else:
+                                            error_code = "CU_OWN_CURSOR_BACKGROUND_ROUTE_FIRST"
+                                            structured_error = _policy_error(
+                                                error_code,
+                                                "Own cursor: the user's mouse is not moved while an untried "
+                                                "background route exists. First "
+                                                + _own_cursor_route_text(deferred_route, route_element),
+                                                stage="routing", retriable=True,
+                                                rung=list(rung_key),
+                                                snapshot_id=window_context.get("snapshot_id"),
+                                            )
+                                        verdict = "refuse"
+                                        refusal = str(structured_error["message"])
                                     elif rung_key in attempted_rungs:
                                         error_code = "CU_RUNG_ALREADY_ATTEMPTED"
                                         structured_error = _policy_error(
@@ -8660,11 +9145,10 @@ async def _run_with_driver(
                                                 prepared, elements, window_context, binding.label,
                                             )
                                         elif address_mode in PIXEL_ADDRESS_MODES:
-                                            cursor_evidence = {
-                                                "available": True,
-                                                "mode": "driver_pixel_session_overlay",
-                                                "real_pointer_moved": False,
-                                            }
+                                            cursor_evidence = _pixel_cursor_evidence(
+                                                name, address_mode,
+                                                str(prepared.get("delivery_mode", "background") or "background"),
+                                            )
                                         result: Any = None
                                         if name == "capture_ax_text":
                                             captured_text, captured_meta = _capture_ax_text(

@@ -32,6 +32,9 @@ EXTRA_SOURCE_STRINGS = [
     'Indigo',
     # COLLAPSED_BUTTON_ICONS — what the collapsed circle shows (Settings › Window & agent plan, 11-01)
     'Broccoli', 'Dot', 'Custom image',
+    # REMOTE_TASK_SENDERS — Settings › History & iCloud › who may send tasks to this Mac (11-07)
+    'Let my other Macs send tasks to this Mac', 'Let my iPhone send questions to this Mac',
+    'Let other people send tasks to this Mac',
     # SPECIALIZED_CAPABILITIES labels — Models page rows (table stays English
     # at the source because the engine writes these labels into records).
     'Task reasoning', 'Web search', 'Text to speech', 'Speech to text',

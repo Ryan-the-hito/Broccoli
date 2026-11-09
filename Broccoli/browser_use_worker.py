@@ -145,6 +145,43 @@ def _cancel_requested(cfg):
     return bool(cancel_path and os.path.exists(cancel_path))
 
 
+# Add note while the task runs (2026-11-07): Broccoli writes every note of the run into
+# cfg['live_notes_path']; the ones in cfg['live_notes_skip'] were already in the task.
+LIVE_NOTE_LEAD = ('The user added this instruction while you were working. Apply it from now on; '
+                  'where it conflicts with the task or earlier instructions, it wins: ')
+
+
+def _read_live_notes(cfg):
+    path = str(cfg.get('live_notes_path') or '').strip()
+    if not path:
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+    except Exception:
+        return []
+    notes = []
+    for item in data if isinstance(data, list) else []:
+        if isinstance(item, dict) and str(item.get('id') or '').strip() and str(item.get('text') or '').strip():
+            notes.append({'id': str(item['id']).strip(), 'text': str(item['text']).strip()})
+    return notes
+
+
+def _apply_live_notes(cfg, agent_obj, applied):
+    """New notes → the agent's task as follow-up user requests (the library's own mechanism; the
+    task text goes into every step's prompt). Returns the notes it applied."""
+    fresh = [item for item in _read_live_notes(cfg) if item['id'] not in applied]
+    used = []
+    for item in fresh:
+        try:
+            agent_obj._message_manager.add_new_task(LIVE_NOTE_LEAD + item['text'])
+        except Exception:
+            continue   # not applied: Broccoli hands it to a follow-up turn instead
+        applied.add(item['id'])
+        used.append(item)
+    return used
+
+
 def _positive_int(value, fallback):
     try:
         number = int(value)
@@ -421,6 +458,8 @@ async def main():
         async def should_stop():
             return _cancel_requested(cfg)
 
+        applied_notes = {str(item) for item in (cfg.get('live_notes_skip') or []) if str(item or '').strip()}
+
         async def on_step_begin(agent_obj):
             # 每步开始（模型调用之前）触发：把"启动浏览器"和"第 N 步思考中"
             # 在进度里分开——此前两者都挤在 Browser worker starting 一个标签下。
@@ -429,6 +468,9 @@ async def main():
                 step_number = int(getattr(agent_obj.state, 'n_steps', 0) or 0)
             except Exception:
                 pass
+            used = _apply_live_notes(cfg, agent_obj, applied_notes)   # Add note: before this step's model call
+            if used:
+                _emit_progress({'step': step_number, 'notes_applied': used})
             _emit_progress({'step': step_number, 'actions': ['thinking…'], 'url': ''})
 
         def on_new_step(browser_state_summary, agent_output, step_number):
