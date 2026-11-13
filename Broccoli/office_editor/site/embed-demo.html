@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/icons/document.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/document-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/document-180.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000" />
+    <title>Document Editor iframe Demo</title>
+    <meta
+      name="description"
+      content="Live demo of embedding the document editor in an iframe: the parent page opens a file, toggles read-only and gets the edited File back through postMessage."
+    />
+    <script src="./libs/sheetjs/xlsx.full.min.js"></script>
+
+    <!-- No-flash theme restore, same snippet as every other page. -->
+    <script>
+      try {
+        var t = localStorage.getItem('ran-theme');
+        if (t === 'dark' || t === 'light') {
+          document.documentElement.setAttribute('data-ran-theme', t);
+          document.documentElement.setAttribute('theme', t);
+        }
+      } catch (e) {}
+    </script>
+    <script src="/theme-presentation.js"></script>
+    <link rel="stylesheet" href="/ran-fonts/fonts.css" />
+    <link rel="stylesheet" href="/ran-tokens.0588539a.css" />
+    <link rel="stylesheet" href="/app-tokens.css" />
+    <link rel="stylesheet" href="/landing.css" />
+    <script src="/ranui-iife/button.iife.js" defer></script>
+    <script src="/ranui-iife/card.iife.js" defer></script>
+    <script src="/ranui-iife/input.iife.js" defer></script>
+    <script src="/ranui-iife/checkbox.iife.js" defer></script>
+    <script src="/ranui-iife/theme-switch.iife.js" defer></script>
+
+    <style>
+      /* Page-specific layout on top of landing.css (bar, tokens, type). The
+         demo is an app surface, not an article: full-height two-pane shell,
+         controls on the left, the embedded editor filling the right. */
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      header.bar {
+        flex: none;
+      }
+      .shell {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 340px minmax(0, 1fr);
+      }
+      .panel {
+        min-height: 0;
+        overflow: auto;
+        border-right: 1px solid var(--ran-color-border);
+        padding: var(--ran-space-6) var(--ran-space-4);
+        display: flex;
+        flex-direction: column;
+        gap: var(--ran-space-4);
+      }
+      .panel h1 {
+        margin: 0;
+        font-size: var(--ran-text-heading-3);
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .panel .hint {
+        margin: var(--ran-space-1) 0 0;
+        font-size: var(--ran-text-label-2);
+        line-height: 1.6;
+        color: var(--ran-color-text-secondary);
+      }
+      .panel .hint a {
+        color: inherit;
+      }
+      .group {
+        display: flex;
+        flex-direction: column;
+        gap: var(--ran-space-2);
+      }
+      .group .k {
+        font-family: var(--ran-font-mono);
+        font-size: var(--ran-text-label-3);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--ran-color-text-secondary);
+      }
+      /* Native file input: ranui has no file control, so give the browser's
+         one the same hairline treatment as <r-input>. */
+      input[type='file'] {
+        width: 100%;
+        font: inherit;
+        font-size: var(--ran-text-label-2);
+        color: var(--ran-color-text);
+        padding: var(--ran-space-2);
+        border: 1px solid var(--ran-color-border);
+        border-radius: var(--ran-radius-sm);
+        background: var(--ran-color-bg);
+      }
+      input[type='file']:hover {
+        border-color: var(--ran-color-border-hover);
+      }
+      input[type='file']::file-selector-button {
+        font: inherit;
+        font-size: var(--ran-text-label-2);
+        margin-right: var(--ran-space-2);
+        padding: var(--ran-space-1) var(--ran-space-2);
+        border: 1px solid var(--ran-color-border);
+        border-radius: var(--ran-radius-sm);
+        background: var(--ran-color-bg-subtle);
+        color: var(--ran-color-text);
+        cursor: pointer;
+      }
+      .actions r-button::part(content) {
+        min-height: var(--app-control-height);
+        padding: var(--ran-space-1) var(--ran-space-3);
+        font-size: var(--ran-text-label-1);
+      }
+      @media (pointer: coarse) {
+        r-input {
+          --ran-input-min-height: var(--app-control-touch);
+          --ran-input-content-min-height: var(--app-control-touch);
+        }
+        input[type='file']::file-selector-button {
+          min-height: var(--app-control-touch);
+        }
+      }
+      r-input {
+        width: 100%;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--ran-space-2);
+      }
+      r-checkbox {
+        font-size: var(--ran-text-label-1);
+      }
+      .log-card .card-body {
+        padding: 0;
+      }
+      pre#log {
+        margin: 0;
+        min-height: 160px;
+        max-height: 280px;
+        overflow: auto;
+        padding: var(--ran-space-3);
+        font-family: var(--ran-font-mono);
+        font-size: var(--ran-text-label-3);
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--ran-color-text);
+        background: var(--ran-color-bg-subtle);
+        border-radius: var(--ran-radius-md);
+      }
+      .viewer {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .viewer .strip {
+        flex: none;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 var(--ran-space-4);
+        border-bottom: 1px solid var(--ran-color-border);
+        font-size: var(--ran-text-label-2);
+        color: var(--ran-color-text-secondary);
+      }
+      .viewer .strip code {
+        font-family: var(--ran-font-mono);
+        font-size: var(--ran-text-label-3);
+      }
+      #status {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--ran-space-2);
+        font-family: var(--ran-font-mono);
+        font-size: var(--ran-text-label-3);
+      }
+      #status::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        border-radius: var(--ran-radius-full);
+        background: var(--ran-color-border-hover);
+      }
+      #status.ready::before {
+        background: var(--ran-color-success);
+      }
+      iframe {
+        flex: 1;
+        width: 100%;
+        min-height: 0;
+        border: 0;
+        background: var(--ran-color-bg);
+      }
+      @media (max-width: 860px) {
+        html,
+        body {
+          height: auto;
+        }
+        .shell {
+          grid-template-columns: 1fr;
+        }
+        .panel {
+          border-right: 0;
+          border-bottom: 1px solid var(--ran-color-border);
+        }
+        .viewer {
+          min-height: 70vh;
+        }
+      }
+    </style>
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Online Document Editor" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content="Document Editor iframe Demo" />
+    <meta property="og:description" content="Embed the browser document editor in your app and try its iframe API." />
+    <meta property="og:url" content="https://edit.chaxus.com/embed-demo.html" />
+    <meta property="og:image" content="https://edit.chaxus.com/social/document-editor-v1.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Online Document Editor: Word, Excel, PowerPoint and PDF; local editing, open source and no signup."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Document Editor iframe Demo" />
+    <meta name="twitter:description" content="Embed the browser document editor in your app and try its iframe API." />
+    <meta name="twitter:image" content="https://edit.chaxus.com/social/document-editor-v1.png" />
+    <meta
+      name="twitter:image:alt"
+      content="Online Document Editor: Word, Excel, PowerPoint and PDF; local editing, open source and no signup."
+    />
+  </head>
+
+  <body>
+    <header class="bar">
+      <a class="brand" href="/"><span class="wordmark">Document Editor</span></a>
+      <nav>
+        <a href="/embed-document-editor">Embed API</a>
+        <a href="https://github.com/ranuts/document" rel="noopener" target="_blank"> GitHub </a>
+        <r-theme-switch class="theme-switch" label="Theme"></r-theme-switch>
+      </nav>
+    </header>
+
+    <main class="shell">
+      <aside class="panel">
+        <div>
+          <h1>iframe embedding demo</h1>
+          <p class="hint">
+            The parent page owns fetching the file and uploading the result; the iframe only edits the document.
+            Everything below goes through <code>postMessage</code> — see the
+            <a href="/embed-document-editor">Embed API</a> page.
+          </p>
+        </div>
+
+        <div class="group">
+          <span class="k">Local file</span>
+          <input id="fileInput" type="file" accept=".xlsx,.xls,.csv,.docx,.doc,.pptx,.ppt,.pdf" />
+          <div class="actions">
+            <r-button id="openLocalBtn" type="primary">Open the selected file</r-button>
+            <r-button id="openGeneratedBtn">Open a sample Excel file</r-button>
+          </div>
+        </div>
+
+        <div class="group">
+          <span class="k">From URL</span>
+          <r-input id="urlInput" type="text" placeholder="https://example.com/demo.xlsx"></r-input>
+          <div class="actions"><r-button id="openUrlBtn">Open from URL</r-button></div>
+        </div>
+
+        <div class="group">
+          <span class="k">Mode</span>
+          <r-checkbox id="readonlyInput">Read-only mode</r-checkbox>
+        </div>
+
+        <div class="group">
+          <span class="k">Round-trip</span>
+          <div class="actions"><r-button id="saveBtn" type="primary">Save and get the File</r-button></div>
+        </div>
+
+        <r-card class="log-card"
+          ><div class="card-body"><pre id="log">Waiting for the iframe to initialize...</pre></div></r-card
+        >
+      </aside>
+
+      <section class="viewer">
+        <div class="strip">
+          <span><code>&lt;iframe src="/editor?embed=1"&gt;</code></span>
+          <span id="status">loading</span>
+        </div>
+        <iframe id="editorFrame" src="./editor?embed=1" title="Document editor"></iframe>
+      </section>
+    </main>
+
+    <script>
+      const frame = document.getElementById('editorFrame');
+      const statusEl = document.getElementById('status');
+      const logEl = document.getElementById('log');
+      const fileInput = document.getElementById('fileInput');
+      const readonlyInput = document.getElementById('readonlyInput');
+      const saveBtn = document.getElementById('saveBtn');
+
+      // <r-checkbox> reports its state through the change event's detail;
+      // mirror it here so every handler reads one boolean.
+      let readonly = false;
+
+      let requestId = 0;
+      const pending = new Map();
+
+      function log(message, data) {
+        const time = new Date().toLocaleTimeString();
+        const detail = data ? `\n${JSON.stringify(data, null, 2)}` : '';
+        logEl.textContent = `[${time}] ${message}${detail}\n\n${logEl.textContent}`;
+      }
+
+      async function hashFile(file) {
+        const buffer = await file.arrayBuffer();
+        const digest = await crypto.subtle.digest('SHA-256', buffer);
+        return Array.from(new Uint8Array(digest))
+          .map((byte) => byte.toString(16).padStart(2, '0'))
+          .join('');
+      }
+
+      async function readFirstSheetCell(file, cellAddress) {
+        if (!file.name.toLowerCase().endsWith('.xlsx')) return undefined;
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        return sheet && sheet[cellAddress] ? sheet[cellAddress].v : undefined;
+      }
+
+      function post(type, payload = {}) {
+        const id = `demo-${++requestId}`;
+        frame.contentWindow.postMessage({ id, type, payload }, window.location.origin);
+        return new Promise((resolve, reject) => {
+          pending.set(id, { resolve, reject });
+          setTimeout(() => {
+            if (pending.has(id)) {
+              pending.delete(id);
+              reject(new Error(`${type} timeout`));
+            }
+          }, 200000);
+        });
+      }
+
+      function createDemoExcelFile() {
+        const rows = [
+          ['Date', 'Customer', 'Amount', 'Status'],
+          ['2026-05-19', 'Sample customer A', 1280, 'Pending'],
+          ['2026-05-20', 'Sample customer B', 2360, 'Completed'],
+        ];
+        const worksheet = XLSX.utils.aoa_to_sheet(rows);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Orders');
+        const data = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+        return new File([data], 'iframe-demo.xlsx', {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        });
+      }
+
+      window.addEventListener('message', (event) => {
+        if (event.origin !== window.location.origin) return;
+
+        const { id, type, payload } = event.data || {};
+        if (!type || !type.startsWith('document:')) return;
+
+        if (type === 'document:ready') {
+          statusEl.textContent = 'ready';
+          statusEl.classList.add('ready');
+          log('iframe is ready');
+          return;
+        }
+
+        if (type === 'document:error') {
+          log('iframe returned an error', payload);
+          if (id && pending.has(id)) {
+            pending.get(id).reject(new Error(payload.message));
+            pending.delete(id);
+          }
+          return;
+        }
+
+        log(`received ${type}`, payload);
+        if (id && pending.has(id)) {
+          pending.get(id).resolve(payload);
+          pending.delete(id);
+        }
+      });
+
+      document.getElementById('openLocalBtn').addEventListener('click', async () => {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) {
+          log('pick a file first');
+          return;
+        }
+        await post('document:open-file', { file, readonly });
+      });
+
+      document.getElementById('openGeneratedBtn').addEventListener('click', async () => {
+        await post('document:open-buffer', {
+          fileName: 'iframe-demo.xlsx',
+          buffer: await createDemoExcelFile().arrayBuffer(),
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          readonly,
+        });
+      });
+
+      document.getElementById('openUrlBtn').addEventListener('click', async () => {
+        const url = String(document.getElementById('urlInput').value || '').trim();
+        if (!url) {
+          log('enter a file URL first');
+          return;
+        }
+        await post('document:open-url', { url, readonly });
+      });
+
+      readonlyInput.addEventListener('change', async (event) => {
+        readonly = !!(event.detail ? event.detail.checked : readonlyInput.value === 'true');
+        await post('document:set-readonly', { readonly });
+        if (readonly) saveBtn.setAttribute('disabled', '');
+        else saveBtn.removeAttribute('disabled');
+      });
+
+      saveBtn.addEventListener('click', async () => {
+        if (saveBtn.hasAttribute('disabled')) return;
+        const result = await post('document:save', { targetExt: 'XLSX' });
+        const file = result.file;
+        window.lastSavedFile = file;
+        log('parent page received the File — upload it with fetch from here', {
+          fileName: file.name,
+          size: file.size,
+          type: file.type,
+          sha256: await hashFile(file),
+          firstSheetB3: await readFirstSheetCell(file, 'B3'),
+        });
+
+        // Example upload:
+        // await fetch('/api/upload', {
+        //   method: 'POST',
+        //   headers: { Authorization: `Bearer ${token}` },
+        //   body: file,
+        // });
+      });
+    </script>
+  </body>
+</html>

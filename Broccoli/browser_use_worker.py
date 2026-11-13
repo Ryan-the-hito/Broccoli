@@ -404,7 +404,8 @@ async def main():
     else:
         openai_kwargs = {
             'model': model,
-            'api_key': api_key,
+            # openai 3 refuses an empty key; a server that needs none ignores this stand-in (2026-11-10)
+            'api_key': api_key or 'no-key',
             'base_url': endpoint,
             'timeout': llm_timeout,
             'max_retries': 1,

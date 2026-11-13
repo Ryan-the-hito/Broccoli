@@ -1,0 +1,1282 @@
+{
+  "__vite-browser-external": {
+    "file": "assets/__vite-browser-external-2W3EstLn.js",
+    "name": "__vite-browser-external",
+    "src": "__vite-browser-external",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-hePW80VL.js"
+    ]
+  },
+  "_assistant-focus-DJ9mOo8D.js": {
+    "file": "assets/assistant-focus-DJ9mOo8D.js",
+    "name": "assistant-focus",
+    "imports": [
+      "_utils-CwYt1meC-CK5SVuVq.js",
+      "_readonly-BE9GdGQN.js"
+    ]
+  },
+  "_assistant-offline-DiDBoNnW.js": {
+    "file": "assets/assistant-offline-DiDBoNnW.js",
+    "name": "assistant-offline"
+  },
+  "_button-C1-hm2LO.js": {
+    "file": "assets/button-C1-hm2LO.js",
+    "name": "button",
+    "imports": [
+      "_utils-CwYt1meC-CK5SVuVq.js",
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "_check-circle-fill-CTs4RFb6-C06yHJ7P.js": {
+    "file": "assets/check-circle-fill-CTs4RFb6-C06yHJ7P.js",
+    "name": "check-circle-fill-CTs4RFb6",
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "_chevron-down-Bv5DUiQR-DC4rJz1l.js": {
+    "file": "assets/chevron-down-Bv5DUiQR-DC4rJz1l.js",
+    "name": "chevron-down-Bv5DUiQR",
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "_close-circle-fill-BPE1iLQK-DvBX5VOi.js": {
+    "file": "assets/close-circle-fill-BPE1iLQK-DvBX5VOi.js",
+    "name": "close-circle-fill-BPE1iLQK",
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "_component-DkBrsfH0-CiYcmBjh.js": {
+    "file": "assets/component-DkBrsfH0-CiYcmBjh.js",
+    "name": "component-DkBrsfH0",
+    "imports": [
+      "_rolldown-runtime-hePW80VL.js",
+      "_dom-Fv1-TPP9.js"
+    ]
+  },
+  "_document-R_LPooEX.js": {
+    "file": "assets/document-R_LPooEX.js",
+    "name": "document",
+    "imports": [
+      "_utils-CwYt1meC-CK5SVuVq.js",
+      "_component-DkBrsfH0-CiYcmBjh.js",
+      "_preferences-BPtpnNDu.js",
+      "_preload-helper-CRzLMJPS.js",
+      "_readonly-BE9GdGQN.js",
+      "_assistant-focus-DJ9mOo8D.js"
+    ],
+    "dynamicImports": [
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/arc-B0th6eAI.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-fold-BNaeFiNL.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-line-D5detZ32.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-rotate-CcJBWezv.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-spin-1i5wb0o2.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-turn-BdFM5N40.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-Dm0tvvqP.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-dim-BJE1k09r.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-fold-DO6vvV04.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-grid-DbalbudM.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-bar-B2blF7ac.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-circle-CnqrF_Je.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-line-B8lbAUAF.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-pulse-ByUy2bBQ.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/double-bounce-D4Rdf4z_.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/drop-DX55MRmE.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/line-BG_5rGrr.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/line-scale-BUzXaKyD.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pacman-WruwGGIA.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pulse-CBIDSs_g.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/rotate-CVodjJ5Z.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/scale-out-5MBGb1TU.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/solar-CqE9BNUg.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/square-DplXmGtI.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/stretch-D7SRuSka.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/text-D_7jWhfi.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/triple-bounce-CJ9NoNN-.js"
+    ]
+  },
+  "_dom-Fv1-TPP9.js": {
+    "file": "assets/dom-Fv1-TPP9.js",
+    "name": "dom"
+  },
+  "_error-D9MtuG9s.js": {
+    "file": "assets/error-D9MtuG9s.js",
+    "name": "error"
+  },
+  "_floating-CsqWzpaj-Clmcdox3.js": {
+    "file": "assets/floating-CsqWzpaj-Clmcdox3.js",
+    "name": "floating-CsqWzpaj",
+    "imports": [
+      "_utils-CwYt1meC-CK5SVuVq.js",
+      "_component-DkBrsfH0-CiYcmBjh.js",
+      "_button-C1-hm2LO.js"
+    ]
+  },
+  "_info-circle-fill-BRJCObiQ-BrNB4C81.js": {
+    "file": "assets/info-circle-fill-BRJCObiQ-BrNB4C81.js",
+    "name": "info-circle-fill-BRJCObiQ",
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "_modulepreload-polyfill-P2Xu9kJm.js": {
+    "file": "assets/modulepreload-polyfill-P2Xu9kJm.js",
+    "name": "modulepreload-polyfill"
+  },
+  "_panel-viewport-BBVC5QJZ.js": {
+    "file": "assets/panel-viewport-BBVC5QJZ.js",
+    "name": "panel-viewport"
+  },
+  "_pending-open-Cc0kWppM.js": {
+    "file": "assets/pending-open-Cc0kWppM.js",
+    "name": "pending-open"
+  },
+  "_preferences-BPtpnNDu.js": {
+    "file": "assets/preferences-BPtpnNDu.js",
+    "name": "preferences",
+    "imports": [
+      "_utils-CwYt1meC-CK5SVuVq.js",
+      "_component-DkBrsfH0-CiYcmBjh.js",
+      "_check-circle-fill-CTs4RFb6-C06yHJ7P.js",
+      "_close-circle-fill-BPE1iLQK-DvBX5VOi.js",
+      "_info-circle-fill-BRJCObiQ-BrNB4C81.js",
+      "_warning-circle-fill-DHgIUIho-B6wJ2sSy.js"
+    ]
+  },
+  "_preload-helper-CRzLMJPS.js": {
+    "file": "assets/preload-helper-CRzLMJPS.js",
+    "name": "preload-helper"
+  },
+  "_readonly-BE9GdGQN.js": {
+    "file": "assets/readonly-BE9GdGQN.js",
+    "name": "readonly"
+  },
+  "_rolldown-runtime-hePW80VL.js": {
+    "file": "assets/rolldown-runtime-hePW80VL.js",
+    "name": "rolldown-runtime"
+  },
+  "_tools-C5wr8ngM.js": {
+    "file": "assets/tools-C5wr8ngM.js",
+    "name": "tools",
+    "imports": [
+      "_dom-Fv1-TPP9.js",
+      "_readonly-BE9GdGQN.js"
+    ]
+  },
+  "_utils-CwYt1meC-CK5SVuVq.js": {
+    "file": "assets/utils-CwYt1meC-CK5SVuVq.js",
+    "name": "utils-CwYt1meC",
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js",
+      "_preload-helper-CRzLMJPS.js"
+    ],
+    "dynamicImports": [
+      "packages/shared/dist/i18n/messages/zh-CN.js",
+      "packages/shared/dist/i18n/messages/ja.js",
+      "packages/shared/dist/i18n/messages/ko.js",
+      "packages/shared/dist/i18n/messages/de.js",
+      "packages/shared/dist/i18n/messages/es.js",
+      "packages/shared/dist/i18n/messages/pt.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/add-user-K9U-4C_t.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/arrow-down-BOOVhNFh.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/book-nlgjKPpM.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cast-CYw9-VY8.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/check-circle-fill-CTs4RFb6.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/check-circle-C7Ebc2dS.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/check-Dgg2uRf-.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/chevron-down-Bv5DUiQR.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/close-circle-fill-BPE1iLQK.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/close-circle-C2zSKqEy.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/close-Ds73j8Dr.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/copy-CTMcc4NV.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/download-BX-g8vGB.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/drop-D7BWaBZH.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/eye-close-BoJDd9Gz.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/eye-e0ea1UWe.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/fullscreen-BWWs6Lve.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/github-CrMi1LcG.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/globe-BE88-2LP.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/home-DAyTPweX.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/info-circle-fill-BRJCObiQ.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/info-circle-CwH9Vz4Q.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/issue-BnIu1AbT.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/loading-scene-Cz_HMXxQ.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/loading-V2w56WUg.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/lock-CEXTH6bm.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/menu-DgYnqjOj.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/message-CvOa18NV.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/mic-off-BBdIkcmY.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/mic-ScvkyhbU.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/more-yARiIN78.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pause-PBZqwIo0.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pencil-DPxYnRAX.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pip-C00Iznv8.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/play-CTusuTDx.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/plus-DIpsZsQy.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/power-off-BYgRbEYx.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/preview-5NzRxsZr.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/refresh-CYdpI0u4.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/search-C53OIY1f.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/setting-p_Njj-u0.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/sort-C2scoErq.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/team-CWwrC8_9.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/unlock-BcbkZcwc.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/user-WsoDi_MG.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/volume-mute-lB7UMz6c.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/volume-CaJWSRRd.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/warning-circle-fill-DHgIUIho.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/warning-circle-3KGd0chS.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/without-content-Bmf8EFwK.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/zoom-in-Co49fqsk.js",
+      "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/zoom-out-DSBKQIWe.js"
+    ]
+  },
+  "_warning-circle-fill-DHgIUIho-B6wJ2sSy.js": {
+    "file": "assets/warning-circle-fill-DHgIUIho-B6wJ2sSy.js",
+    "name": "warning-circle-fill-DHgIUIho",
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "_wllama-cache-storage-D_Bel6bZ.js": {
+    "file": "assets/wllama-cache-storage-D_Bel6bZ.js",
+    "name": "wllama-cache-storage"
+  },
+  "_wllama-compat-assets-Br3ggfOz.js": {
+    "file": "assets/wllama-compat-assets-Br3ggfOz.js",
+    "name": "wllama-compat-assets",
+    "imports": [
+      "_preload-helper-CRzLMJPS.js"
+    ],
+    "dynamicImports": [
+      "node_modules/.pnpm/@wllama+wllama-compat@3.6.1/node_modules/@wllama/wllama-compat/wasm/wllama.wasm?url",
+      "node_modules/.pnpm/@wllama+wllama-compat@3.6.1/node_modules/@wllama/wllama-compat/wasm/wllama.js?raw"
+    ]
+  },
+  "editor.html": {
+    "file": "assets/editor-BknEmwSq.js",
+    "name": "editor",
+    "src": "editor.html",
+    "isEntry": true,
+    "imports": [
+      "_modulepreload-polyfill-P2Xu9kJm.js",
+      "_document-R_LPooEX.js",
+      "_utils-CwYt1meC-CK5SVuVq.js",
+      "_component-DkBrsfH0-CiYcmBjh.js",
+      "_preferences-BPtpnNDu.js",
+      "_preload-helper-CRzLMJPS.js",
+      "_readonly-BE9GdGQN.js",
+      "_button-C1-hm2LO.js",
+      "_panel-viewport-BBVC5QJZ.js"
+    ],
+    "dynamicImports": [
+      "lib/agent-plugin/tools.ts",
+      "lib/agent-plugin/agent-plugin.ts",
+      "lib/history/recovery.ts",
+      "lib/pending-open.ts",
+      "node_modules/.pnpm/@khmyznikov+pwa-install@0.6.4_@lit+react@1.0.8_@types+react@19.2.15__@types+dom-chromiu_0ce9c6d839316a7ec2d06d950ee47cfb/node_modules/@khmyznikov/pwa-install/dist/pwa-install.es.js"
+    ],
+    "css": [
+      "assets/editor-O2VMOgEH.css"
+    ]
+  },
+  "history.html": {
+    "file": "assets/history-BVmyyVzH.js",
+    "name": "history",
+    "src": "history.html",
+    "isEntry": true,
+    "imports": [
+      "_modulepreload-polyfill-P2Xu9kJm.js",
+      "_utils-CwYt1meC-CK5SVuVq.js",
+      "_component-DkBrsfH0-CiYcmBjh.js",
+      "_floating-CsqWzpaj-Clmcdox3.js",
+      "_preferences-BPtpnNDu.js",
+      "_button-C1-hm2LO.js",
+      "_pending-open-Cc0kWppM.js"
+    ],
+    "css": [
+      "assets/history-PHZFphmp.css"
+    ]
+  },
+  "lib/agent-plugin/agent-plugin.ts": {
+    "file": "assets/agent-plugin-5LHOdiHg.js",
+    "name": "agent-plugin",
+    "src": "lib/agent-plugin/agent-plugin.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_rolldown-runtime-hePW80VL.js",
+      "_utils-CwYt1meC-CK5SVuVq.js",
+      "_dom-Fv1-TPP9.js",
+      "_component-DkBrsfH0-CiYcmBjh.js",
+      "_floating-CsqWzpaj-Clmcdox3.js",
+      "_preload-helper-CRzLMJPS.js",
+      "_readonly-BE9GdGQN.js",
+      "_assistant-focus-DJ9mOo8D.js",
+      "_button-C1-hm2LO.js",
+      "_panel-viewport-BBVC5QJZ.js",
+      "_tools-C5wr8ngM.js",
+      "_assistant-offline-DiDBoNnW.js",
+      "_chevron-down-Bv5DUiQR-DC4rJz1l.js",
+      "_wllama-compat-assets-Br3ggfOz.js",
+      "_wllama-cache-storage-D_Bel6bZ.js",
+      "_error-D9MtuG9s.js"
+    ],
+    "dynamicImports": [
+      "lib/agent-plugin/references/document-reference-readers.ts",
+      "lib/agent-plugin/references/pdf-reference-reader.ts",
+      "node_modules/.pnpm/@mlc-ai+web-llm@0.2.85_patch_hash=ab39c67b61b734014dc299766a9bffabb2e077b70bed48c7c4dec0af56af0599/node_modules/@mlc-ai/web-llm/lib/index.js",
+      "packages/agent-core/dist/llm/wllama-cpu-runtime.js",
+      "node_modules/.pnpm/@wllama+wllama@3.6.1_patch_hash=5eaac29afca7fbc57011df1f0d69005d9e590da3dd1e5ad74155e4f0525a1702/node_modules/@wllama/wllama/esm/wasm/wllama.wasm?url",
+      "node_modules/.pnpm/@wllama+wllama@3.6.1_patch_hash=5eaac29afca7fbc57011df1f0d69005d9e590da3dd1e5ad74155e4f0525a1702/node_modules/@wllama/wllama/esm/index.js",
+      "packages/agent-core/dist/llm/wllama-cache-storage.js",
+      "__vite-browser-external",
+      "node_modules/.pnpm/@anthropic-ai+sdk@0.106.0/node_modules/@anthropic-ai/sdk/tools/agent-toolset/node.browser.mjs"
+    ],
+    "assets": [
+      "assets/webllm.worker-DQ8QTdiY.js",
+      "assets/history-search.worker-oM3mOCCA.js"
+    ]
+  },
+  "lib/agent-plugin/references/document-reference-readers.ts": {
+    "file": "assets/document-reference-readers-CU--xtLA.js",
+    "name": "document-reference-readers",
+    "src": "lib/agent-plugin/references/document-reference-readers.ts",
+    "isDynamicEntry": true
+  },
+  "lib/agent-plugin/references/pdf-reference-reader.ts": {
+    "file": "assets/pdf-reference-reader-CINNoaYp.js",
+    "name": "pdf-reference-reader",
+    "src": "lib/agent-plugin/references/pdf-reference-reader.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_preload-helper-CRzLMJPS.js",
+      "_assistant-offline-DiDBoNnW.js"
+    ],
+    "dynamicImports": [
+      "node_modules/.pnpm/pdfjs-dist@5.4.624/node_modules/pdfjs-dist/build/pdf.mjs",
+      "node_modules/.pnpm/pdfjs-dist@5.4.624/node_modules/pdfjs-dist/build/pdf.worker.min.mjs?url"
+    ]
+  },
+  "lib/agent-plugin/tools.ts": {
+    "file": "assets/tools-BjNW1Pv2.js",
+    "name": "tools",
+    "src": "lib/agent-plugin/tools.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_tools-C5wr8ngM.js"
+    ]
+  },
+  "lib/history/recovery.ts": {
+    "file": "assets/recovery-BgDg4vk_.js",
+    "name": "recovery",
+    "src": "lib/history/recovery.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_document-R_LPooEX.js",
+      "_preferences-BPtpnNDu.js"
+    ]
+  },
+  "lib/pending-open.ts": {
+    "file": "assets/pending-open-CTscgYPk.js",
+    "name": "pending-open",
+    "src": "lib/pending-open.ts",
+    "isDynamicEntry": true,
+    "imports": [
+      "_pending-open-Cc0kWppM.js"
+    ]
+  },
+  "node_modules/.pnpm/@anthropic-ai+sdk@0.106.0/node_modules/@anthropic-ai/sdk/tools/agent-toolset/node.browser.mjs": {
+    "file": "assets/node.browser-U-KyT5AW.js",
+    "name": "node.browser",
+    "src": "node_modules/.pnpm/@anthropic-ai+sdk@0.106.0/node_modules/@anthropic-ai/sdk/tools/agent-toolset/node.browser.mjs",
+    "isDynamicEntry": true,
+    "imports": [
+      "_error-D9MtuG9s.js"
+    ]
+  },
+  "node_modules/.pnpm/@khmyznikov+pwa-install@0.6.4_@lit+react@1.0.8_@types+react@19.2.15__@types+dom-chromiu_0ce9c6d839316a7ec2d06d950ee47cfb/node_modules/@khmyznikov/pwa-install/dist/pwa-install.es.js": {
+    "file": "assets/pwa-install.es-CV1akdb-.js",
+    "name": "pwa-install.es",
+    "src": "node_modules/.pnpm/@khmyznikov+pwa-install@0.6.4_@lit+react@1.0.8_@types+react@19.2.15__@types+dom-chromiu_0ce9c6d839316a7ec2d06d950ee47cfb/node_modules/@khmyznikov/pwa-install/dist/pwa-install.es.js",
+    "isDynamicEntry": true
+  },
+  "node_modules/.pnpm/@mlc-ai+web-llm@0.2.85_patch_hash=ab39c67b61b734014dc299766a9bffabb2e077b70bed48c7c4dec0af56af0599/node_modules/@mlc-ai/web-llm/lib/index.js": {
+    "file": "assets/lib-BCIeHzAg.js",
+    "name": "lib",
+    "src": "node_modules/.pnpm/@mlc-ai+web-llm@0.2.85_patch_hash=ab39c67b61b734014dc299766a9bffabb2e077b70bed48c7c4dec0af56af0599/node_modules/@mlc-ai/web-llm/lib/index.js",
+    "isDynamicEntry": true
+  },
+  "node_modules/.pnpm/@wllama+wllama-compat@3.6.1/node_modules/@wllama/wllama-compat/wasm/wllama.js?raw": {
+    "file": "assets/wllama-BcotrvZo.js",
+    "name": "wllama",
+    "src": "node_modules/.pnpm/@wllama+wllama-compat@3.6.1/node_modules/@wllama/wllama-compat/wasm/wllama.js?raw",
+    "isDynamicEntry": true
+  },
+  "node_modules/.pnpm/@wllama+wllama-compat@3.6.1/node_modules/@wllama/wllama-compat/wasm/wllama.wasm": {
+    "file": "assets/wllama-xnr7mLRC.wasm",
+    "src": "node_modules/.pnpm/@wllama+wllama-compat@3.6.1/node_modules/@wllama/wllama-compat/wasm/wllama.wasm"
+  },
+  "node_modules/.pnpm/@wllama+wllama-compat@3.6.1/node_modules/@wllama/wllama-compat/wasm/wllama.wasm?url": {
+    "file": "assets/wllama-C_g4jDmL.js",
+    "name": "wllama",
+    "src": "node_modules/.pnpm/@wllama+wllama-compat@3.6.1/node_modules/@wllama/wllama-compat/wasm/wllama.wasm?url",
+    "isDynamicEntry": true,
+    "assets": [
+      "assets/wllama-xnr7mLRC.wasm"
+    ]
+  },
+  "node_modules/.pnpm/@wllama+wllama@3.6.1_patch_hash=5eaac29afca7fbc57011df1f0d69005d9e590da3dd1e5ad74155e4f0525a1702/node_modules/@wllama/wllama/esm/index.js": {
+    "file": "assets/esm-C4NpDQQP.js",
+    "name": "esm",
+    "src": "node_modules/.pnpm/@wllama+wllama@3.6.1_patch_hash=5eaac29afca7fbc57011df1f0d69005d9e590da3dd1e5ad74155e4f0525a1702/node_modules/@wllama/wllama/esm/index.js",
+    "isDynamicEntry": true
+  },
+  "node_modules/.pnpm/@wllama+wllama@3.6.1_patch_hash=5eaac29afca7fbc57011df1f0d69005d9e590da3dd1e5ad74155e4f0525a1702/node_modules/@wllama/wllama/esm/wasm/wllama.wasm": {
+    "file": "assets/wllama-CmLUJC6F.wasm",
+    "src": "node_modules/.pnpm/@wllama+wllama@3.6.1_patch_hash=5eaac29afca7fbc57011df1f0d69005d9e590da3dd1e5ad74155e4f0525a1702/node_modules/@wllama/wllama/esm/wasm/wllama.wasm"
+  },
+  "node_modules/.pnpm/@wllama+wllama@3.6.1_patch_hash=5eaac29afca7fbc57011df1f0d69005d9e590da3dd1e5ad74155e4f0525a1702/node_modules/@wllama/wllama/esm/wasm/wllama.wasm?url": {
+    "file": "assets/wllama-aQXI4PL5.js",
+    "name": "wllama",
+    "src": "node_modules/.pnpm/@wllama+wllama@3.6.1_patch_hash=5eaac29afca7fbc57011df1f0d69005d9e590da3dd1e5ad74155e4f0525a1702/node_modules/@wllama/wllama/esm/wasm/wllama.wasm?url",
+    "isDynamicEntry": true,
+    "assets": [
+      "assets/wllama-CmLUJC6F.wasm"
+    ]
+  },
+  "node_modules/.pnpm/pdfjs-dist@5.4.624/node_modules/pdfjs-dist/build/pdf.mjs": {
+    "file": "assets/pdf-BYpjsck9.js",
+    "name": "pdf",
+    "src": "node_modules/.pnpm/pdfjs-dist@5.4.624/node_modules/pdfjs-dist/build/pdf.mjs",
+    "isDynamicEntry": true,
+    "imports": [
+      "_preload-helper-CRzLMJPS.js"
+    ]
+  },
+  "node_modules/.pnpm/pdfjs-dist@5.4.624/node_modules/pdfjs-dist/build/pdf.worker.min.mjs": {
+    "file": "assets/pdf.worker.min-wgc6bjNh.mjs",
+    "src": "node_modules/.pnpm/pdfjs-dist@5.4.624/node_modules/pdfjs-dist/build/pdf.worker.min.mjs"
+  },
+  "node_modules/.pnpm/pdfjs-dist@5.4.624/node_modules/pdfjs-dist/build/pdf.worker.min.mjs?url": {
+    "file": "assets/pdf.worker.min-KKLulacH.js",
+    "name": "pdf.worker.min",
+    "src": "node_modules/.pnpm/pdfjs-dist@5.4.624/node_modules/pdfjs-dist/build/pdf.worker.min.mjs?url",
+    "isDynamicEntry": true,
+    "assets": [
+      "assets/pdf.worker.min-wgc6bjNh.mjs"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/add-user-K9U-4C_t.js": {
+    "file": "assets/add-user-K9U-4C_t-KV0ic2Yd.js",
+    "name": "add-user-K9U-4C_t",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/add-user-K9U-4C_t.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/arc-B0th6eAI.js": {
+    "file": "assets/arc-B0th6eAI-BcnSaSBn.js",
+    "name": "arc-B0th6eAI",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/arc-B0th6eAI.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/arrow-down-BOOVhNFh.js": {
+    "file": "assets/arrow-down-BOOVhNFh-V_wy3fHE.js",
+    "name": "arrow-down-BOOVhNFh",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/arrow-down-BOOVhNFh.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/book-nlgjKPpM.js": {
+    "file": "assets/book-nlgjKPpM-Dpg2JGJq.js",
+    "name": "book-nlgjKPpM",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/book-nlgjKPpM.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cast-CYw9-VY8.js": {
+    "file": "assets/cast-CYw9-VY8-NfFu-Aje.js",
+    "name": "cast-CYw9-VY8",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cast-CYw9-VY8.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/check-Dgg2uRf-.js": {
+    "file": "assets/check-Dgg2uRf--B9pXkAd3.js",
+    "name": "check-Dgg2uRf-",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/check-Dgg2uRf-.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/check-circle-C7Ebc2dS.js": {
+    "file": "assets/check-circle-C7Ebc2dS-CegPNiGT.js",
+    "name": "check-circle-C7Ebc2dS",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/check-circle-C7Ebc2dS.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/check-circle-fill-CTs4RFb6.js": {
+    "file": "assets/check-circle-fill-CTs4RFb6-dmRC1koL.js",
+    "name": "check-circle-fill-CTs4RFb6",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/check-circle-fill-CTs4RFb6.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_check-circle-fill-CTs4RFb6-C06yHJ7P.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/chevron-down-Bv5DUiQR.js": {
+    "file": "assets/chevron-down-Bv5DUiQR-vOvlgj1W.js",
+    "name": "chevron-down-Bv5DUiQR",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/chevron-down-Bv5DUiQR.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_chevron-down-Bv5DUiQR-DC4rJz1l.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-fold-BNaeFiNL.js": {
+    "file": "assets/circle-fold-BNaeFiNL-DllBaL8J.js",
+    "name": "circle-fold-BNaeFiNL",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-fold-BNaeFiNL.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-line-D5detZ32.js": {
+    "file": "assets/circle-line-D5detZ32-BKDgGTT4.js",
+    "name": "circle-line-D5detZ32",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-line-D5detZ32.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-rotate-CcJBWezv.js": {
+    "file": "assets/circle-rotate-CcJBWezv-CPfDKOlI.js",
+    "name": "circle-rotate-CcJBWezv",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-rotate-CcJBWezv.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-spin-1i5wb0o2.js": {
+    "file": "assets/circle-spin-1i5wb0o2-DAqkYi7j.js",
+    "name": "circle-spin-1i5wb0o2",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-spin-1i5wb0o2.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-turn-BdFM5N40.js": {
+    "file": "assets/circle-turn-BdFM5N40-C56wqjan.js",
+    "name": "circle-turn-BdFM5N40",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/circle-turn-BdFM5N40.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/close-Ds73j8Dr.js": {
+    "file": "assets/close-Ds73j8Dr-g3BDfnM6.js",
+    "name": "close-Ds73j8Dr",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/close-Ds73j8Dr.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/close-circle-C2zSKqEy.js": {
+    "file": "assets/close-circle-C2zSKqEy-patYt6dF.js",
+    "name": "close-circle-C2zSKqEy",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/close-circle-C2zSKqEy.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/close-circle-fill-BPE1iLQK.js": {
+    "file": "assets/close-circle-fill-BPE1iLQK-JHmqYIx8.js",
+    "name": "close-circle-fill-BPE1iLQK",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/close-circle-fill-BPE1iLQK.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_close-circle-fill-BPE1iLQK-DvBX5VOi.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/copy-CTMcc4NV.js": {
+    "file": "assets/copy-CTMcc4NV-QDWSY7fb.js",
+    "name": "copy-CTMcc4NV",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/copy-CTMcc4NV.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-Dm0tvvqP.js": {
+    "file": "assets/cube-Dm0tvvqP-Dt11BQnb.js",
+    "name": "cube-Dm0tvvqP",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-Dm0tvvqP.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-dim-BJE1k09r.js": {
+    "file": "assets/cube-dim-BJE1k09r-cDYgWI9G.js",
+    "name": "cube-dim-BJE1k09r",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-dim-BJE1k09r.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-fold-DO6vvV04.js": {
+    "file": "assets/cube-fold-DO6vvV04-y7RBLy0e.js",
+    "name": "cube-fold-DO6vvV04",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-fold-DO6vvV04.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-grid-DbalbudM.js": {
+    "file": "assets/cube-grid-DbalbudM-B5qn0IGa.js",
+    "name": "cube-grid-DbalbudM",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/cube-grid-DbalbudM.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-bar-B2blF7ac.js": {
+    "file": "assets/dot-bar-B2blF7ac-gdEwgJET.js",
+    "name": "dot-bar-B2blF7ac",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-bar-B2blF7ac.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-circle-CnqrF_Je.js": {
+    "file": "assets/dot-circle-CnqrF_Je-BgnZImPT.js",
+    "name": "dot-circle-CnqrF_Je",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-circle-CnqrF_Je.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-line-B8lbAUAF.js": {
+    "file": "assets/dot-line-B8lbAUAF-CVKg7qsQ.js",
+    "name": "dot-line-B8lbAUAF",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-line-B8lbAUAF.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-pulse-ByUy2bBQ.js": {
+    "file": "assets/dot-pulse-ByUy2bBQ-BW6AlJd0.js",
+    "name": "dot-pulse-ByUy2bBQ",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/dot-pulse-ByUy2bBQ.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/double-bounce-D4Rdf4z_.js": {
+    "file": "assets/double-bounce-D4Rdf4z_-BXYE-oxP.js",
+    "name": "double-bounce-D4Rdf4z_",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/double-bounce-D4Rdf4z_.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/download-BX-g8vGB.js": {
+    "file": "assets/download-BX-g8vGB-D6eWnURX.js",
+    "name": "download-BX-g8vGB",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/download-BX-g8vGB.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/drop-D7BWaBZH.js": {
+    "file": "assets/drop-D7BWaBZH-CiH-_aZe.js",
+    "name": "drop-D7BWaBZH",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/drop-D7BWaBZH.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/drop-DX55MRmE.js": {
+    "file": "assets/drop-DX55MRmE-qdixMVDE.js",
+    "name": "drop-DX55MRmE",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/drop-DX55MRmE.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/eye-close-BoJDd9Gz.js": {
+    "file": "assets/eye-close-BoJDd9Gz-BC_mMkq5.js",
+    "name": "eye-close-BoJDd9Gz",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/eye-close-BoJDd9Gz.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/eye-e0ea1UWe.js": {
+    "file": "assets/eye-e0ea1UWe-BvkqfE0E.js",
+    "name": "eye-e0ea1UWe",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/eye-e0ea1UWe.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/fullscreen-BWWs6Lve.js": {
+    "file": "assets/fullscreen-BWWs6Lve-BLNFBI89.js",
+    "name": "fullscreen-BWWs6Lve",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/fullscreen-BWWs6Lve.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/github-CrMi1LcG.js": {
+    "file": "assets/github-CrMi1LcG-Ci2FHuKL.js",
+    "name": "github-CrMi1LcG",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/github-CrMi1LcG.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/globe-BE88-2LP.js": {
+    "file": "assets/globe-BE88-2LP-CgncRX_f.js",
+    "name": "globe-BE88-2LP",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/globe-BE88-2LP.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/home-DAyTPweX.js": {
+    "file": "assets/home-DAyTPweX-B2_7s-Xq.js",
+    "name": "home-DAyTPweX",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/home-DAyTPweX.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/info-circle-CwH9Vz4Q.js": {
+    "file": "assets/info-circle-CwH9Vz4Q-Dn-qldqZ.js",
+    "name": "info-circle-CwH9Vz4Q",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/info-circle-CwH9Vz4Q.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/info-circle-fill-BRJCObiQ.js": {
+    "file": "assets/info-circle-fill-BRJCObiQ-Cjshrst6.js",
+    "name": "info-circle-fill-BRJCObiQ",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/info-circle-fill-BRJCObiQ.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_info-circle-fill-BRJCObiQ-BrNB4C81.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/issue-BnIu1AbT.js": {
+    "file": "assets/issue-BnIu1AbT-D3vGW34-.js",
+    "name": "issue-BnIu1AbT",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/issue-BnIu1AbT.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/line-BG_5rGrr.js": {
+    "file": "assets/line-BG_5rGrr-BepD_xzn.js",
+    "name": "line-BG_5rGrr",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/line-BG_5rGrr.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/line-scale-BUzXaKyD.js": {
+    "file": "assets/line-scale-BUzXaKyD-D25UzEjW.js",
+    "name": "line-scale-BUzXaKyD",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/line-scale-BUzXaKyD.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/loading-V2w56WUg.js": {
+    "file": "assets/loading-V2w56WUg-Bek29W_s.js",
+    "name": "loading-V2w56WUg",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/loading-V2w56WUg.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/loading-scene-Cz_HMXxQ.js": {
+    "file": "assets/loading-scene-Cz_HMXxQ-CPWP9KPK.js",
+    "name": "loading-scene-Cz_HMXxQ",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/loading-scene-Cz_HMXxQ.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/lock-CEXTH6bm.js": {
+    "file": "assets/lock-CEXTH6bm-CEKn4y1h.js",
+    "name": "lock-CEXTH6bm",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/lock-CEXTH6bm.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/menu-DgYnqjOj.js": {
+    "file": "assets/menu-DgYnqjOj-DJhdmI5B.js",
+    "name": "menu-DgYnqjOj",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/menu-DgYnqjOj.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/message-CvOa18NV.js": {
+    "file": "assets/message-CvOa18NV-COLBrIoE.js",
+    "name": "message-CvOa18NV",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/message-CvOa18NV.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/mic-ScvkyhbU.js": {
+    "file": "assets/mic-ScvkyhbU-BZ9dnyHP.js",
+    "name": "mic-ScvkyhbU",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/mic-ScvkyhbU.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/mic-off-BBdIkcmY.js": {
+    "file": "assets/mic-off-BBdIkcmY-Bqt6skxi.js",
+    "name": "mic-off-BBdIkcmY",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/mic-off-BBdIkcmY.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/more-yARiIN78.js": {
+    "file": "assets/more-yARiIN78-DbkDWs9T.js",
+    "name": "more-yARiIN78",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/more-yARiIN78.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pacman-WruwGGIA.js": {
+    "file": "assets/pacman-WruwGGIA-Bku8m17q.js",
+    "name": "pacman-WruwGGIA",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pacman-WruwGGIA.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pause-PBZqwIo0.js": {
+    "file": "assets/pause-PBZqwIo0-Cbk0jvjS.js",
+    "name": "pause-PBZqwIo0",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pause-PBZqwIo0.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pencil-DPxYnRAX.js": {
+    "file": "assets/pencil-DPxYnRAX-BoVzGQ7m.js",
+    "name": "pencil-DPxYnRAX",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pencil-DPxYnRAX.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pip-C00Iznv8.js": {
+    "file": "assets/pip-C00Iznv8-h9Ouyryb.js",
+    "name": "pip-C00Iznv8",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pip-C00Iznv8.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/play-CTusuTDx.js": {
+    "file": "assets/play-CTusuTDx-Di5Yw5_i.js",
+    "name": "play-CTusuTDx",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/play-CTusuTDx.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/plus-DIpsZsQy.js": {
+    "file": "assets/plus-DIpsZsQy-D5HpTYi5.js",
+    "name": "plus-DIpsZsQy",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/plus-DIpsZsQy.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/power-off-BYgRbEYx.js": {
+    "file": "assets/power-off-BYgRbEYx-DyJe9AeJ.js",
+    "name": "power-off-BYgRbEYx",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/power-off-BYgRbEYx.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/preview-5NzRxsZr.js": {
+    "file": "assets/preview-5NzRxsZr-5pU8mHAX.js",
+    "name": "preview-5NzRxsZr",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/preview-5NzRxsZr.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pulse-CBIDSs_g.js": {
+    "file": "assets/pulse-CBIDSs_g-BF2iEU7H.js",
+    "name": "pulse-CBIDSs_g",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/pulse-CBIDSs_g.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/refresh-CYdpI0u4.js": {
+    "file": "assets/refresh-CYdpI0u4-WKWFZ9I5.js",
+    "name": "refresh-CYdpI0u4",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/refresh-CYdpI0u4.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/rotate-CVodjJ5Z.js": {
+    "file": "assets/rotate-CVodjJ5Z-B8TopisM.js",
+    "name": "rotate-CVodjJ5Z",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/rotate-CVodjJ5Z.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/scale-out-5MBGb1TU.js": {
+    "file": "assets/scale-out-5MBGb1TU-jcHTpq1j.js",
+    "name": "scale-out-5MBGb1TU",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/scale-out-5MBGb1TU.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/search-C53OIY1f.js": {
+    "file": "assets/search-C53OIY1f-NA9rjBXl.js",
+    "name": "search-C53OIY1f",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/search-C53OIY1f.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/setting-p_Njj-u0.js": {
+    "file": "assets/setting-p_Njj-u0-D5WRm3Nb.js",
+    "name": "setting-p_Njj-u0",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/setting-p_Njj-u0.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/solar-CqE9BNUg.js": {
+    "file": "assets/solar-CqE9BNUg-BcQCiSwH.js",
+    "name": "solar-CqE9BNUg",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/solar-CqE9BNUg.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/sort-C2scoErq.js": {
+    "file": "assets/sort-C2scoErq-bWBCgOS5.js",
+    "name": "sort-C2scoErq",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/sort-C2scoErq.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/square-DplXmGtI.js": {
+    "file": "assets/square-DplXmGtI-DlOL99Fc.js",
+    "name": "square-DplXmGtI",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/square-DplXmGtI.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/stretch-D7SRuSka.js": {
+    "file": "assets/stretch-D7SRuSka-BApnllm6.js",
+    "name": "stretch-D7SRuSka",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/stretch-D7SRuSka.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/team-CWwrC8_9.js": {
+    "file": "assets/team-CWwrC8_9-CpUEMjvJ.js",
+    "name": "team-CWwrC8_9",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/team-CWwrC8_9.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/text-D_7jWhfi.js": {
+    "file": "assets/text-D_7jWhfi-BrSAt6pX.js",
+    "name": "text-D_7jWhfi",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/text-D_7jWhfi.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/triple-bounce-CJ9NoNN-.js": {
+    "file": "assets/triple-bounce-CJ9NoNN--Bspwa-Ac.js",
+    "name": "triple-bounce-CJ9NoNN-",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/triple-bounce-CJ9NoNN-.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/unlock-BcbkZcwc.js": {
+    "file": "assets/unlock-BcbkZcwc-BNbZTfgy.js",
+    "name": "unlock-BcbkZcwc",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/unlock-BcbkZcwc.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/user-WsoDi_MG.js": {
+    "file": "assets/user-WsoDi_MG-BnsUHoMn.js",
+    "name": "user-WsoDi_MG",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/user-WsoDi_MG.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/volume-CaJWSRRd.js": {
+    "file": "assets/volume-CaJWSRRd-karN9THb.js",
+    "name": "volume-CaJWSRRd",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/volume-CaJWSRRd.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/volume-mute-lB7UMz6c.js": {
+    "file": "assets/volume-mute-lB7UMz6c-D70sC2LQ.js",
+    "name": "volume-mute-lB7UMz6c",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/volume-mute-lB7UMz6c.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/warning-circle-3KGd0chS.js": {
+    "file": "assets/warning-circle-3KGd0chS-aA4sgYBZ.js",
+    "name": "warning-circle-3KGd0chS",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/warning-circle-3KGd0chS.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/warning-circle-fill-DHgIUIho.js": {
+    "file": "assets/warning-circle-fill-DHgIUIho-ByGmch77.js",
+    "name": "warning-circle-fill-DHgIUIho",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/warning-circle-fill-DHgIUIho.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_warning-circle-fill-DHgIUIho-B6wJ2sSy.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/without-content-Bmf8EFwK.js": {
+    "file": "assets/without-content-Bmf8EFwK-CZUQIGB-.js",
+    "name": "without-content-Bmf8EFwK",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/without-content-Bmf8EFwK.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/zoom-in-Co49fqsk.js": {
+    "file": "assets/zoom-in-Co49fqsk-Cknjgjpj.js",
+    "name": "zoom-in-Co49fqsk",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/zoom-in-Co49fqsk.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/zoom-out-DSBKQIWe.js": {
+    "file": "assets/zoom-out-DSBKQIWe-1M_sDKOm.js",
+    "name": "zoom-out-DSBKQIWe",
+    "src": "node_modules/.pnpm/ranui@0.5.2/node_modules/ranui/dist/zoom-out-DSBKQIWe.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_component-DkBrsfH0-CiYcmBjh.js"
+    ]
+  },
+  "packages/agent-core/dist/llm/wllama-cache-storage.js": {
+    "file": "assets/wllama-cache-storage-3icln4N9.js",
+    "name": "wllama-cache-storage",
+    "src": "packages/agent-core/dist/llm/wllama-cache-storage.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_wllama-cache-storage-D_Bel6bZ.js"
+    ]
+  },
+  "packages/agent-core/dist/llm/wllama-cpu-runtime.js": {
+    "file": "assets/wllama-cpu-runtime-DWg0r1Ck.js",
+    "name": "wllama-cpu-runtime",
+    "src": "packages/agent-core/dist/llm/wllama-cpu-runtime.js",
+    "isDynamicEntry": true,
+    "imports": [
+      "_preload-helper-CRzLMJPS.js",
+      "_wllama-compat-assets-Br3ggfOz.js"
+    ],
+    "dynamicImports": [
+      "packages/agent-core/vendor/wllama-count/client/index.js",
+      "packages/agent-core/vendor/wllama-count/native/default/wllama.wasm?url",
+      "packages/agent-core/vendor/wllama-count/native/compat/wllama.wasm?url",
+      "packages/agent-core/vendor/wllama-count/native/compat/wllama.js?raw"
+    ]
+  },
+  "packages/agent-core/vendor/wllama-count/client/index.js": {
+    "file": "assets/client-Uf4tHDsk.js",
+    "name": "client",
+    "src": "packages/agent-core/vendor/wllama-count/client/index.js",
+    "isDynamicEntry": true
+  },
+  "packages/agent-core/vendor/wllama-count/native/compat/wllama.js?raw": {
+    "file": "assets/wllama-CaONujPU.js",
+    "name": "wllama",
+    "src": "packages/agent-core/vendor/wllama-count/native/compat/wllama.js?raw",
+    "isDynamicEntry": true
+  },
+  "packages/agent-core/vendor/wllama-count/native/compat/wllama.wasm": {
+    "file": "assets/wllama-J6krg_E0.wasm",
+    "src": "packages/agent-core/vendor/wllama-count/native/compat/wllama.wasm"
+  },
+  "packages/agent-core/vendor/wllama-count/native/compat/wllama.wasm?url": {
+    "file": "assets/wllama-DsXmkJs3.js",
+    "name": "wllama",
+    "src": "packages/agent-core/vendor/wllama-count/native/compat/wllama.wasm?url",
+    "isDynamicEntry": true,
+    "assets": [
+      "assets/wllama-J6krg_E0.wasm"
+    ]
+  },
+  "packages/agent-core/vendor/wllama-count/native/default/wllama.wasm": {
+    "file": "assets/wllama-BITawafS.wasm",
+    "src": "packages/agent-core/vendor/wllama-count/native/default/wllama.wasm"
+  },
+  "packages/agent-core/vendor/wllama-count/native/default/wllama.wasm?url": {
+    "file": "assets/wllama-vto8BWuX.js",
+    "name": "wllama",
+    "src": "packages/agent-core/vendor/wllama-count/native/default/wllama.wasm?url",
+    "isDynamicEntry": true,
+    "assets": [
+      "assets/wllama-BITawafS.wasm"
+    ]
+  },
+  "packages/shared/dist/i18n/messages/de.js": {
+    "file": "assets/de-BXP7RSl8.js",
+    "name": "de",
+    "src": "packages/shared/dist/i18n/messages/de.js",
+    "isDynamicEntry": true
+  },
+  "packages/shared/dist/i18n/messages/es.js": {
+    "file": "assets/es-DOFKkeaw.js",
+    "name": "es",
+    "src": "packages/shared/dist/i18n/messages/es.js",
+    "isDynamicEntry": true
+  },
+  "packages/shared/dist/i18n/messages/ja.js": {
+    "file": "assets/ja-BCyA2PPW.js",
+    "name": "ja",
+    "src": "packages/shared/dist/i18n/messages/ja.js",
+    "isDynamicEntry": true
+  },
+  "packages/shared/dist/i18n/messages/ko.js": {
+    "file": "assets/ko-BVTTFBbS.js",
+    "name": "ko",
+    "src": "packages/shared/dist/i18n/messages/ko.js",
+    "isDynamicEntry": true
+  },
+  "packages/shared/dist/i18n/messages/pt.js": {
+    "file": "assets/pt-CN4StF0u.js",
+    "name": "pt",
+    "src": "packages/shared/dist/i18n/messages/pt.js",
+    "isDynamicEntry": true
+  },
+  "packages/shared/dist/i18n/messages/zh-CN.js": {
+    "file": "assets/zh-CN-B5Fr1qAL.js",
+    "name": "zh-CN",
+    "src": "packages/shared/dist/i18n/messages/zh-CN.js",
+    "isDynamicEntry": true
+  }
+}

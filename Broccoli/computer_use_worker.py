@@ -300,6 +300,10 @@ def _flatten_error(exc: BaseException) -> str:
                 walk(sub)
             return
         text = str(error).strip() or error.__class__.__name__
+        # openai 3 keeps the error body (type / code / param) out of str(); add it back as openai 2 had it
+        body = getattr(error, "body", None)
+        if body not in (None, "", {}, []) and str(body) not in text:
+            text = f"{text} - {body}"
         if text not in seen:
             seen.append(text)
 
@@ -1602,7 +1606,7 @@ def _observation_fingerprint(image_bytes: bytes, elements: list[dict],
         try:
             with Image.open(io.BytesIO(image_bytes)) as source:
                 gray = source.convert("L").resize((9, 8), Image.Resampling.LANCZOS)
-                pixels = list(gray.getdata())
+                pixels = list(gray.get_flattened_data())   # getdata() goes away in Pillow 14
                 bits = []
                 for row in range(8):
                     offset = row * 9
@@ -4443,8 +4447,10 @@ def _assistant_message_dict(message: Any) -> dict:
 
 
 def _model_call(config: dict, messages: list[dict], tools: list[dict]) -> Any:
+    api_key = str(config.get("api_key", "") or "")
     client = OpenAI(
-        api_key=str(config.get("api_key", "")),
+        # openai 3 refuses an empty key; a server that needs none ignores this stand-in
+        api_key=api_key if api_key.strip() else "no-key",
         base_url=str(config.get("endpoint", "")),
         timeout=float(config.get("llm_timeout", 120) or 120),
         max_retries=1,

@@ -1,0 +1,18 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="512"
+  height="512"
+  viewBox="0 0 512 512"
+  role="img"
+  aria-labelledby="title"
+>
+  <title id="title">Document Editor — offset aperture</title>
+  <rect width="512" height="512" rx="96" fill="#171717" />
+  <g fill="#ffffff">
+    <path d="M264 62Q282 52 282 74V162L140 246L194 288V400L86 314Q74 304 74 286V178Q74 163 87 155Z" />
+    <path
+      d="M264 62Q282 52 282 74V162L140 246L194 288V400L86 314Q74 304 74 286V178Q74 163 87 155Z"
+      transform="rotate(180 256 256)"
+    />
+  </g>
+</svg>

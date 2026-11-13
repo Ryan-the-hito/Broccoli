@@ -1,0 +1,9 @@
+identifier: com.ryanshen.broccoli.translate
+popclip version: 4050
+name: Broccoli Translate
+icon: T
+description: Send selected text to Broccoli's translation popup.
+requirements: [text]
+stdin: text
+after: show-status
+shell script file: translate.py

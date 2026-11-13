@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./icons/document.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./icons/document-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./icons/document-180.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000" />
+
+    <!-- /history: the local document library. Everything it lists lives in this
+         browser's IndexedDB and has never been uploaded, so there is nothing
+         here for a crawler to see and nothing that would mean the same thing
+         to a different visitor. Its UI language follows the app's i18n
+         (?locale=), not a per-language static page. -->
+    <title>Local history</title>
+    <meta name="robots" content="noindex" />
+    <script>
+      try {
+        var t = localStorage.getItem('ran-theme');
+        if (t === 'dark' || t === 'light') {
+          document.documentElement.setAttribute('data-ran-theme', t);
+          document.documentElement.setAttribute('theme', t);
+        }
+      } catch (e) {}
+    </script>
+    <script src="./theme-presentation.js"></script>
+    <link rel="stylesheet" href="./ran-fonts/fonts.css" />
+    <link rel="stylesheet" href="./ran-tokens.0588539a.css" />
+    <link rel="stylesheet" href="./app-tokens.css" />
+    <!-- The site's chrome comes from the same stylesheet every other page uses,
+         rather than being re-measured here: this page is a destination people
+         reach from the homepage, and losing the header on the way there makes
+         it read as a different site. /embed-demo.html follows the same pattern
+         (shared bar, no footer -- an app surface, not an article). -->
+    <link rel="stylesheet" href="./landing.css" />
+    <script src="./ranui-iife/popover.iife.js" defer></script>
+    <script src="./ranui-iife/content.iife.js" defer></script>
+    <script src="./ranui-iife/theme-switch.iife.js" defer></script>
+    <script src="./lang-switch.js" defer></script>
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Online Document Editor" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content="Online Document Editor" />
+    <meta
+      property="og:description"
+      content="Edit Word, Excel and PowerPoint locally; annotate PDFs. No signup or Office installation. Optional AI (Experimental Beta), WebMCP and PWA support."
+    />
+    <meta property="og:url" content="https://edit.chaxus.com/" />
+    <meta property="og:image" content="https://edit.chaxus.com/social/document-editor-v1.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Online Document Editor: Word, Excel, PowerPoint and PDF; local editing, open source and no signup."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Online Document Editor" />
+    <meta
+      name="twitter:description"
+      content="Edit Word, Excel and PowerPoint locally; annotate PDFs. No signup or Office installation. Optional AI (Experimental Beta), WebMCP and PWA support."
+    />
+    <meta name="twitter:image" content="https://edit.chaxus.com/social/document-editor-v1.png" />
+    <meta
+      name="twitter:image:alt"
+      content="Online Document Editor: Word, Excel, PowerPoint and PDF; local editing, open source and no signup."
+    />
+    <script type="module" crossorigin src="./assets/history-BVmyyVzH.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/modulepreload-polyfill-P2Xu9kJm.js">
+    <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-hePW80VL.js">
+    <link rel="modulepreload" crossorigin href="./assets/dom-Fv1-TPP9.js">
+    <link rel="modulepreload" crossorigin href="./assets/component-DkBrsfH0-CiYcmBjh.js">
+    <link rel="modulepreload" crossorigin href="./assets/preload-helper-CRzLMJPS.js">
+    <link rel="modulepreload" crossorigin href="./assets/utils-CwYt1meC-CK5SVuVq.js">
+    <link rel="modulepreload" crossorigin href="./assets/button-C1-hm2LO.js">
+    <link rel="modulepreload" crossorigin href="./assets/floating-CsqWzpaj-Clmcdox3.js">
+    <link rel="modulepreload" crossorigin href="./assets/check-circle-fill-CTs4RFb6-C06yHJ7P.js">
+    <link rel="modulepreload" crossorigin href="./assets/close-circle-fill-BPE1iLQK-DvBX5VOi.js">
+    <link rel="modulepreload" crossorigin href="./assets/info-circle-fill-BRJCObiQ-BrNB4C81.js">
+    <link rel="modulepreload" crossorigin href="./assets/warning-circle-fill-DHgIUIho-B6wJ2sSy.js">
+    <link rel="modulepreload" crossorigin href="./assets/preferences-BPtpnNDu.js">
+    <link rel="modulepreload" crossorigin href="./assets/pending-open-Cc0kWppM.js">
+    <link rel="stylesheet" crossorigin href="./assets/history-PHZFphmp.css">
+  </head>
+
+  <body>
+    <header class="bar">
+      <a class="brand" href="/"><span class="wordmark">Document Editor</span></a>
+      <nav>
+        <a class="gh" href="https://github.com/ranuts/document" rel="noopener" target="_blank"> GitHub </a>
+        <!-- Every target is this page; the locale rides in the query, which is
+             what the app's i18n reads. -->
+        <r-popover class="lang-menu" placement="bottom" trigger="click" role="button" aria-label="Language">
+          <span class="lang-trigger">
+            <svg class="langmark" aria-hidden="true" viewBox="0 0 16 16">
+              <circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path
+                d="M1.75 8h12.5M8 1.75c1.7 1.8 2.6 3.9 2.6 6.25S9.7 12.45 8 14.25M8 1.75c-1.7 1.8-2.6 3.9-2.6 6.25s.9 4.45 2.6 6.25"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.2"
+              />
+            </svg>
+            <span class="lang-current">English</span>
+            <svg class="lang-caret" aria-hidden="true" viewBox="0 0 12 12">
+              <path
+                d="M2.75 4.5 6 7.75 9.25 4.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </span>
+          <r-content>
+            <div class="lang-list">
+              <a class="lang-option" href="/history?locale=de" lang="de" hreflang="de">Deutsch</a>
+              <a class="lang-option is-current" href="/history?locale=en" lang="en" hreflang="en" aria-current="page"
+                >English</a
+              >
+              <a class="lang-option" href="/history?locale=es" lang="es" hreflang="es">Español</a>
+              <a class="lang-option" href="/history?locale=pt" lang="pt" hreflang="pt">Português</a>
+              <a class="lang-option" href="/history?locale=zh-CN" lang="zh-CN" hreflang="zh-CN">中文</a>
+              <a class="lang-option" href="/history?locale=ja" lang="ja" hreflang="ja">日本語</a>
+              <a class="lang-option" href="/history?locale=ko" lang="ko" hreflang="ko">한국어</a>
+            </div>
+          </r-content>
+        </r-popover>
+        <r-theme-switch class="theme-switch" label="Theme"></r-theme-switch>
+      </nav>
+    </header>
+
+    <main id="history-root"></main>
+
+    <noscript>
+      <p style="max-width: 720px; margin: 0 auto; padding: var(--ran-space-6); font-family: var(--ran-font-family)">
+        This page needs JavaScript to read the documents stored in your browser.
+      </p>
+    </noscript>
+  </body>
+</html>

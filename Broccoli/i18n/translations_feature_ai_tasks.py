@@ -20,13 +20,13 @@ FEATURE_TRANSLATIONS = {
     'Show AI tasks beside the pointer': ('在鼠标旁显示 AI 任务', 'ポインタの横に AI タスクを表示'),
     'When Claude Code, Codex or another AI tool on this Mac (in VS Code, a terminal or Broccoli) or '
     'Broccoli’s own agent finishes a turn, a column of dots appears beside the pointer: grey = still '
-    'running, green = done. Point at it to see the tasks; click one to go there. The sound is the '
+    'running, green = done, orange = it waits for you, red = it ended on an error. Point at it to see the tasks; click one to go there. The sound is the '
     'one under Completion alerts. The built-in agentsview reads the sessions; nothing leaves this Mac.': (
         '这台 Mac 上的 Claude Code、Codex 等 AI 工具（在 VS Code、终端或 Broccoli 里）或 Broccoli 自己的 '
-        'Agent 做完一轮时，鼠标旁会出现一列小圆点：灰色 = 还在进行，绿色 = 做完了。鼠标移上去看是哪些任务，'
+        'Agent 做完一轮时，鼠标旁会出现一列小圆点：灰色 = 还在进行，绿色 = 做完了，橙色 = 在等你，红色 = 出错结束。鼠标移上去看是哪些任务，'
         '点一个就跳过去。声音用「完成提醒」里的设置。会话由内置的 agentsview 读取，数据不离开这台 Mac。',
         'この Mac の Claude Code・Codex などの AI ツール（VS Code、ターミナル、Broccoli 内）や Broccoli 自身の '
-        'Agent が 1 ターン終えると、ポインタの横に点が縦に並びます：グレー = 実行中、緑 = 完了。ポインタを'
+        'Agent が 1 ターン終えると、ポインタの横に点が縦に並びます：グレー = 実行中、緑 = 完了、オレンジ = あなたを待っています、赤 = エラーで終了。ポインタを'
         '乗せるとタスクが見え、クリックでそこへ移動します。音は「完了通知」の設定に従います。セッションは'
         '内蔵の agentsview が読み取り、データはこの Mac から出ません。'),
     'Tasks shown': ('显示个数', '表示する数'),
@@ -44,11 +44,38 @@ FEATURE_TRANSLATIONS = {
     'Watch': ('提醒', '通知する'),
     'Don’t watch': ('不提醒', '通知しない'),
     'Broccoli agent': ('Broccoli 的 Agent', 'Broccoli の Agent'),
-    'A provider has the same color here as on the usage bars. Green and grey are kept for done and '
-    'running, red and orange for a nearly used-up bar.': (
-        '同一家供应商在这里和用量条上是同一个颜色。绿色和灰色留给"做完""进行中"，红色和橙色留给快用完的用量条。',
-        '同じ提供元はここと使用量バーで同じ色です。緑とグレーは「完了」「実行中」、赤とオレンジは残りわずかの'
+    'A provider has the same color here as on the usage bars. Green, grey, orange and red are kept '
+    'for a task’s state and for a nearly used-up bar.': (
+        '同一家供应商在这里和用量条上是同一个颜色。绿、灰、橙、红留给任务的状态和快用完的用量条。',
+        '同じ提供元はここと使用量バーで同じ色です。緑・グレー・オレンジ・赤はタスクの状態と残りわずかの'
         '使用量バー用です。'),
+    # 2026-11-12: waiting / failed / background work, the hooks switch, a click that finds no window
+    'OpenClaw page': ('OpenClaw 页面', 'OpenClaw のページ'),
+    'Asked you': ('在问你', '質問あり'),
+    'Needs approval': ('等你批准', '承認待ち'),
+    'Usage limit': ('用量到顶', '使用量上限'),
+    'Signed out': ('登录过期', 'サインアウト'),
+    'Timed out': ('超时', 'タイムアウト'),
+    'Error': ('出错', 'エラー'),
+    'Background work': ('后台还在做', 'バックグラウンド作業中'),
+    'No window found for this task': ('找不到这个任务的窗口', 'このタスクのウインドウが見つかりません'),
+    'OpenClaw is not running': ('OpenClaw 没有在运行', 'OpenClaw は実行されていません'),
+    'OpenClaw': ('OpenClaw', 'OpenClaw'),
+    'Show when Claude Code or Codex waits for your approval': (
+        'Claude Code 或 Codex 等你批准时提示', 'Claude Code や Codex が承認待ちのとき知らせる'),
+    'Adds Broccoli’s own entry to the hooks in ~/.claude/settings.json and ~/.codex/hooks.json '
+    '(a copy of each file is kept first; other programs’ entries are not touched; switching this '
+    'off takes Broccoli’s out again). The entry only tells Broccoli that a session is waiting: '
+    'the dot turns orange. It never approves anything. Sessions started after this see it; '
+    'Codex may ask once whether to trust the new hook.': (
+        '在 ~/.claude/settings.json 和 ~/.codex/hooks.json 的钩子里加上 Broccoli 自己的一条（先给两个文件各留一份'
+        '副本；别的程序的条目不动；关掉这个开关就把 Broccoli 的那条拿掉）。这一条只告诉 Broccoli 有会话在等：'
+        '圆点变成橙色。它不会替你批准任何东西。之后新开的会话才生效；Codex 可能会问一次是否信任这个新钩子。',
+        '~/.claude/settings.json と ~/.codex/hooks.json のフックに Broccoli の項目を 1 つ追加します（先に各ファイルの'
+        'コピーを残します。ほかのアプリの項目には触れません。オフにすると Broccoli の項目だけを外します）。'
+        'この項目はセッションが待っていることを Broccoli に知らせるだけで、点がオレンジになります。'
+        '代わりに承認することはありません。これ以降に始めたセッションで有効です。Codex は新しいフックを'
+        '信頼するか一度たずねることがあります。'),
     'Green and grey show whether an AI task is done or still running, so no provider may use them. '
     'Choose another color.': (
         '绿色和灰色用来表示 AI 任务做完了还是还在进行，不能给供应商用。请换一个颜色。',

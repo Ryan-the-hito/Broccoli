@@ -4,15 +4,30 @@
 #
 # Everything the app needs sits next to this spec (checked 2026-10-26, Broccoli_26new-337):
 #   Broccoli.py (= Broccoli_26new.py), browser_use_worker.py, computer_use_worker.py,
+#   broccoli_python.py (2026-11-12: the app's own Python for the code runner — see "BroccoliPython" below),
 #   computer_use_display.py, computer_use_experience.py, smooth_widgets.py,
 #   the images / icons / default .txt files below, vendor/ (xterm + mermaid.min.js),
 #   i18n/*.qm (Chinese / Japanese UI), MathJax-2.7.1/ (formulas in the Agent conversation),
 #   open_connector/ (2026-10-29: the built-in Open Connector server — Settings › Connected apps),
 #   codexbar/ (2026-10-30: CodexBar's command-line build for the usage bars — Settings › Usage),
-#   agentsview/ (2026-10-31: reads the AI sessions on this Mac for the AI tasks column — Settings › AI tasks).
+#   agentsview/ (2026-10-31: reads the AI sessions on this Mac for the AI tasks column — Settings › AI tasks),
+#   office_editor/ + office_editor_bridge.py + office_files.py (2026-11-11: Word / Excel / PowerPoint in
+#   the editor — see "Office editor" below),
+#   cli_proxy/ (2026-11-12: CLIProxyAPI for subscription sign-ins — Settings › Models › Subscriptions).
 # A missing one stops the build (REQUIRED below) instead of shipping an app without it.
-# (Last synced from the source folder 2026-11-09, Broccoli_26new-421 = 2.0.17; Open Connector v1.9.9,
-#  CodexBar v0.84.0, agentsview v0.46.1 — all three the latest releases on 2026-11-09.)
+# (Last synced from the source folder 2026-11-13, Broccoli_26new-464 = 2.0.18; Open Connector v1.10.0,
+#  CodexBar v0.84.0, agentsview v0.47.0, CLIProxyAPI v8.0.69, Office editor v0.0.9 — all the latest
+#  releases on 2026-11-13; claude-agent-sdk 0.2.181 (Claude Code 2.1.323), openai-codex-cli-bin 0.169.0
+#  (Codex 0.169.0). Built with
+#  PyInstaller 6.22.3 + hooks-contrib 2026.10: PyMuPDF 2.x and charset-normalizer 3.5 need its hooks.)
+#
+# BroccoliPython (2026-11-12): a fourth program in Contents/MacOS, built from broccoli_python.py like
+# the two workers and sharing their libraries. It reads a command line like python3 and is what
+# Settings › General › Code runners uses for Python in the packaged app (the main program is not a
+# Python command: started with "-I -c <code>" it is a second Broccoli that leaves at once, status 0,
+# no output). It can import everything the app ships (numpy, pandas, requests, openpyxl …) and the
+# whole standard library (standard_library_modules() below adds what the app itself never imports).
+# Nothing extra to sign: it is signed with the app, like the workers.
 #
 # Open Connector: open_connector/ is refreshed from the source folder's open_connector_update.py
 # (official release build, checksum, licence check, test run). The server goes into
@@ -43,11 +58,40 @@
 #         dist/Broccoli.app/Contents/Frameworks/agentsview/agentsview
 # Its data lives in ~/BroccoliAppPath/AgentsView.
 #
+# CLIProxyAPI (2026-11-12): cli_proxy/ is refreshed with external_update.py (update cli_proxy
+# --copy-to <this folder>): official release, checksum, licence check (MIT), test run. Its single
+# executable goes into Contents/Frameworks/cli_proxy (the app looks in sys._MEIPASS/cli_proxy). Sign
+# it like agentsview (a Go program too):
+#     codesign --force --options runtime --timestamp --entitlements entitlements.plist \
+#         --sign "Developer ID Application: <your name> (<team id>)" \
+#         dist/Broccoli.app/Contents/Frameworks/cli_proxy/cli-proxy-api
+# Its settings and sign-ins live in the user's data folder (CLIProxy/).
+#
+# Office editor (2026-11-11): office_editor/ is the bundled office-editing component (ranuts/document
+# = the ONLYOFFICE web editors + their converter as WebAssembly, AGPL-3.0, ~530 MB of static files).
+# It is refreshed as a whole with the source folder's external_update.py (update office_editor
+# --copy-to <this folder>): the release's container image is read from the registry, checked, test-run
+# (open + save a Word, an Excel and a PowerPoint file with the network blocked) and only then put in
+# place; nothing inside office_editor/site is ever edited (corrections live in manifest.json "fixups").
+# All of it ships as data in sys._MEIPASS/office_editor: nothing in it is an executable, so there is
+# nothing extra to sign. office_editor_bridge.py (the local file server + the one adapter class that
+# knows this component) and office_files.py (text view of .docx / .xlsx / .pptx for the AI edit flow;
+# needs python-docx, openpyxl, python-pptx, lxml) are plain modules next to Broccoli.py. Without the
+# folder the app still runs: office files then open in the Reader only.
+#
 # Claude CLI (INCLUDE_CLAUDE_CLI): also a JavaScript engine; Anthropic ships it signed with allow-jit,
 # so once re-signed it needs the same entitlements or it may not start:
 #     codesign --force --options runtime --timestamp --entitlements entitlements.plist \
 #         --sign "Developer ID Application: <your name> (<team id>)" \
 #         dist/Broccoli.app/Contents/Frameworks/claude_agent_sdk/_bundled/claude
+#
+# Codex (INCLUDE_CODEX_CLI, 2026-11-10): OpenAI's native programs from the PyPI package
+# openai-codex-cli-bin, signed by OpenAI with hardened runtime; codex and codex-code-mode-host use
+# allow-jit + allow-unsigned-executable-memory (in entitlements.plist), so give all four the same:
+#     for f in bin/codex bin/codex-code-mode-host bin/codex-exec-server codex-path/rg; do
+#       codesign --force --options runtime --timestamp --entitlements entitlements.plist \
+#         --sign "Developer ID Application: <your name> (<team id>)" \
+#         "dist/Broccoli.app/Contents/Frameworks/codex_cli_bin/$f"; done
 #
 # QtWebEngine placeholder version (2026-11-07; put in by the end of this spec, the reason is there):
 # a tiny do-nothing library that `codesign --deep` on the app does NOT reach. Sign it with the same
@@ -56,7 +100,7 @@
 #         --sign "Developer ID Application: <your name> (<team id>)" \
 #         dist/Broccoli.app/Contents/Frameworks/PyQt6/Qt6/lib/QtWebEngineCore.framework/Versions/Resources
 #
-# Order: these five first, the app last (signing anything inside afterwards breaks the app's
+# Order: these (Codex: four files) first, the app last (signing anything inside afterwards breaks the app's
 # signature). Signing the app with --deep re-signs the first four as well (not the placeholder): give
 # that command the same --options runtime --timestamp --entitlements entitlements.plist, or they
 # lose JIT. Check before notarizing: codesign --verify --deep --strict dist/Broccoli.app (silent = good).
@@ -86,8 +130,14 @@ __version__ = _version.group(1)
 # True: ship it (the packaged app behaves like the source). False: rely on the installed CLI.
 INCLUDE_CLAUDE_CLI = True
 
+# @Codex runs the Codex OpenAI ships in its PyPI package openai-codex-cli-bin (module codex_cli_bin:
+# bin/codex + helpers, ~400 MB arm64, Apache-2.0) first, and only otherwise an installed `codex`
+# (Ryan 2026-11-10: both Agent targets use the bundled copies). The app looks for it where the
+# package's own bundled_codex_path() points: <package>/bin/codex beside codex-package.json.
+INCLUDE_CODEX_CLI = True
+
 REQUIRED = [
-    'Broccoli.py', 'browser_use_worker.py', 'computer_use_worker.py',
+    'Broccoli.py', 'browser_use_worker.py', 'computer_use_worker.py', 'broccoli_python.py',
     'computer_use_display.py', 'computer_use_experience.py', 'smooth_widgets.py',
     'Broccolimen.icns', 'Broccolidsk.icns', 'Broccolimen.png',
     'plus2.png', 'set2.png', 'transfer2.png', 'list.png',
@@ -112,6 +162,17 @@ REQUIRED = [
     'codexbar/VERSION', 'codexbar/CodexBar_CodexBarCore.bundle/Contents/Info.plist',
     # 2026-10-31: agentsview (AI tasks column), what it was taken from and its licence
     'agentsview/agentsview', 'agentsview/manifest.json', 'agentsview/LICENSE.txt',
+    # 2026-11-12: CLIProxyAPI (subscription sign-ins), what it was taken from and its licence (MIT)
+    'cli_proxy/cli-proxy-api', 'cli_proxy/manifest.json', 'cli_proxy/LICENSE.txt',
+    # 2026-11-10: the bundled Codex's licence (Apache-2.0) and notice, from openai/codex rust-v0.167.0
+    # (2026-11-13: byte-identical in rust-v0.169.0, the bundled version now)
+    'codex_cli/LICENSE.txt', 'codex_cli/NOTICE.txt',
+    # 2026-11-11: Word / Excel / PowerPoint in the editor — the two modules, the component, what it
+    # was taken from and its licence (AGPL-3.0) and notice
+    'office_files.py', 'office_editor_bridge.py',
+    'office_editor/manifest.json', 'office_editor/LICENSE.txt', 'office_editor/NOTICE.txt',
+    'office_editor/site/editor.html', 'office_editor/site/sdkjs/common/AllFonts.js',
+    'office_editor/site/sdkjs/common/wasm/x2t/x2t.wasm.br',
 ]
 _missing = [name for name in REQUIRED if not (SPEC_DIR / name).is_file()]
 if _missing:
@@ -143,12 +204,53 @@ browser_automation_datas = (
     + collect_data_files('playwright')
 )
 
+# BroccoliPython runs code the models write, so it gets the whole standard library, not only the
+# part the app happens to import (shelve, wave, filecmp, graphlib, cProfile, imaplib … were missing).
+# Left out: what needs Tcl/Tk, the test suites, the installers, and site (a packaged Python has none).
+STDLIB_NOT_SHIPPED = {
+    'tkinter', '_tkinter', 'turtle', 'turtledemo', 'idlelib',
+    'test', 'lib2to3', 'distutils', 'ensurepip', 'venv',
+    'site', 'sitecustomize', 'usercustomize',
+    'antigravity', 'this', '__hello__', '__phello__',
+}
+
+
+def standard_library_modules():
+    """Every module of this Python's standard library that exists on this Mac, packages with all
+    their modules (read from disk, nothing is imported)."""
+    import importlib.util
+    import sys
+
+    names = []
+    for name in sorted(sys.stdlib_module_names):
+        if name in STDLIB_NOT_SHIPPED or name.startswith(('_test', '_xx', 'xx', '_ctypes_test')):
+            continue
+        try:
+            found = importlib.util.find_spec(name)
+        except Exception:
+            found = None
+        if found is None:
+            continue
+        names.append(name)
+        for location in (found.submodule_search_locations or []):
+            for root, dirs, files in os.walk(location):
+                dirs[:] = sorted(d for d in dirs if d not in ('__pycache__', 'test', 'tests', 'idle_test')
+                                 and os.path.isfile(os.path.join(root, d, '__init__.py')))
+                prefix = '.'.join((name, *Path(root).relative_to(location).parts))
+                if root != location:
+                    names.append(prefix)
+                names.extend(f'{prefix}.{f[:-3]}' for f in sorted(files)
+                             if f.endswith('.py') and f not in ('__init__.py', '__main__.py'))
+    return names
+
+
 common_hiddenimports = [
+    *standard_library_modules(),
     'PyQt6.QtWebEngineWidgets',
     'PyQt6.QtWebEngineCore',
     'PyQt6.QtWebChannel',        # 2026-10-28: the terminal tab talks to xterm through it
-    'PyQt6.QtPdf',
-    'fitz',
+    'PyQt6.QtPdf',               # 2026-11-10: PyQt6 6.12 ships it as its own package (PyQt6-Pdf)
+    'pymupdf',                   # 2026-11-10: PyMuPDF 2.x; the old name 'fitz' is no longer used
     'pdfminer.high_level',
     'PIL.Image',
     'pytesseract',
@@ -160,10 +262,19 @@ common_hiddenimports = [
     'charset_normalizer',        # the editor's file-encoding detection
     'objc', 'AppKit', 'Foundation', 'CoreFoundation', 'Quartz', 'Vision', 'UserNotifications',
     'Security',                  # 2026-10-29: Open Connector's key and tokens live in the keychain
+    # 2026-11-13 sync (427–462): reading other apps' windows for the circle's scan, file thumbnails
+    # for its tray, and the password-locked model-profile files
+    'ApplicationServices', 'QuickLookThumbnailing',
+    'cryptography.exceptions', 'cryptography.hazmat.primitives.ciphers.aead',
+    'cryptography.hazmat.primitives.kdf.scrypt',
     # Computer Use worker helpers (imported lazily inside the worker):
     'computer_use_display',
     'computer_use_experience',
     *collect_submodules('claude_agent_sdk'),
+    'codex_cli_bin',             # 2026-11-10: finds the bundled Codex (bundled_codex_path)
+    # 2026-11-11: office files in the editor (imported inside try blocks in Broccoli.py)
+    'office_files', 'office_editor_bridge', 'docx', 'pptx', 'openpyxl', 'lxml.etree',
+    'openpyxl.formula.translate', 'openpyxl.styles.numbers', 'openpyxl.utils.datetime',
     *collect_submodules('mcp'),
     *browser_automation_hiddenimports,
 ]
@@ -231,6 +342,20 @@ resource_datas = [
     # and its licence
     ('agentsview/manifest.json', 'agentsview'),
     ('agentsview/LICENSE.txt', 'agentsview'),
+    # CLIProxyAPI (subscription sign-ins): what it was taken from (the settings page shows its
+    # version) and its licence
+    ('cli_proxy/manifest.json', 'cli_proxy'),
+    ('cli_proxy/LICENSE.txt', 'cli_proxy'),
+    # the bundled Codex: its licence and notice beside it
+    ('codex_cli/LICENSE.txt', 'codex_cli_bin'),
+    ('codex_cli/NOTICE.txt', 'codex_cli_bin'),
+    # the office-editing component, whole (the app looks in sys._MEIPASS/office_editor); the copy
+    # kept for a rollback (site.previous) and an interrupted update's work folder stay behind
+    *[item for item in folder_datas('office_editor')
+      if not Path(item[1]).as_posix().startswith(('office_editor/site.previous', 'office_editor/update_'))],
+    # python-docx / python-pptx read their blank templates from their package folders
+    *collect_data_files('docx'),
+    *collect_data_files('pptx'),
     *browser_automation_datas,
 ]
 
@@ -243,6 +368,18 @@ if INCLUDE_CLAUDE_CLI:
     # where the SDK looks for it: <package>/_bundled/claude
     claude_cli_binaries.append((str(_claude_cli), 'claude_agent_sdk/_bundled'))
 
+codex_cli_binaries, codex_cli_datas = [], []
+if INCLUDE_CODEX_CLI:
+    import codex_cli_bin as _codex_cli_bin
+    _codex_dir = Path(_codex_cli_bin.__file__).parent
+    _codex_files = ['bin/codex', 'bin/codex-code-mode-host', 'bin/codex-exec-server', 'codex-path/rg']
+    _codex_missing = [f for f in _codex_files + ['codex-package.json'] if not (_codex_dir / f).is_file()]
+    if _codex_missing:
+        raise RuntimeError(f'INCLUDE_CODEX_CLI is on but {_codex_dir} lacks: ' + ', '.join(_codex_missing))
+    # same layout as the package: bundled_codex_path() needs codex-package.json beside bin/
+    codex_cli_binaries = [(str(_codex_dir / f), 'codex_cli_bin/' + os.path.dirname(f)) for f in _codex_files]
+    codex_cli_datas = [(str(_codex_dir / 'codex-package.json'), 'codex_cli_bin')]
+
 # the Open Connector server: an executable, next to its manifest (the app looks in
 # sys._MEIPASS/open_connector); never UPX-compressed (it carries its JavaScript bundle inside)
 OPEN_CONNECTOR_BINARY = 'open-connector-darwin-arm64'
@@ -253,6 +390,10 @@ codexbar_binaries = [(str(SPEC_DIR / 'codexbar' / CODEXBAR_BINARY), 'codexbar')]
 # agentsview (AI tasks column): an executable in sys._MEIPASS/agentsview; not UPX-compressed
 AGENTSVIEW_BINARY = 'agentsview'
 agentsview_binaries = [(str(SPEC_DIR / 'agentsview' / AGENTSVIEW_BINARY), 'agentsview')]
+# CLIProxyAPI (2026-11-12, subscription sign-ins — Settings › Models › Subscriptions): an executable in
+# sys._MEIPASS/cli_proxy (cli_proxy_binary_path); not UPX-compressed
+CLI_PROXY_BINARY = 'cli-proxy-api'
+cli_proxy_binaries = [(str(SPEC_DIR / 'cli_proxy' / CLI_PROXY_BINARY), 'cli_proxy')]
 
 
 # QtWebEngine's stray "version" in the BUILD environment (2026-11-09; the build failed with
@@ -277,11 +418,23 @@ if _webengine_versions.is_dir():
                            'package QtWebEngine under the last one. Remove the one that is not part of PyQt6 '
                            '(PyQt6 ships "A") and build again.')
 
+# Minimum macOS (2026-11-10): the one Qt's own libraries are built for (Qt 6.12: 14.4; 6.10 was 13),
+# read from QtCore at build time, so a Mac that is too old says so instead of the app crashing at start.
+import subprocess as _subprocess
+_qtcore = Path(_pyqt6.__file__).parent / 'Qt6' / 'lib' / 'QtCore.framework' / 'Versions' / 'A' / 'QtCore'
+_minos = re.search(r'^\s*minos\s+([0-9.]+)', _subprocess.run(['otool', '-l', str(_qtcore)], check=True,
+                                                               capture_output=True, text=True).stdout, re.M)
+if not _minos:
+    raise RuntimeError(f'Cannot read the minimum macOS of {_qtcore}')
+QT_MINIMUM_MACOS = _minos.group(1)
+print('Minimum macOS (from Qt):', QT_MINIMUM_MACOS)
+
 a = Analysis(
-    ['Broccoli.py', 'browser_use_worker.py', 'computer_use_worker.py'],
+    ['Broccoli.py', 'browser_use_worker.py', 'computer_use_worker.py', 'broccoli_python.py'],
     pathex=[str(SPEC_DIR)],
-    binaries=claude_cli_binaries + open_connector_binaries + codexbar_binaries + agentsview_binaries,
-    datas=resource_datas,
+    binaries=(claude_cli_binaries + codex_cli_binaries + open_connector_binaries + codexbar_binaries
+              + agentsview_binaries + cli_proxy_binaries),
+    datas=resource_datas + codex_cli_datas,
     hiddenimports=common_hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -299,6 +452,7 @@ runtime_scripts = [script for script in a.scripts if script[0].startswith('pyi_r
 main_scripts = runtime_scripts + [script for script in a.scripts if script[0] == 'Broccoli']
 worker_scripts = runtime_scripts + [script for script in a.scripts if script[0] == 'browser_use_worker']
 cua_worker_scripts = runtime_scripts + [script for script in a.scripts if script[0] == 'computer_use_worker']
+python_scripts = runtime_scripts + [script for script in a.scripts if script[0] == 'broccoli_python']
 
 if len(main_scripts) != len(runtime_scripts) + 1:
     raise RuntimeError('Broccoli entry script was not found in PyInstaller analysis output.')
@@ -306,6 +460,8 @@ if len(worker_scripts) != len(runtime_scripts) + 1:
     raise RuntimeError('Browser Use worker entry script was not found in PyInstaller analysis output.')
 if len(cua_worker_scripts) != len(runtime_scripts) + 1:
     raise RuntimeError('Computer Use worker entry script was not found in PyInstaller analysis output.')
+if len(python_scripts) != len(runtime_scripts) + 1:
+    raise RuntimeError('BroccoliPython entry script was not found in PyInstaller analysis output.')
 
 exe = EXE(
     pyz,
@@ -360,16 +516,37 @@ cua_worker_exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+# The app's own Python for the code runner — the main app resolves it as a sibling executable named
+# exactly 'BroccoliPython' (see bundled_python_runner_path()).
+python_exe = EXE(
+    pyz,
+    python_scripts,
+    [],
+    exclude_binaries=True,
+    name='BroccoliPython',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
 coll = COLLECT(
     exe,
     worker_exe,
     cua_worker_exe,
+    python_exe,
     a.binaries,
     a.zipfiles,
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[OPEN_CONNECTOR_BINARY, CODEXBAR_BINARY, AGENTSVIEW_BINARY],
+    upx_exclude=[OPEN_CONNECTOR_BINARY, CODEXBAR_BINARY, AGENTSVIEW_BINARY, CLI_PROXY_BINARY,
+                 'claude', 'codex', 'codex-code-mode-host', 'codex-exec-server', 'rg'],
     name='Broccoli',
 )
 app = BUNDLE(
@@ -389,6 +566,7 @@ app = BUNDLE(
         # or hides its own Dock icon at run time
         'LSBackgroundOnly': True,
         'NSHighResolutionCapable': True,
+        'LSMinimumSystemVersion': QT_MINIMUM_MACOS,
         # Apple Notes and other apps are driven through osascript (macOS asks the user once)
         'NSAppleEventsUsageDescription': 'Broccoli reads and writes your Apple Notes and Reminders and controls other apps when you ask it to.',
     },

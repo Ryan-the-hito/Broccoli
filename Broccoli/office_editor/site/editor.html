@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com 'sha256-/BuXJ9xzpX2dEgzl0U0gjOZptCml34s3D5tvR3ySscU='; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; frame-src 'self' blob:; connect-src 'self' https: http: blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./icons/document.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./icons/document-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./icons/document-180.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#000000" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+
+    <!-- The editor route: /editor?new=docx|xlsx|pptx creates, /editor?file=<url> or
+         ?src=<url> opens, /editor?embed=1 is the iframe integration surface, and
+         /editor?open=local takes a file the landing page stashed in IndexedDB.
+         The homepage / is a static landing page (index.html) that never loads the
+         editor stack; it redirects legacy deep links (/?src=, /?embed=1, ...) here.
+         Not a page for search engines. -->
+    <title>Document Editor</title>
+    <meta name="robots" content="noindex" />
+    <!-- No-flash theme restore: apply a forced light/dark before first paint so a
+         dark-mode visitor never sees a white flash. 'system' leaves the attributes
+         off and the token layer's media query decides. Kept inline and tiny. -->
+    <script>
+      try {
+        var t = localStorage.getItem('ran-theme');
+        if (t === 'dark' || t === 'light') {
+          document.documentElement.setAttribute('data-ran-theme', t);
+          document.documentElement.setAttribute('theme', t);
+        }
+      } catch (e) {}
+    </script>
+    <!-- ranui design-token layer (vendored from ranui/dist/ranui.css, re-synced by bin/build.sh).
+         Loaded before home.css so the landing hero's --ran-* tokens resolve on first paint. -->
+    <script src="./theme-presentation.js"></script>
+    <link rel="stylesheet" href="./ran-fonts/fonts.css" />
+    <link rel="stylesheet" href="./ran-tokens.0588539a.css" />
+    <link rel="stylesheet" href="./app-tokens.css" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Online Document Editor" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content="Online Document Editor" />
+    <meta
+      property="og:description"
+      content="Edit Word, Excel and PowerPoint locally; annotate PDFs. No signup or Office installation. Optional AI (Experimental Beta), WebMCP and PWA support."
+    />
+    <meta property="og:url" content="https://edit.chaxus.com/" />
+    <meta property="og:image" content="https://edit.chaxus.com/social/document-editor-v1.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Online Document Editor: Word, Excel, PowerPoint and PDF; local editing, open source and no signup."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Online Document Editor" />
+    <meta
+      name="twitter:description"
+      content="Edit Word, Excel and PowerPoint locally; annotate PDFs. No signup or Office installation. Optional AI (Experimental Beta), WebMCP and PWA support."
+    />
+    <meta name="twitter:image" content="https://edit.chaxus.com/social/document-editor-v1.png" />
+    <meta
+      name="twitter:image:alt"
+      content="Online Document Editor: Word, Excel, PowerPoint and PDF; local editing, open source and no signup."
+    />
+    <script type="module" crossorigin src="./assets/editor-BknEmwSq.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/modulepreload-polyfill-P2Xu9kJm.js">
+    <link rel="modulepreload" crossorigin href="./assets/rolldown-runtime-hePW80VL.js">
+    <link rel="modulepreload" crossorigin href="./assets/dom-Fv1-TPP9.js">
+    <link rel="modulepreload" crossorigin href="./assets/component-DkBrsfH0-CiYcmBjh.js">
+    <link rel="modulepreload" crossorigin href="./assets/preload-helper-CRzLMJPS.js">
+    <link rel="modulepreload" crossorigin href="./assets/utils-CwYt1meC-CK5SVuVq.js">
+    <link rel="modulepreload" crossorigin href="./assets/check-circle-fill-CTs4RFb6-C06yHJ7P.js">
+    <link rel="modulepreload" crossorigin href="./assets/close-circle-fill-BPE1iLQK-DvBX5VOi.js">
+    <link rel="modulepreload" crossorigin href="./assets/info-circle-fill-BRJCObiQ-BrNB4C81.js">
+    <link rel="modulepreload" crossorigin href="./assets/warning-circle-fill-DHgIUIho-B6wJ2sSy.js">
+    <link rel="modulepreload" crossorigin href="./assets/preferences-BPtpnNDu.js">
+    <link rel="modulepreload" crossorigin href="./assets/readonly-BE9GdGQN.js">
+    <link rel="modulepreload" crossorigin href="./assets/assistant-focus-DJ9mOo8D.js">
+    <link rel="modulepreload" crossorigin href="./assets/document-R_LPooEX.js">
+    <link rel="modulepreload" crossorigin href="./assets/button-C1-hm2LO.js">
+    <link rel="modulepreload" crossorigin href="./assets/panel-viewport-BBVC5QJZ.js">
+    <link rel="stylesheet" crossorigin href="./assets/editor-O2VMOgEH.css">
+  </head>
+
+  <body>
+    <div id="app">
+      <div id="iframe"></div>
+    </div>
+
+    <noscript>
+      <p style="max-width: 720px; margin: 0 auto; padding: var(--ran-space-6); font-family: var(--ran-font-family)">
+        This editor requires JavaScript to run. Please enable JavaScript to open or create a document.
+      </p>
+    </noscript>
+  </body>
+</html>

@@ -1,0 +1,9 @@
+identifier: com.ryanshen.broccoli.ask
+popclip version: 4050
+name: Broccoli Ask
+icon: A
+description: Ask Broccoli about the selected text (question menu).
+requirements: [text]
+stdin: text
+after: show-status
+shell script file: ask.py

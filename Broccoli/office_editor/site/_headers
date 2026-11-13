@@ -1,0 +1,144 @@
+# Cloudflare Pages headers (copied into dist/ by the build).
+# Pin the caching contract explicitly instead of relying on Pages defaults.
+# The failure mode being prevented: a stale HTML referencing hashed assets
+# that no longer exist after a deploy ("Refused to apply style… text/html").
+
+# Local WASM threads require an isolated document and matching iframe/Worker responses.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+
+# Hashed build outputs: the filename changes every deploy → cache forever.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The vendored ranui token layer, fingerprinted by bin/build.sh. It used to sit in the
+# no-cache group below with a stable name; a stable name whose content changes every deploy
+# is the one combination caching cannot get right, and it did go wrong (a stale copy kept
+# refilling itself from the browser's disk cache across deploys). Now the name carries the
+# content hash, so it is immutable like any other build output.
+/ran-tokens.*.css
+  Cache-Control: public, max-age=31536000, immutable
+
+# The service worker must never be cached, or clients keep running an old
+# version (and its old caching strategy) long after a deploy.
+/sw.js
+  Cache-Control: no-cache
+
+# Unhashed, deploy-coupled files: stable filenames whose content changes with
+# deploys — browsers must revalidate so they always match the current HTML.
+/app-tokens.css
+  Cache-Control: no-cache
+/home.css
+  Cache-Control: no-cache
+/landing.css
+  Cache-Control: no-cache
+/lang-switch.js
+  Cache-Control: no-cache
+/sw-register.js
+  Cache-Control: no-cache
+/open-local.js
+  Cache-Control: no-cache
+/landing-prefetch.js
+  Cache-Control: no-cache
+/history-recent.js
+  Cache-Control: no-cache
+/theme-presentation.js
+  Cache-Control: no-cache
+/ranui-iife/*
+  Cache-Control: no-cache
+/libs/sheetjs/convert.worker.js
+  Cache-Control: no-cache
+
+# Self-hosted fonts: unhashed but they only change with a ranui release; a
+# week of browser cache with revalidation after is a fine trade.
+/ran-fonts/*
+  Cache-Control: public, max-age=604800, must-revalidate
+
+# The editor's indexed font catalog (public/fonts/000..266, XOR wire format,
+# 2 KB - 16 MB each). Named by catalog index and only ever replaced together
+# with the vendor build, so they are effectively immutable. Without an
+# explicit rule Pages served them max-age=0 / cf-cache-status DYNAMIC: every
+# open of a CJK deck re-downloaded 30+ MB of fonts through the SDK's serial
+# font queue and sat on "Loading presentation" for minutes on production
+# while localhost dev was instant. Long-lived at both the CF edge and the
+# browser.
+#
+# Content-Type is declared here for one reason: transfer compression. These
+# files have no extension, so Pages typed them application/octet-stream, which
+# is not on Cloudflare's compressible-content-type list -- production served
+# every byte raw (verified: `curl -H 'Accept-Encoding: br, gzip'` on
+# /fonts/103 returned content-length 17151049 and no content-encoding, while
+# a sibling .js on the same origin came back br-encoded). The CJK faces gzip
+# to 52-69% of their size, so the first open of a Chinese, Japanese or Korean
+# document was paying roughly double. font/ttf is on that list.
+#
+# The bytes are a TTF whose first 32 bytes are XOR-obfuscated (see
+# docs/fonts.md), so this is a transport label, not a promise that a browser
+# could use the file as a webfont directly. Nothing parses it as one: the
+# vendor font loader pulls these through XMLHttpRequest with
+# responseType = 'arraybuffer', where the response Content-Type takes no part.
+#
+# Edge caching is a separate axis and _headers cannot reach it: the same probe
+# showed cf-cache-status DYNAMIC on repeat GETs. That needs a Cache Rule in the
+# Cloudflare dashboard, which does not live in this repo.
+#
+# DYNAMIC does not mean nothing is cached, though -- responses here come back
+# with an `age` that keeps climbing, so some layer (Pages' own asset serving,
+# by elimination) holds them. Which makes `immutable` below a one-way door:
+# it is right while a name maps to fixed content, but a *deleted* slot never
+# gets new content to overwrite the cached copy, so it stays servable for up
+# to a year. Removing faces from this directory therefore needs a dashboard
+# Purge Cache afterwards -- verified: after the license sweep shipped,
+# /fonts/017 still returned the old SimSun with age 310369 while
+# /fonts/017?cb=<random> was already a 404.
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: font/ttf
+  X-Robots-Tag: noindex
+
+# The x2t WASM: the single largest first-save download, and swapped only with
+# the vendor. Editor JS/HTML under sdkjs/ and web-apps/ is deliberately NOT
+# pinned here -- some of it carries our runtime patches (x2t_helper.js) and the
+# editor iframe HTML, which must revalidate.
+#
+# The file holds brotli bytes (6.6 MB, against 42.1 MB raw and 9.0 MB for the
+# best gzip we could produce). Declaring the encoding is what makes that legal:
+# the browser decodes it at the network layer, so instantiateStreaming compiles
+# the module straight off the response and nothing in our code decompresses
+# anything.
+#
+# The `.br` name is load-bearing, and so is the absence of a Content-Type rule
+# here. `wrangler pages dev` -- what the e2e-pages job runs -- re-compresses
+# anything it considers compressible and OVERWRITES Content-Encoding with its
+# own, which double-encodes a pre-encoded asset and leaves the browser holding
+# brotli that no browser API can decode. It leaves application/octet-stream
+# alone, and that is what an unknown extension gets. Name this `.wasm`, or set
+# Content-Type here, and the editor stops loading under that job.
+# sws.toml carries the twin rule for the Docker image, vite.config.ts for
+# dev/preview. The loader labels the response application/wasm itself.
+/sdkjs/common/wasm/x2t/x2t.wasm.br
+  Content-Encoding: br
+  Cache-Control: public, max-age=31536000, immutable
+
+# Crawler hygiene: the vendored editor trees contain thousands of internal
+# HTML/JS files (help pages in every locale, iframe shells, plugin manifests)
+# that a crawler otherwise spends its budget on and may surface in place of
+# the real landing pages. Keep them out of the index; caching is untouched
+# (no Cache-Control here, see the note above).
+/web-apps/*
+  X-Robots-Tag: noindex
+/sdkjs/*
+  X-Robots-Tag: noindex
+
+# Executable code restrictions belong to the model Worker, not vendor iframe HTML.
+/assets/webllm.worker-*.js
+  Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' https: http: blob:; worker-src 'self' blob:
+
+# PDF extraction module worker must remain executable under strict MIME checks.
+/assets/pdf.worker.min-*.mjs
+  Content-Type: text/javascript; charset=utf-8
+
+# Final build identity is a deploy probe, never an offline asset.
+/build-identity.json
+  Cache-Control: no-store

@@ -1,0 +1,19 @@
+# Online Document Editor — https://edit.chaxus.com
+# Strategy: maximize both search visibility and AI recall. Allow search engines
+# and AI crawlers alike — including AI *training* crawlers (GPTBot, ClaudeBot,
+# Google-Extended, CCBot, …). Allowing access does not guarantee indexing,
+# training inclusion, recommendations or citations.
+#
+# This policy governs the public marketing/landing pages only. It has no bearing
+# on access to local files: documents and recovery copies are not public website
+# resources. Unfinished AI modules and embedding-host data flows are documented
+# separately in /llms.txt and the README.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://edit.chaxus.com/sitemap.xml
+
+# For AI assistants: /llms.txt indexes the site (summary, capabilities,
+# limitations, links); /llms-full.txt is the same index plus the full text of
+# every page, so the whole site can be read in a single request.

@@ -1,0 +1,1 @@
+export{i as getDocumentTextTool}from"./tools-C5wr8ngM.js";

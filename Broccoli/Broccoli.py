@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QGraphicsScene, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsLineItem,
                              QStyle, QProxyStyle, QTreeWidget, QStyleOptionViewItem)
 from PyQt6.QtCore import Qt, QRect, QRectF, QPropertyAnimation, QParallelAnimationGroup, QVariantAnimation, QTimer, QThread, pyqtSignal, QObject, QEasingCurve, QPoint, QPointF, QUrl, QProcess, QEvent, QSize, QSignalBlocker, QCoreApplication, QTranslator, QLocale, QLibraryInfo, QLockFile, QModelIndex
-from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem, QRegion, QLinearGradient, QRadialGradient, QShortcut, QKeySequence, QIntValidator, QDoubleValidator
+from PyQt6.QtGui import QAction, QIcon, QColor, QPainter, QPen, QBrush, QPixmap, QImage, QCursor, QPainterPath, QPalette, QGuiApplication, QTextCharFormat, QTextCursor, QStandardItemModel, QStandardItem, QRegion, QLinearGradient, QRadialGradient, QShortcut, QKeySequence, QIntValidator, QDoubleValidator, QPolygonF, QTransform
 import PyQt6.QtGui
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineScript, QWebEngineSettings, QWebEngineDownloadRequest
@@ -101,7 +101,6 @@ import jieba
 import csv
 import sqlite3
 import numpy as np
-import pandas as pd
 import time
 import docx2txt
 import requests
@@ -3512,7 +3511,7 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.17'
+VERSION = '2.0.18'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
 # FIX-45: wakes the region-capture overlay (what the 📸 Shot button does), as
@@ -11504,6 +11503,41 @@ def planner_capability_list_text() -> str:
     )
 
 
+def capability_has_usable_model(capability: str, store: dict | None = None) -> bool:
+    """False when a plan step of this tool could only come back empty (2026-11-11): the tool has
+    its own model row in Settings > Models, nothing usable is in it, and it is not a step that
+    falls back to Sub agent / Default chat. A web target (@) or a custom service (&) counts as
+    usable: it is checked when the step runs, where it has its own fallback."""
+    spec = capability_spec(capability)
+    if not spec or not spec.get('profile_row'):
+        return True
+    try:
+        store = model_roles_view(store if store is not None else load_settings_store())
+        name = str(get_specialized_profiles_from_store(store).get(capability, '') or '').strip()
+        if name.startswith('@') or name.startswith(CUSTOM_SERVICE_PREFIX):
+            return True
+        return resolve_step_model_profile(store, capability) is not None
+    except Exception:
+        return True
+
+
+def planner_unavailable_capabilities_note() -> str:
+    """One line for the planner / the step reviewer: the listed tools that have no model on this
+    Mac. Empty when every tool can run, so their prompts stay exactly as they were."""
+    names = [
+        key for key, spec in SPECIALIZED_CAPABILITY_REGISTRY.items()
+        if spec.get('planner_listed') and spec.get('implemented', True) and not capability_has_usable_model(key)
+    ]
+    if not names:
+        return ''
+    note = ('Not usable on this Mac right now (no model is set for them in Settings > Models): '
+            + ', '.join(names) + '. Never plan a step with these: it would return nothing.')
+    if 'web_search' in names:
+        note += (' For information from the web, plan web_page_read (addresses that are known or can be '
+                 'derived, e.g. the official site) or browser_use instead.')
+    return note + '\n'
+
+
 def plan_allowed_capabilities() -> set:
     """normalize_planner_plan 的接受集合（宽松超集：宣传从严、校验从宽）。"""
     return {key for key, spec in SPECIALIZED_CAPABILITY_REGISTRY.items() if spec.get('plan_allowed')}
@@ -11524,6 +11558,51 @@ def dynamic_available_capability_names(include_skill: bool) -> list:
     if include_skill:
         names.append('skill')
     return names
+
+
+# Put in front of a Web search step's text when the model answered without searching (the model
+# and the step review read it; the answer's step block shows a translated sentence instead).
+WEB_SEARCH_NOT_PERFORMED_NOTE = (
+    '[Note from Broccoli: no web search was performed in this step. The model set for Web search answered '
+    'without searching (this model / endpoint has no search). Nothing below was looked up on the web just now: '
+    'it comes from the given context and from what the model remembers. Do not treat it as fresh search results.]'
+)
+
+
+NO_MODEL_STEP_TEXT = (
+    'This step did not run: no model is set for {label} on this Mac (Settings > Models > {label}). '
+    'It produced nothing — no search, no page, no data. Do not present anything as a result of this step.'
+)
+_NO_MODEL_STEP_TEXT_RE = re.compile(r'^This step did not run: no model is set for (.+?) on this Mac \(')
+
+
+def no_model_step_result(capability: str, goal: str, execution_mode: str = '') -> dict:
+    """A plan step whose tool has no model: it did not run and says so (the models read this text;
+    a person sees it through person_facing_step_text)."""
+    label = specialized_capability_label(capability)
+    return {
+        'capability': capability,
+        'capability_label': label,
+        'model_name': '',
+        'text_output': NO_MODEL_STEP_TEXT.format(label=label),
+        'artifacts': [],
+        'metadata': {'goal': goal, 'execution_mode': execution_mode, 'no_model': True},
+    }
+
+
+def person_facing_step_text(text: str) -> str:
+    """A step's stored text as a person reads it (the answer's step block, the plan rows):
+    Broccoli's own notes in the person's language. The stored text stays as the models read it."""
+    content = str(text or '')
+    if content.startswith(WEB_SEARCH_NOT_PERFORMED_NOTE):
+        rest = content[len(WEB_SEARCH_NOT_PERFORMED_NOTE):].lstrip()
+        return (_tr('No web search was performed in this step: the model set for Web search answered '
+                    'without searching.') + ('\n\n' + rest if rest else ''))
+    match = _NO_MODEL_STEP_TEXT_RE.match(content)
+    if match:
+        return _tr('This step did not run: no model is set for {label} (Settings › Models).').format(
+            label=_tr(match.group(1)))
+    return content
 
 
 def unimplemented_capability_step_result(capability: str, model_name: str, goal: str, execution_mode: str) -> dict:
@@ -13051,6 +13130,8 @@ APPROVAL_REVIEW_KIND_TEXT = {
     'mcp': 'a call to an external tool (MCP server) — it may act outside this Mac',
     'file_edit': ("a change to files on the user's Mac that Broccoli itself will write for the agent (it keeps a "
                   'copy of each file before writing and merges with changes others made meanwhile)'),
+    'editor_edit': ("a change to one file that is open in Broccoli's editor, shown as a diff (- removed, + added); "
+                    'Broccoli itself will write it and keeps a copy of the file before writing'),
 }
 _APPROVAL_ADMIN_RE = re.compile(r'(?<![\w.-])(?:sudo|su|doas)(?![\w.-])|with\s+administrator\s+privileges',
                                 re.IGNORECASE)
@@ -14880,6 +14961,12 @@ AUTO_APPROVE_FINAL_ANSWER_NOTE = (
     'then change the approach. Administrator rights (sudo), erasing a disk, changing system files and '
     'sending anything off this Mac still wait for the user.'
 )
+AUTO_APPROVE_EDITOR_EDIT_NOTE = (
+    'Automatic approval is on: an editor_edit block is reviewed and then written into the file without a '
+    'confirmation window (Broccoli keeps a copy of the file first). Do not tell the user that a window will ask '
+    'them to confirm; say the change is written after an automatic review. Only when the review finds something '
+    'the user must decide is a window shown.'
+)
 
 
 def _terminal_default_favorite_caption(command: str) -> str:
@@ -16130,7 +16217,8 @@ class BroccoliMessageDialog(QDialog):
                  default_button_text: str | None = None,
                  size: QSize | None = None,
                  force_dark: bool = False,
-                 approval: bool = False):
+                 approval: bool = False,
+                 pictures: list | None = None):
         super().__init__(parent)
         self._theme_updating = False
         self._force_dark = bool(force_dark)
@@ -16156,6 +16244,35 @@ class BroccoliMessageDialog(QDialog):
         root_layout.addWidget(self.title_lbl)
         root_layout.addWidget(self.message_lbl, 1)
 
+        # pictures side by side under the message (an approval that shows before / after)
+        self._picture_captions = []
+        shown = [(str(caption or ''), pixmap) for caption, pixmap in (pictures or [])
+                 if isinstance(pixmap, QPixmap) and not pixmap.isNull()][:2]
+        if shown:
+            picture_row = QHBoxLayout()
+            picture_row.setContentsMargins(0, 4, 0, 0)
+            picture_row.setSpacing(12)
+            each_w = max(80, (dialog_size.width() - 68 - 12 * (len(shown) - 1)) // len(shown))
+            each_h = max(60, min(220, dialog_size.height() // 3))
+            for caption, pixmap in shown:
+                column = QVBoxLayout()
+                column.setSpacing(4)
+                ratio = max(1.0, float(self.devicePixelRatioF()))
+                scaled = pixmap.scaled(int(each_w * ratio), int(each_h * ratio), Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                scaled.setDevicePixelRatio(ratio)
+                picture = QLabel(self)
+                picture.setPixmap(scaled)
+                picture.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                picture.setFixedHeight(each_h)
+                caption_lbl = QLabel(caption, self)
+                caption_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._picture_captions.append(caption_lbl)
+                column.addWidget(picture)
+                column.addWidget(caption_lbl)
+                picture_row.addLayout(column, 1)
+            root_layout.addLayout(picture_row)
+
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 8, 0, 0)
         button_row.setSpacing(6)
@@ -16180,6 +16297,15 @@ class BroccoliMessageDialog(QDialog):
         root_layout.addLayout(button_row)
 
         self._apply_theme()
+        if shown:
+            # with pictures the given height is only a start: as tall as the text needs (the
+            # pictures keep their height), up to what a small screen still shows
+            for label in (self.title_lbl, self.message_lbl, self._picture_captions[0]):
+                label.ensurePolished()        # measured with the font the style sheet just gave it
+            text_h = self.message_lbl.heightForWidth(dialog_size.width() - 68)
+            needed = (60 + self.title_lbl.sizeHint().height() + 10 + text_h + 10 + 4 + each_h + 4
+                      + self._picture_captions[0].sizeHint().height() + 10 + 8 + 24 + 12)
+            self.setFixedSize(dialog_size.width(), max(dialog_size.height(), min(needed, 780)))
 
     def _choose_button(self, label: str):
         self.selected_button = str(label or '')
@@ -16216,6 +16342,11 @@ class BroccoliMessageDialog(QDialog):
                 f'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
                 f'font-size: 13px; color: {"#C6CBD4" if dark else "#4A4F58"};'
             )
+            for caption_lbl in getattr(self, '_picture_captions', []):
+                caption_lbl.setStyleSheet(
+                    f'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
+                    f'font-size: 12px; color: {"#8E8E93" if dark else "#A0A0A6"};'
+                )
             for button in getattr(self, '_dialog_buttons', []):
                 button.update_theme()
             self.update()
@@ -16280,6 +16411,19 @@ def _center_broccoli_dialog(dialog: QDialog, parent=None):
         parent_geometry = QRect(parent_widget.mapToGlobal(QPoint(0, 0)), parent_widget.size())
     dialog_geometry = dialog.frameGeometry()
     dialog_geometry.moveCenter(parent_geometry.center())
+    # The main window is away and the circle's answer card is out (style book 5.1.8): the dialog goes
+    # beside the card it belongs to — right of it, left when there is no room — not where the main
+    # window last was.
+    beside = getattr(parent_widget, 'dialog_anchor_rect', None)
+    beside = beside() if callable(beside) else None
+    if isinstance(beside, QRect) and not beside.isEmpty():
+        parent_geometry = QRect(beside)
+        beside_screen = QGuiApplication.screenAt(beside.center()) or QGuiApplication.primaryScreen()
+        room = beside_screen.availableGeometry() if beside_screen is not None else QRect(beside)
+        left = beside.right() + 1 + 12
+        if left + dialog_geometry.width() > room.right() + 1:
+            left = beside.left() - 12 - dialog_geometry.width()
+        dialog_geometry.moveTo(left, beside.bottom() + 1 - dialog_geometry.height())
     # Keep the whole dialog on a screen. The parent can be partly or fully off-screen (the
     # main window tucked against a screen edge leaves only a 2 pt sliver), and a dialog
     # centred on it would then open where nobody can see it.
@@ -16502,11 +16646,13 @@ def ask_broccoli_message(parent,
                          size: QSize | None = None,
                          force_dark: bool = False,
                          approval: bool = False,
-                         escape_button_text: str | None = None) -> str:
+                         escape_button_text: str | None = None,
+                         pictures: list | None = None) -> str:
     """approval=True: an approval with details (the MCP tool request) — shown as a Broccoli
     approval dialog like the terminal / computer-use ones, not as the system alert (that is
     for notices and quick questions). escape_button_text: what Esc / closing the dialog means
-    (for an approval its "Deny"; without it the default button was returned)."""
+    (for an approval its "Deny"; without it the default button was returned). pictures:
+    [(caption, QPixmap)] shown side by side under the message (before / after of a change)."""
     if native_alerts_available() and not approval:
         try:
             chosen = run_native_alert(parent, title, message, buttons, default_button_text, force_dark)
@@ -16524,6 +16670,7 @@ def ask_broccoli_message(parent,
         size=size,
         force_dark=force_dark,
         approval=approval,
+        pictures=pictures,
     )
     _center_broccoli_dialog(dialog, parent)
     dialog.exec()
@@ -17081,13 +17228,43 @@ def apply_native_titlebar(widget, normal_size_buttons=False, fixed_buttons=False
 
 def install_native_traffic_lights(cls, **options):
     """apply_native_titlebar for every window of `cls`, run just before each show (the native window
-    exists, but is not on screen yet)."""
+    exists, but is not on screen yet).
+    Also keeps the window's size when Qt rebuilds its native window to draw a web page: on the first
+    show of a window holding a web view, Qt (6.12) takes the window down and makes a new one that
+    draws with Metal; while the old one comes down it reports the title bar's 32 pt as lost, so the
+    new window came up that much shorter (the Open Connector console, docked as tall as the main
+    window, ended 32 pt short). The size from just before the rebuild is put back on the show that
+    follows — only when the drawing surface changed, so a rebuild of our own (the editor's
+    always-on-top switch) is left as it was."""
+    from PyQt6.QtGui import QPlatformSurfaceEvent
     original = cls.showEvent
+    original_event = cls.event
+
+    def event(self, ev, _original=original_event):
+        try:
+            if (ev.type() == QEvent.Type.PlatformSurface
+                    and ev.surfaceEventType() == QPlatformSurfaceEvent.SurfaceEventType.SurfaceAboutToBeDestroyed):
+                handle = self.windowHandle()
+                self._native_lights_rebuild = (QRect(self.geometry()),
+                                               handle.surfaceType() if handle is not None else None)
+        except Exception:
+            pass
+        return _original(self, ev)
 
     def showEvent(self, event, _original=original):
         apply_native_titlebar(self, **options)
         _original(self, event)
+        rebuild = getattr(self, '_native_lights_rebuild', None)
+        self._native_lights_rebuild = None
+        if rebuild is None:
+            return
+        wanted, surface_before = rebuild
+        handle = self.windowHandle()
+        if (handle is not None and surface_before is not None and handle.surfaceType() != surface_before
+                and wanted.isValid() and self.geometry() != wanted):
+            self.setGeometry(wanted)
 
+    cls.event = event
     cls.showEvent = showEvent
 
 
@@ -17815,6 +17992,194 @@ class ExternalMcpStdioDialog(QDialog):
                 f'color: {"#F2F2F7" if dark else "#20242B"}; '
                 'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; background: transparent;'
             )
+            for label in self.findChildren(QLabel):
+                if label is not self.title_lbl:
+                    label.setStyleSheet(
+                        f'color: {"#F2F2F7" if dark else "#20242B"}; '
+                        'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 12px; background: transparent;'
+                    )
+        finally:
+            self._theme_updating = False
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if self._theme_updating:
+            return
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            self._apply_theme()
+
+
+class ModelProfilesPickDialog(QDialog):
+    """Settings › Models › ⋯. mode 'share': pick the profiles to share; the code that opens the
+    file is shown and can be copied; "Share…" writes the file and opens the system share menu
+    (the dialog stays, so the code can still be copied). mode 'import': the profiles found in a
+    file, all picked; "Add" takes the picked ones. mode 'models' (Settings › Models ›
+    Subscriptions): the models the sign-ins give as profiles-to-be, none picked; "Add" takes the
+    picked ones. Rows are picked like in Finder (style book 5.3)."""
+    present_file = staticmethod(lambda path, anchor: present_model_share_file(path, anchor))
+
+    def __init__(self, parent=None, profiles: list | None = None, mode: str = 'share',
+                 selected_names: list | None = None, code: str = ''):
+        super().__init__(parent)
+        self._theme_updating = False
+        self._mode = mode if mode in ('import', 'models') else 'share'
+        self._profiles = [dict(profile) for profile in profiles or [] if isinstance(profile, dict)]
+        self._code = str(code or '')
+        self.shared_path = ''
+        self.setModal(True)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMinimumSize(560, 440)
+        self.resize(560, 440)
+        self._panel_margin = 18
+        self._panel_radius = APPROVAL_DIALOG_SMOOTH_RADIUS
+
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(40, 36, 40, 38)
+        root_layout.setSpacing(10)
+        sharing = self._mode == 'share'
+        importing = self._mode == 'import'
+        self.title_lbl = QLabel(_tr('Share model profiles') if sharing else
+                                _tr('Import model profiles') if importing else _tr('Add models as profiles'), self)
+        root_layout.addWidget(self.title_lbl)
+
+        headers = [_tr('Name'), _tr('Model'), _tr('Endpoint')] + ([_tr('Key')] if importing else [])
+        self.table = QTableWidget(0, len(headers), self)
+        self.table.setShowGrid(False)
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.table.setWordWrap(False)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0, 130 if importing else 150)
+        self.table.setColumnWidth(1, 120 if importing else 130)
+        if importing:
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+            self.table.setColumnWidth(3, 92)   # "••••abcd" whole
+        wanted = set(selected_names or [])
+        for profile in self._profiles:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            endpoint = str(profile.get('endpoint', '') or '')
+            local = model_share_endpoint_is_local(endpoint)
+            cells = [str(profile.get('name', '') or ''), str(profile.get('model', '') or ''), endpoint]
+            if importing:
+                cells.append(model_share_key_tail(profile.get('api_key', '')))
+            for column, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                tip = text
+                if column == 2 and local and self._mode != 'models':
+                    if sharing:
+                        tip = _tr('{endpoint} — a service on this Mac; it works for the other person only if the same service runs on their Mac.').format(endpoint=endpoint)
+                    else:
+                        tip = _tr('{endpoint} — a service on the Mac that shared it; it works here only if the same service runs on this Mac.').format(endpoint=endpoint)
+                item.setToolTip(tip)
+                self.table.setItem(row, column, item)
+            if importing or str(profile.get('name', '') or '') in wanted:
+                flags = PyQt6.QtCore.QItemSelectionModel.SelectionFlag
+                self.table.selectionModel().select(self.table.model().index(row, 0), flags.Select | flags.Rows)
+        root_layout.addWidget(self.table, 1)
+
+        self.code_input = None
+        self.copy_button = None
+        self.note_lbl = None
+        if sharing:
+            self.note_lbl = QLabel(_tr('The file holds the API keys of the profiles you pick. Only this code opens it: send the code another way than the file.'), self)
+            self.note_lbl.setWordWrap(True)
+            root_layout.addWidget(self.note_lbl)
+            code_row = QHBoxLayout()
+            code_row.setContentsMargins(0, 0, 0, 0)
+            code_row.setSpacing(8)
+            self.code_lbl = QLabel(_tr('Share code'), self)
+            self.code_input = QLineEdit(self)
+            self.code_input.setReadOnly(True)
+            self.code_input.setText(self._code)
+            self.code_input.setFixedHeight(22)
+            self.code_input.setFixedWidth(230)
+            self.copy_button = MacNormalButton(_tr('Copy'), self)
+            self.copy_button.setFixedWidth(96)
+            self.copy_button.clicked.connect(self._copy_code)
+            code_row.addWidget(self.code_lbl)
+            code_row.addWidget(self.code_input)
+            code_row.addWidget(self.copy_button)
+            code_row.addStretch()
+            root_layout.addLayout(code_row)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 10, 0, 0)
+        button_row.setSpacing(8)
+        button_row.addStretch()
+        self.cancel_button = MacNormalButton(_tr('Close') if sharing else _tr('Cancel'), self)
+        self.cancel_button.clicked.connect(self.reject)
+        self.ok_button = MacNormalButton(_tr('Share…') if sharing else _tr('Add'), self)
+        self.ok_button.clicked.connect(self._share if sharing else self.accept)
+        self.ok_button.setDefault(True)
+        btn_w = max(96, self.cancel_button.sizeHint().width(), self.ok_button.sizeHint().width())
+        self.cancel_button.setFixedWidth(btn_w)
+        self.ok_button.setFixedWidth(btn_w)
+        button_row.addWidget(self.cancel_button)
+        button_row.addWidget(self.ok_button)
+        root_layout.addLayout(button_row)
+
+        self.table.itemSelectionChanged.connect(self._sync_ok_button)
+        self._sync_ok_button()
+        self._apply_theme()
+
+    def selected_profiles(self) -> list:
+        rows = sorted(index.row() for index in self.table.selectionModel().selectedRows())
+        return [dict(self._profiles[row]) for row in rows if 0 <= row < len(self._profiles)]
+
+    def _sync_ok_button(self):
+        self.ok_button.setEnabled(bool(self.table.selectionModel().selectedRows()))
+
+    def _copy_code(self):
+        QApplication.clipboard().setText(self._code)
+
+    def _share(self):
+        chosen = self.selected_profiles()
+        if not chosen:
+            return
+        try:
+            self.shared_path = write_model_share_file(chosen, self._code)
+        except Exception as exc:
+            logging.exception('Could not write the model profiles file.')
+            show_broccoli_message(self, _tr('Share model profiles'),
+                                  _tr('Could not make the file: {error}').format(error=str(exc)[:200]))
+            return
+        type(self).present_file(self.shared_path, self.ok_button)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        dark = is_dark_theme(app)
+        panel_rect = QRectF(self._panel_margin, self._panel_margin,
+                            self.width() - self._panel_margin * 2, self.height() - self._panel_margin * 2)
+        bg_path = smooth_round_rect_path(panel_rect, self._panel_radius)
+        if not getattr(self, '_liquid_glass_active', False):   # the system glass is the card when it is on
+            painter.fillPath(bg_path, QColor('#2D2D2D' if dark else '#FFFFFF'))
+            painter.setPen(QPen(QColor('#3A3A3A' if dark else '#ECECEC'), 1))
+            painter.drawPath(bg_path)
+        painter.end()
+
+    def _apply_theme(self):
+        if self._theme_updating:
+            return
+        self._theme_updating = True
+        dark = is_dark_theme(app)
+        try:
+            self.title_lbl.setStyleSheet(
+                f'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 13px; '
+                f'font-weight: 600; color: {"#F2F2F7" if dark else "#20242B"};'
+            )
+            self.table.setStyleSheet(_settings_table_stylesheet(dark))
+            if self.code_input is not None:
+                self.code_input.setStyleSheet(_settings_lineedit_stylesheet(dark))
             for label in self.findChildren(QLabel):
                 if label is not self.title_lbl:
                     label.setStyleSheet(
@@ -19181,6 +19546,183 @@ def normalize_profile_entry(entry: dict, fallback_name: str) -> dict:
     return profile
 
 
+# ---- Sharing model profiles (2026-11-12, Ryan: "以更方便的方式向其他设备/朋友去分享……主要是那些 API 的
+# 信息"; editor_handoff/PLAN_20261112_内置CLIProxy_提示文字悬停_分享模型档案.md, part 3).
+# Settings › Models: the picked profiles (name, endpoint, key, model, timeout) become one file,
+# encrypted with a code Broccoli makes up; the file goes out through the system share menu, the
+# code another way. The other side picks the file, types the code and chooses which to add.
+# Nothing about who shared it (name, device) is in the file.
+MODEL_SHARE_FILE_EXT = 'broccolimodels'
+MODEL_SHARE_FORMAT = 'broccoli-models'
+MODEL_SHARE_VERSION = 1
+MODEL_SHARE_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'   # no I O 0 1: read aloud, typed by hand
+MODEL_SHARE_FIELDS = ('name', 'endpoint', 'append_v1', 'api_key', 'model', 'timeout')
+MODEL_SHARE_MAX_BYTES = 1024 * 1024
+MODEL_SHARE_MAX_PROFILES = 200
+MODEL_SHARE_SCRYPT_N = 2 ** 15
+
+
+class ModelShareError(ValueError):
+    """reason: 'not_a_share_file' | 'wrong_code' | 'newer_version'."""
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def new_model_share_code() -> str:
+    """20 characters in four groups (100 random bits)."""
+    chars = ''.join(secrets.choice(MODEL_SHARE_CODE_ALPHABET) for _ in range(20))
+    return '-'.join(chars[i:i + 5] for i in range(0, 20, 5))
+
+
+def normalize_model_share_code(text: str) -> str:
+    """The code as typed or pasted: case, dashes and spaces do not matter."""
+    return ''.join(ch for ch in str(text or '').upper() if ch in MODEL_SHARE_CODE_ALPHABET)
+
+
+def _model_share_key(code: str, salt: bytes, n: int) -> bytes:
+    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+    return Scrypt(salt=salt, length=32, n=n, r=8, p=1).derive(normalize_model_share_code(code).encode('ascii'))
+
+
+def model_share_pack(profiles: list, code: str) -> bytes:
+    """The share file's bytes for these profiles, opened only by `code`."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    if len(normalize_model_share_code(code)) < 16:
+        raise ValueError('The share code is too short.')
+    items = []
+    for index, profile in enumerate(profiles or []):
+        if isinstance(profile, dict):
+            clean = normalize_profile_entry(profile, f'Profile {index + 1}')
+            items.append({field: clean[field] for field in MODEL_SHARE_FIELDS})
+    salt, nonce = secrets.token_bytes(16), secrets.token_bytes(12)
+    body = json.dumps({'profiles': items}, ensure_ascii=False).encode('utf-8')
+    sealed = AESGCM(_model_share_key(code, salt, MODEL_SHARE_SCRYPT_N)).encrypt(
+        nonce, body, f'{MODEL_SHARE_FORMAT}:{MODEL_SHARE_VERSION}'.encode('ascii'))
+    envelope = {
+        'format': MODEL_SHARE_FORMAT, 'version': MODEL_SHARE_VERSION,
+        'kdf': 'scrypt', 'n': MODEL_SHARE_SCRYPT_N,
+        'salt': base64.b64encode(salt).decode('ascii'), 'nonce': base64.b64encode(nonce).decode('ascii'),
+        'data': base64.b64encode(sealed).decode('ascii'),
+    }
+    return json.dumps(envelope, indent=1).encode('utf-8')
+
+
+def model_share_unpack(data: bytes, code: str) -> list:
+    """The profiles in a share file. Raises ModelShareError."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.exceptions import InvalidTag
+    try:
+        if len(data) > MODEL_SHARE_MAX_BYTES:
+            raise ValueError('too large')
+        envelope = json.loads(bytes(data).decode('utf-8'))
+        if not isinstance(envelope, dict) or envelope.get('format') != MODEL_SHARE_FORMAT:
+            raise ValueError('not this format')
+        version = int(envelope.get('version', 0))
+        n = int(envelope.get('n', 0))
+        salt = base64.b64decode(str(envelope.get('salt', '')), validate=True)
+        nonce = base64.b64decode(str(envelope.get('nonce', '')), validate=True)
+        sealed = base64.b64decode(str(envelope.get('data', '')), validate=True)
+    except Exception:
+        raise ModelShareError('not_a_share_file') from None
+    if version > MODEL_SHARE_VERSION:
+        raise ModelShareError('newer_version')
+    # the cost comes from the file: only the sizes Broccoli writes (a huge one would hang the import)
+    if version < 1 or envelope.get('kdf') != 'scrypt' or n not in (2 ** 14, 2 ** 15, 2 ** 16, 2 ** 17) \
+            or len(salt) != 16 or len(nonce) != 12:
+        raise ModelShareError('not_a_share_file')
+    try:
+        body = AESGCM(_model_share_key(code, salt, n)).decrypt(
+            nonce, sealed, f'{MODEL_SHARE_FORMAT}:{version}'.encode('ascii'))
+    except InvalidTag:
+        raise ModelShareError('wrong_code') from None
+    try:
+        raw_items = json.loads(body.decode('utf-8')).get('profiles')
+        items = [item for item in raw_items if isinstance(item, dict)][:MODEL_SHARE_MAX_PROFILES]
+        profiles = [normalize_profile_entry({field: item[field] for field in MODEL_SHARE_FIELDS if field in item},
+                                            f'Profile {index + 1}')
+                    for index, item in enumerate(items)]
+    except Exception:
+        raise ModelShareError('not_a_share_file') from None
+    if not profiles:
+        raise ModelShareError('not_a_share_file')
+    return profiles
+
+
+def model_share_error_text(reason: str) -> str:
+    if reason == 'wrong_code':
+        return _tr('That code does not open this file.')
+    if reason == 'newer_version':
+        return _tr('This file was made by a newer Broccoli. Update Broccoli to open it.')
+    return _tr('This is not a Broccoli model profiles file.')
+
+
+def model_share_endpoint_is_local(endpoint: str) -> bool:
+    """The endpoint is a service on the sharer's own Mac (Ollama, a local proxy): the profile only
+    works where the same service runs."""
+    text = str(endpoint or '').strip()
+    try:
+        host = (urlparse(text if '://' in text else 'http://' + text).hostname or '').lower()
+    except Exception:
+        return False
+    return host in ('localhost', '::1', '0.0.0.0') or host.startswith('127.') or host.endswith('.local')
+
+
+def model_share_key_tail(api_key: str) -> str:
+    """What the import list shows of a key: only that there is one, and its last four characters."""
+    key = str(api_key or '').strip()
+    if not key:
+        return ''
+    return '••••' + key[-4:] if len(key) >= 12 else '••••'
+
+
+def add_shared_profiles(existing: list, incoming: list) -> list:
+    """Append the incoming profiles; a name already there gets " (2)", " (3)"… Returns the added ones."""
+    taken = {str(profile.get('name', '')) for profile in existing if isinstance(profile, dict)}
+    added = []
+    for index, profile in enumerate(incoming or []):
+        if not isinstance(profile, dict):
+            continue
+        clean = normalize_profile_entry(profile, f'Profile {index + 1}')
+        base, name, number = clean['name'], clean['name'], 2
+        while name in taken:
+            name = f'{base} ({number})'
+            number += 1
+        clean['name'] = name
+        taken.add(name)
+        existing.append(clean)
+        added.append(clean)
+    return added
+
+
+_MODEL_SHARE_TEMP_DIRS = []
+
+
+def write_model_share_file(profiles: list, code: str) -> str:
+    """The share file in a fresh temporary folder (the one from the previous share is removed)."""
+    for old in _MODEL_SHARE_TEMP_DIRS[:]:
+        shutil.rmtree(old, ignore_errors=True)
+        _MODEL_SHARE_TEMP_DIRS.remove(old)
+    import tempfile
+    folder = tempfile.mkdtemp(prefix='BroccoliModels-')
+    _MODEL_SHARE_TEMP_DIRS.append(folder)
+    path = os.path.join(folder, f'Broccoli models.{MODEL_SHARE_FILE_EXT}')
+    # a profile that goes through Broccoli's own subscription proxy travels without its key: the key
+    # only opens this Mac's proxy, and the sign-in behind it is the account itself — not shared
+    own = cli_proxy_load_state()
+    outgoing = [dict(profile, api_key='') if cli_proxy_profile_is_own(profile, own) else profile
+                for profile in profiles or [] if isinstance(profile, dict)]
+    with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as handle:
+        handle.write(model_share_pack(outgoing, code))
+    return path
+
+
+def present_model_share_file(path: str, anchor_widget) -> None:
+    """The system share menu under the button; where that cannot be shown, the file in Finder."""
+    if not present_icloud_share_window(path, anchor_widget):
+        reveal_in_finder(path)
+
+
 def default_specialized_profiles() -> dict:
     base = {'router': ''}
     for capability, _label in SPECIALIZED_CAPABILITIES:
@@ -19486,21 +20028,74 @@ def _first_existing_executable(paths: list[str]) -> str:
     return ''
 
 
+# The packaged app's own Python for the code runner (2026-11-12): a program next to the main one,
+# built from broccoli_python.py like the two workers. The packaged main program is NOT a Python
+# command: started with "-I -c <code>" it is a second Broccoli, which finds the first one running
+# and leaves with status 0 and no output — every piece of code "ran" and printed nothing.
+BUNDLED_PYTHON_RUNNER_NAME = 'BroccoliPython'
+
+
+def bundled_python_runner_path() -> str:
+    """Packaged app: the Python that ships inside it. From source (or a package without it): ''."""
+    if not getattr(sys, 'frozen', False):
+        return ''
+    candidate = Path(sys.executable).with_name(BUNDLED_PYTHON_RUNNER_NAME)
+    if sys.platform == 'win32':
+        candidate = candidate.with_suffix('.exe')
+    return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else ''
+
+
+def is_broccoli_main_program(command: str) -> bool:
+    """True when `command` is Broccoli's main program — this running one when packaged, or the one
+    of any Broccoli.app (….app/Contents/MacOS/Broccoli). It is never a code runner."""
+    raw = str(command or '').strip()
+    if not raw or not os.path.isabs(raw):
+        return False
+    if getattr(sys, 'frozen', False):
+        try:
+            if os.path.samefile(raw, sys.executable):
+                return True
+        except OSError:
+            pass
+    parts = Path(raw).parts
+    return (len(parts) >= 4 and parts[-1] == 'Broccoli' and parts[-2] == 'MacOS'
+            and parts[-3] == 'Contents' and parts[-4].endswith('.app'))
+
+
+def repointed_python_runner_command(command: str) -> str:
+    """A stored Python runner that points into a Broccoli app, put right for this run:
+      - Broccoli's main program (what the packaged app used to store) -> the Python found now;
+      - a packaged app's own Python -> this app's own when packaged (an app that was moved, renamed
+        or replaced keeps working); from source it is kept while it exists.
+    Anything else is the person's choice and comes back unchanged."""
+    raw = str(command or '').strip()
+    if is_broccoli_main_program(raw):
+        return auto_detect_code_runner_command('python')
+    if os.path.isabs(raw) and Path(raw).stem == BUNDLED_PYTHON_RUNNER_NAME:
+        own = bundled_python_runner_path()
+        if own:
+            return own
+        if not (os.path.isfile(raw) and os.access(raw, os.X_OK)):
+            return auto_detect_code_runner_command('python')
+    return raw
+
+
 def auto_detect_code_runner_command(language: str) -> str:
     lang = normalize_code_runner_language(language, '')
     if lang == 'python':
-        return _first_existing_executable(
-            [
-                sys.executable,
-                os.path.join(os.getcwd(), '.venv', 'bin', 'python3'),
-                os.path.join(str(Path.home()), 'Documents', 'A-workingfilewithp3.11', '.venv', 'bin', 'python3'),
-                'python3',
-                'python',
-                '/opt/homebrew/bin/python3',
-                '/usr/local/bin/python3',
-                '/usr/bin/python3',
-            ]
-        )
+        # packaged: the Python inside the app; from source: the Python running this file
+        candidates = [bundled_python_runner_path()]
+        if not getattr(sys, 'frozen', False):
+            candidates.append(sys.executable)
+        candidates += [
+            os.path.join(os.getcwd(), '.venv', 'bin', 'python3'),
+            'python3',
+            'python',
+            '/opt/homebrew/bin/python3',
+            '/usr/local/bin/python3',
+            '/usr/bin/python3',
+        ]
+        return _first_existing_executable(candidates)
     if lang == 'node':
         return _first_existing_executable(
             [
@@ -19544,6 +20139,8 @@ def normalize_code_runner_record(record, fallback_index: int = 1) -> dict | None
         return None
     language = normalize_code_runner_language(record.get('language', ''), f'runner{fallback_index}')
     command = str(record.get('command', '') or '').strip()
+    if language == 'python' and command:
+        command = repointed_python_runner_command(command)
     args = str(record.get('args', '') or '').strip() or default_code_runner_args(language)
     return {
         'language': language,
@@ -19627,8 +20224,11 @@ def _resolve_runner_command(command: str) -> str:
     if not raw:
         return ''
     if os.path.isabs(raw):
-        return raw if os.path.isfile(raw) and os.access(raw, os.X_OK) else ''
-    return shutil.which(raw) or ''
+        resolved = raw if os.path.isfile(raw) and os.access(raw, os.X_OK) else ''
+    else:
+        resolved = shutil.which(raw) or ''
+    # Broccoli's main program is not a runner for any language: starting it starts Broccoli
+    return '' if resolved and is_broccoli_main_program(resolved) else resolved
 
 
 def _build_runner_argv(command: str, args_template: str, code: str) -> list[str]:
@@ -21139,6 +21739,598 @@ def codexbar_bundled_binary_path() -> str:
     return bundled_component_binary_path('codexbar', CODEXBAR_BINARY_NAME)
 
 
+# ── Subscription sign-ins: the bundled CLIProxyAPI (2026-11-12) ─────────────────────────────
+# Ryan: "想把 vibeproxy 像其他的库一样整体地打包进来"; after the research: "只放内核". So Broccoli
+# ships the proxy program itself (router-for-me/CLIProxyAPI, MIT; cli_proxy/, refreshed by
+# external_update.py) and runs it as a child process — not the VibeProxy menu-bar app around it.
+# Plan: editor_handoff/PLAN_20261112_内置CLIProxy_提示文字悬停_分享模型档案.md, part 1.
+#  - It listens on 127.0.0.1 only. Its port and the key model profiles use are made once and kept
+#    (CLIProxy/state.json), so the profiles are ordinary ones: endpoint http://127.0.0.1:<port>,
+#    that key. A port taken by something else → a new one, and those profiles are pointed at it.
+#  - Sign-ins (one JSON file per account) live in Broccoli's own folder for this user, never in
+#    ~/.cli-proxy-api: an installed VibeProxy keeps its own, and both run side by side.
+#  - Settings › Models › Subscriptions signs in through the proxy's management interface
+#    (/v8/management, a key made anew at every start): ask for the page's address, open it in the
+#    browser, ask every second whether it is done.
+#  - It is started only when there is a sign-in, or when the page asks for one.
+#  - The program needs macOS 15; on an older system the page says so and nothing is started.
+CLI_PROXY_BINARY_NAME = 'cli-proxy-api'
+CLI_PROXY_DIR = os.path.join(BROCCOLI_USER_DATA_DIR, 'CLIProxy')
+CLI_PROXY_AUTH_DIR = os.path.join(CLI_PROXY_DIR, 'auth')
+CLI_PROXY_CONFIG_PATH = os.path.join(CLI_PROXY_DIR, 'config.yaml')
+CLI_PROXY_STATE_PATH = os.path.join(CLI_PROXY_DIR, 'state.json')       # port + the profiles' key
+CLI_PROXY_RUNNING_PATH = os.path.join(CLI_PROXY_DIR, 'running.json')   # pid of the child, to end a leftover
+CLI_PROXY_LOG_PATH = os.path.join(CLI_PROXY_DIR, 'server.log')
+CLI_PROXY_LOG_MAX_BYTES = 5 * 1024 * 1024
+CLI_PROXY_READY_SECONDS = 20.0
+CLI_PROXY_MAX_RESTARTS = 3
+CLI_PROXY_LOGIN_SECONDS = 300.0
+CLI_PROXY_MIN_MACOS = 15
+# what can be signed in to (the proxy's own provider names) and how the page calls them
+CLI_PROXY_PROVIDERS = (
+    ('claude', 'Claude'), ('codex', 'ChatGPT / Codex'), ('antigravity', 'Antigravity'),
+    ('kimi', 'Kimi'), ('xai', 'xAI Grok'), ('devin', 'Devin'), ('meta', 'Meta AI'),
+)
+CLI_PROXY_VIBEPROXY_PORTS = (8317, 8318)   # an installed VibeProxy's addresses (its profiles can be moved over)
+
+
+def cli_proxy_binary_path() -> str:
+    return bundled_component_binary_path('cli_proxy', CLI_PROXY_BINARY_NAME)
+
+
+def cli_proxy_manifest() -> dict:
+    binary = cli_proxy_binary_path()
+    if not binary:
+        return {}
+    try:
+        with open(os.path.join(os.path.dirname(binary), 'manifest.json'), encoding='utf-8') as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def cli_proxy_macos_ok() -> bool:
+    try:
+        import platform
+        return int((platform.mac_ver()[0] or '0').split('.')[0]) >= CLI_PROXY_MIN_MACOS
+    except Exception:
+        return False
+
+
+def cli_proxy_provider_label(provider: str) -> str:
+    provider = str(provider or '').strip().lower()
+    return dict(CLI_PROXY_PROVIDERS).get(provider, provider or '?')
+
+
+def cli_proxy_has_sign_ins() -> bool:
+    """A sign-in file is there (no need to run the proxy to know)."""
+    try:
+        return any(name.endswith('.json') for name in os.listdir(CLI_PROXY_AUTH_DIR))
+    except OSError:
+        return False
+
+
+def cli_proxy_load_state() -> dict:
+    try:
+        with open(CLI_PROXY_STATE_PATH, encoding='utf-8') as handle:
+            data = json.load(handle)
+    except Exception:
+        data = {}
+    data = data if isinstance(data, dict) else {}
+    try:
+        port = int(data.get('port', 0) or 0)
+    except Exception:
+        port = 0
+    key = str(data.get('client_key', '') or '')
+    return {'port': port if 1024 < port < 65536 else 0,
+            'client_key': key if re.fullmatch(r'[A-Za-z0-9_-]{24,128}', key) else ''}
+
+
+def cli_proxy_save_state(state: dict) -> None:
+    os.makedirs(CLI_PROXY_DIR, exist_ok=True)
+    os.chmod(CLI_PROXY_DIR, 0o700)
+    temp = CLI_PROXY_STATE_PATH + '.tmp'
+    with open(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w', encoding='utf-8') as handle:
+        json.dump({'port': int(state.get('port', 0) or 0), 'client_key': str(state.get('client_key', '') or '')}, handle)
+    os.replace(temp, CLI_PROXY_STATE_PATH)
+
+
+def cli_proxy_base_url(port: int) -> str:
+    return f'http://127.0.0.1:{int(port)}'
+
+
+def cli_proxy_config_text(port: int, client_key: str, management_key: str, auth_dir: str) -> str:
+    """The proxy's config.yaml (its v8 layout). Strings are JSON-quoted: YAML reads those as they are."""
+    return (
+        'server:\n'
+        '  host: 127.0.0.1\n'
+        f'  port: {int(port)}\n'
+        'management:\n'
+        '  allow-remote: false\n'
+        f'  secret-key: {json.dumps(str(management_key))}\n'
+        '  disable-control-panel: true\n'      # or it downloads its own web console at every start
+        'oauth:\n'
+        f'  auth-dir: {json.dumps(str(auth_dir))}\n'
+        'access:\n'
+        '  api-keys:\n'
+        f'    - {json.dumps(str(client_key))}\n'
+    )
+
+
+def cli_proxy_endpoint_port(endpoint: str) -> int:
+    """The port when the endpoint is this Mac itself (localhost / 127.0.0.1), else 0."""
+    text = str(endpoint or '').strip()
+    try:
+        parsed = urlparse(text if '://' in text else 'http://' + text)
+        if (parsed.hostname or '').lower() in ('localhost', '127.0.0.1'):
+            return int(parsed.port or 0)
+    except Exception:
+        pass
+    return 0
+
+
+def cli_proxy_profile_is_own(profile: dict, state: dict | None = None) -> bool:
+    """The profile goes through Broccoli's own proxy (its port and its key)."""
+    state = state if isinstance(state, dict) else cli_proxy_load_state()
+    return bool(state.get('port') and state.get('client_key')
+                and cli_proxy_endpoint_port((profile or {}).get('endpoint', '')) == state['port']
+                and str((profile or {}).get('api_key', '') or '') == state['client_key'])
+
+
+def cli_proxy_repoint_profiles(old_port: int, new_port: int, client_key: str) -> int:
+    """The proxy had to move to another port: the profiles that used the old one follow it."""
+    changed = []
+
+    def mutate(store):
+        for profile in store.get('profiles') or []:
+            if isinstance(profile, dict) and str(profile.get('api_key', '') or '') == client_key \
+                    and cli_proxy_endpoint_port(profile.get('endpoint', '')) == int(old_port):
+                profile['endpoint'] = cli_proxy_base_url(new_port)
+                changed.append(profile.get('name'))
+    if old_port and new_port and old_port != new_port and client_key:
+        try:
+            update_settings_store(mutate)
+        except Exception:
+            logging.exception('Pointing the proxy profiles at the new port failed.')
+    return len(changed)
+
+
+def _cli_proxy_reap_stale(binary: str) -> None:
+    """A proxy left over by a Broccoli that was killed still holds the port: end it. Only the
+    process recorded as ours, running our program."""
+    try:
+        with open(CLI_PROXY_RUNNING_PATH, encoding='utf-8') as handle:
+            pid = int((json.load(handle) or {}).get('pid', 0) or 0)
+    except Exception:
+        pid = 0
+    if pid <= 0 or pid == os.getpid():
+        return
+    try:
+        import psutil
+        process = psutil.Process(pid)
+        try:
+            exe = process.exe()
+        except Exception:
+            exe = ' '.join(process.cmdline()[:1])
+        if os.path.basename(exe) != os.path.basename(binary):
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except Exception:
+            process.kill()
+    except Exception:
+        pass
+
+
+def _cli_proxy_log_tail(lines: int = 5) -> str:
+    try:
+        with open(CLI_PROXY_LOG_PATH, 'rb') as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 4000))
+            text = handle.read().decode('utf-8', 'replace')
+    except Exception:
+        return ''
+    return '\n'.join([line.strip() for line in text.splitlines() if line.strip()][-lines:])
+
+
+def cli_proxy_open_login_page(url: str) -> None:
+    """The provider's sign-in page in the default browser."""
+    from PyQt6.QtGui import QDesktopServices
+    QDesktopServices.openUrl(QUrl(str(url)))
+
+
+class CliProxyRuntime(QObject):
+    """The bundled CLIProxyAPI as a child process of Broccoli (see the block above).
+    States: stopped · starting · running · error · unavailable (no program in this copy, or the
+    system is older than it needs)."""
+
+    state_changed = pyqtSignal(str, str)          # state, detail (already translated)
+    accounts_changed = pyqtSignal(list)           # [{'name', 'provider', 'account'}]
+    login_changed = pyqtSignal(str, str, str)     # provider, 'waiting' | 'done' | 'failed' | 'cancelled' | '', message
+    models_ready = pyqtSignal(object, list, str)  # token, [{'id', 'owned_by'}], error
+    _ready_result = pyqtSignal(object, bool, str)
+    _accounts_result = pyqtSignal(list)
+    _login_page = pyqtSignal(str)
+    _login_result = pyqtSignal(object, str, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._proc = None
+        self._port = 0
+        self._client_key = ''
+        self._management_key = ''
+        self._state = 'stopped'
+        self._detail = ''
+        self._wanted = False
+        self._restarts = 0
+        self._accounts = []
+        self._login = None            # {'provider', 'state', 'cancel': threading.Event}
+        self._after_ready = []        # what to do once it runs (a sign-in asked while it was stopped)
+        self._watch = QTimer(self)
+        self._watch.setInterval(4000)
+        self._watch.timeout.connect(self._check_alive)
+        self._ready_result.connect(self._on_ready_result, Qt.ConnectionType.QueuedConnection)
+        self._accounts_result.connect(self._on_accounts_result, Qt.ConnectionType.QueuedConnection)
+        self._login_page.connect(lambda url: cli_proxy_open_login_page(url), Qt.ConnectionType.QueuedConnection)
+        self._login_result.connect(self._finish_login, Qt.ConnectionType.QueuedConnection)
+
+    # ── state ──
+    @property
+    def state(self) -> str:
+        return self._state
+
+    @property
+    def detail(self) -> str:
+        return self._detail
+
+    @property
+    def port(self) -> int:
+        return self._port
+
+    @property
+    def client_key(self) -> str:
+        return self._client_key
+
+    @property
+    def accounts(self) -> list:
+        return [dict(account) for account in self._accounts]
+
+    def base_url(self) -> str:
+        return cli_proxy_base_url(self._port) if self._port else ''
+
+    def is_running(self) -> bool:
+        return self._state == 'running' and self._proc is not None and self._proc.poll() is None
+
+    def login_provider(self) -> str:
+        return str((self._login or {}).get('provider', '') or '')
+
+    def unavailable_reason(self) -> str:
+        if not cli_proxy_binary_path():
+            return _tr('This copy of Broccoli does not include the subscription proxy.')
+        if not cli_proxy_macos_ok():
+            return _tr('Subscription sign-ins need macOS {version} or later.').format(version=CLI_PROXY_MIN_MACOS)
+        return ''
+
+    def _set_state(self, state: str, detail: str = ''):
+        self._state = state
+        self._detail = str(detail or '')
+        self.state_changed.emit(self._state, self._detail)
+
+    # ── start / stop ──
+    def start_if_signed_in(self):
+        """At start-up: only when there is something to serve."""
+        if cli_proxy_has_sign_ins() and not self.unavailable_reason():
+            self.start()
+
+    def start(self):
+        self._wanted = True
+        if self._proc is not None and self._proc.poll() is None:
+            return
+        reason = self.unavailable_reason()
+        if reason:
+            self._set_state('unavailable', reason)
+            return
+        binary = cli_proxy_binary_path()
+        try:
+            os.makedirs(CLI_PROXY_AUTH_DIR, exist_ok=True)
+            os.chmod(CLI_PROXY_DIR, 0o700)
+            os.chmod(CLI_PROXY_AUTH_DIR, 0o700)
+            if not os.access(binary, os.X_OK) and os.access(binary, os.W_OK):
+                os.chmod(binary, 0o755)
+            _cli_proxy_reap_stale(binary)
+            state = cli_proxy_load_state()
+            client_key = state['client_key'] or secrets.token_urlsafe(32)
+            port = state['port']
+            if not port or not _open_connector_port_free(port):
+                port = _open_connector_free_port()
+            if port != state['port'] or client_key != state['client_key']:
+                cli_proxy_save_state({'port': port, 'client_key': client_key})
+                cli_proxy_repoint_profiles(state['port'], port, client_key)
+            management_key = secrets.token_urlsafe(32)
+            with open(os.open(CLI_PROXY_CONFIG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w',
+                      encoding='utf-8') as handle:
+                handle.write(cli_proxy_config_text(port, client_key, management_key, CLI_PROXY_AUTH_DIR))
+            if os.path.exists(CLI_PROXY_LOG_PATH) and os.path.getsize(CLI_PROXY_LOG_PATH) > CLI_PROXY_LOG_MAX_BYTES:
+                os.replace(CLI_PROXY_LOG_PATH, CLI_PROXY_LOG_PATH + '.1')
+            with open(CLI_PROXY_LOG_PATH, 'ab') as log:
+                proc = subprocess.Popen(
+                    [binary, '-config', CLI_PROXY_CONFIG_PATH], cwd=CLI_PROXY_DIR,
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True,
+                )
+        except Exception as exc:
+            logging.exception('Starting the subscription proxy failed.')
+            self._set_state('error', _tr('The subscription proxy could not be started: {error}').format(error=exc))
+            return
+        self._proc = proc
+        self._port, self._client_key, self._management_key = port, client_key, management_key
+        try:
+            with open(CLI_PROXY_RUNNING_PATH, 'w', encoding='utf-8') as handle:
+                json.dump({'pid': proc.pid, 'port': port, 'binary': binary, 'started_at': time.time()}, handle)
+        except Exception:
+            pass
+        self._set_state('starting', '')
+        threading.Thread(target=self._wait_ready, args=(proc, port), daemon=True, name='cli-proxy-ready').start()
+        self._watch.start()
+
+    def _wait_ready(self, proc, port: int):
+        import urllib.request
+        deadline = time.time() + CLI_PROXY_READY_SECONDS
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                self._ready_result.emit(proc, False, _cli_proxy_log_tail())
+                return
+            try:
+                with urllib.request.urlopen(f'{cli_proxy_base_url(port)}/healthz', timeout=1.0) as response:
+                    if int(response.status) == 200:
+                        self._ready_result.emit(proc, True, '')
+                        return
+            except Exception:
+                pass
+            time.sleep(0.1)
+        self._ready_result.emit(proc, False, _cli_proxy_log_tail())
+
+    def _on_ready_result(self, proc, ok: bool, log_tail: str):
+        if proc is not self._proc:
+            return   # an older start
+        waiting, self._after_ready = self._after_ready, []
+        if ok:
+            self._restarts = 0
+            self._set_state('running', _tr('Running on this Mac (port {port})').format(port=self._port))
+            self.refresh_accounts()
+            for action in waiting:
+                action()
+            return
+        self._terminate(proc)
+        self._proc = None
+        detail = _tr('The subscription proxy did not start.')
+        if log_tail:
+            detail += '\n' + log_tail
+        self._set_state('error', detail)
+        if self._login is not None:
+            provider, self._login = self._login['provider'], None
+            self.login_changed.emit(provider, 'failed', detail)
+
+    def _check_alive(self):
+        proc = self._proc
+        if proc is None or proc.poll() is None:
+            return
+        self._proc = None
+        if not self._wanted:
+            return
+        detail = _tr('The subscription proxy stopped unexpectedly.')
+        tail = _cli_proxy_log_tail()
+        if tail:
+            detail += '\n' + tail
+        self._set_state('error', detail)
+        if self._restarts < CLI_PROXY_MAX_RESTARTS:
+            self._restarts += 1
+            QTimer.singleShot(2000 * self._restarts, lambda: self.start() if self._wanted else None)
+
+    @staticmethod
+    def _terminate(proc, timeout: float = 2.0):
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=timeout)
+        except Exception:
+            try:
+                proc.kill()
+                proc.wait(timeout=1.0)
+            except Exception:
+                pass
+
+    def stop(self):
+        self._wanted = False
+        self._watch.stop()
+        self._after_ready = []
+        if self._login is not None:
+            self._login['cancel'].set()
+            self._login = None
+        proc, self._proc = self._proc, None
+        self._terminate(proc)
+        try:
+            os.remove(CLI_PROXY_RUNNING_PATH)
+        except Exception:
+            pass
+        if self._state != 'unavailable':
+            self._set_state('stopped', '')
+
+    # ── the management interface (called on worker threads) ──
+    def _manage(self, method: str, path: str, query: dict | None = None, timeout: float = 15.0) -> dict:
+        import urllib.request, urllib.error
+        from urllib.parse import urlencode
+        url = f'{cli_proxy_base_url(self._port)}/v8/management{path}'
+        if query:
+            url += '?' + urlencode(query)
+        request = urllib.request.Request(url, method=method, headers={'Authorization': f'Bearer {self._management_key}'})
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                data = json.loads(response.read().decode('utf-8', 'replace') or '{}')
+        except urllib.error.HTTPError as exc:
+            try:
+                data = json.loads(exc.read().decode('utf-8', 'replace') or '{}')
+            except Exception:
+                data = {}
+            data = data if isinstance(data, dict) else {}
+            data.setdefault('error', f'HTTP {exc.code}')
+            data['status'] = 'error'
+        return data if isinstance(data, dict) else {}
+
+    def _read_accounts(self) -> list:
+        accounts = []
+        for entry in self._manage('GET', '/credentials').get('files') or []:
+            if not isinstance(entry, dict) or not entry.get('name'):
+                continue
+            accounts.append({
+                'name': str(entry.get('name')),
+                'provider': str(entry.get('provider', '') or '').lower(),
+                'account': str(entry.get('email') or entry.get('account') or entry.get('label') or entry.get('name')),
+            })
+        return accounts
+
+    def refresh_accounts(self):
+        if not self.is_running():
+            self._on_accounts_result([])
+            return
+
+        def work():
+            try:
+                self._accounts_result.emit(self._read_accounts())
+            except Exception:
+                if self.is_running():   # stopped meanwhile: nothing to report
+                    logging.exception('Reading the subscription sign-ins failed.')
+        threading.Thread(target=work, daemon=True, name='cli-proxy-accounts').start()
+
+    def _on_accounts_result(self, accounts: list):
+        self._accounts = [dict(account) for account in accounts]
+        self.accounts_changed.emit(self.accounts)
+
+    # ── signing in / out ──
+    def begin_login(self, provider: str):
+        """Open the provider's sign-in page and wait for it. Starts the proxy first when it is
+        stopped. One sign-in at a time."""
+        provider = str(provider or '').strip().lower()
+        if not provider or self._login is not None:
+            return
+        reason = self.unavailable_reason()
+        if reason:
+            self.login_changed.emit(provider, 'failed', reason)
+            return
+        login = {'provider': provider, 'state': '', 'cancel': threading.Event()}
+        self._login = login
+        self.login_changed.emit(provider, 'waiting', '')
+        if self.is_running():
+            self._run_login(login)
+        else:
+            self._after_ready.append(lambda: self._run_login(login))
+            self.start()
+
+    def _run_login(self, login: dict):
+        def finish(result: str, message: str = ''):
+            self._login_result.emit(login, result, message)   # worker thread → main thread
+
+        def work():
+            try:
+                before = {account['name'] for account in self._read_accounts()}
+                # is_webui: only then does the proxy open the port the provider's page comes back to
+                # (localhost:54545 for Claude, 1455 for Codex …) and pass the answer on to itself.
+                # Without it nothing listens there and the browser ends on "localhost refused to
+                # connect" (Ryan, 2026-11-13) — that way is for its own command line, which listens itself.
+                reply = self._manage('GET', '/oauth/auth-url', {'provider': login['provider'], 'is_webui': 'true'})
+                url, login['state'] = str(reply.get('url', '') or ''), str(reply.get('state', '') or '')
+                if not url or not login['state']:
+                    finish('failed', str(reply.get('error', '') or _tr('The proxy gave no sign-in page.')))
+                    return
+                if login['cancel'].is_set():
+                    finish('cancelled')
+                    return
+                self._login_page.emit(url)
+                deadline = time.time() + CLI_PROXY_LOGIN_SECONDS
+                while time.time() < deadline:
+                    if login['cancel'].wait(1.0):
+                        try:
+                            self._manage('DELETE', '/oauth/session', {'state': login['state']})
+                        except Exception:
+                            pass
+                        finish('cancelled')
+                        return
+                    status = self._manage('GET', '/oauth/status', {'state': login['state']})
+                    word = str(status.get('status', '') or '').lower()
+                    if word == 'wait':
+                        continue
+                    accounts = self._read_accounts()
+                    if word != 'error' or {account['name'] for account in accounts} - before:
+                        self._accounts_result.emit(accounts)
+                        finish('done')
+                    else:
+                        finish('failed', str(status.get('error', '') or ''))
+                    return
+                try:
+                    self._manage('DELETE', '/oauth/session', {'state': login['state']})
+                except Exception:
+                    pass
+                finish('failed', _tr('Nobody signed in within {minutes} minutes.').format(
+                    minutes=int(CLI_PROXY_LOGIN_SECONDS // 60)))
+            except Exception as exc:
+                logging.exception('Signing in through the subscription proxy failed.')
+                finish('failed', str(exc)[:300])
+        threading.Thread(target=work, daemon=True, name='cli-proxy-login').start()
+
+    def _finish_login(self, login: dict, result: str, message: str):
+        if self._login is not login:
+            return
+        self._login = None
+        self.login_changed.emit(login['provider'], result, message)
+
+    def cancel_login(self):
+        if self._login is not None:
+            self._login['cancel'].set()
+            if not self.is_running():            # still starting: nothing to wait for
+                self._after_ready = []
+                login, self._login = self._login, None
+                self.login_changed.emit(login['provider'], 'cancelled', '')
+
+    def sign_out(self, name: str):
+        if not self.is_running() or not name:
+            return
+
+        def work():
+            try:
+                self._manage('DELETE', '/credentials', {'name': str(name)})
+                self._accounts_result.emit(self._read_accounts())
+            except Exception:
+                logging.exception('Signing out of a subscription failed.')
+        threading.Thread(target=work, daemon=True, name='cli-proxy-sign-out').start()
+
+    # ── the models the sign-ins give ──
+    def fetch_models(self, token=None):
+        """models_ready(token, [{'id', 'owned_by'}], error) on the main thread."""
+        if not self.is_running():
+            self.models_ready.emit(token, [], _tr('The subscription proxy is not running.'))
+            return
+        port, key = self._port, self._client_key
+
+        def work():
+            import urllib.request
+            models, error = [], ''
+            try:
+                request = urllib.request.Request(f'{cli_proxy_base_url(port)}/v1/models',
+                                                 headers={'Authorization': f'Bearer {key}'})
+                with urllib.request.urlopen(request, timeout=15.0) as response:
+                    data = json.loads(response.read().decode('utf-8', 'replace') or '{}')
+                for entry in (data.get('data') if isinstance(data, dict) else None) or []:
+                    if isinstance(entry, dict) and entry.get('id'):
+                        models.append({'id': str(entry['id']), 'owned_by': str(entry.get('owned_by', '') or '')})
+            except Exception as exc:
+                error = str(exc)[:300]
+            self.models_ready.emit(token, models, error)
+        threading.Thread(target=work, daemon=True, name='cli-proxy-models').start()
+
+
 def codexbar_bundled_manifest() -> dict:
     binary = codexbar_bundled_binary_path()
     if not binary:
@@ -21853,8 +23045,40 @@ AI_TASKS_START_TIMEOUT_S = 240       # the first start reads every transcript on
 AI_TASK_STATE_RUNNING = 'running'
 AI_TASK_STATE_DONE = 'done'
 AI_TASK_STATE_STALLED = 'stalled'
+# 2026-11-12 (Ryan: "只能知道新消息来了，但是不知道这个新消息是不是任务完成的新消息"; looks picked by him):
+#   waiting = the session needs the person: it asked through its question tool, or (with the hooks
+#             on) it waits for an approval. Orange, filled.
+#   failed  = the turn ended on an error (usage limit, sign-in, server), not on an answer. Red ring.
+# And a turn that ended while work it started in the background is still out is not done: running.
+AI_TASK_STATE_WAITING = 'waiting'
+AI_TASK_STATE_FAILED = 'failed'
 AI_TASK_STATUS_COLORS = {AI_TASK_STATE_RUNNING: '#8E8E93', AI_TASK_STATE_DONE: '#34C759',
-                         AI_TASK_STATE_STALLED: '#8E8E93'}
+                         AI_TASK_STATE_STALLED: '#8E8E93', AI_TASK_STATE_WAITING: '#FF9F0A',
+                         AI_TASK_STATE_FAILED: '#FF453A'}
+AI_TASK_NEWS_STATES = (AI_TASK_STATE_DONE, AI_TASK_STATE_WAITING, AI_TASK_STATE_FAILED)   # the dots come up
+AI_TASK_SOUND_STATES = (AI_TASK_STATE_DONE, AI_TASK_STATE_WAITING)                        # ... with the sound
+AI_TASK_TAIL_BYTES = 1048576          # how much of a transcript's end is read
+AI_TASK_CLAUDE_QUESTION_TOOLS = ('AskUserQuestion',)
+AI_TASK_HOOKS_KEY = 'ai_tasks_hooks'
+# 2026-11-12 (Ryan: "15 分钟吧"; "不说卡住了，只描述问题的现象，就是现在没有动静"; "设一个 reminder
+# 推到苹果全系统上"): a session that is not finished and has said nothing for AI_TASKS_STALL_SECONDS
+# gets one reminder in Reminders (every Apple device rings), ticked off when it moves again.
+AI_TASKS_QUIET_REMINDER_KEY = 'ai_tasks_quiet_reminder'
+AI_TASK_QUIET_REMINDER_PATH_PREFIX = 'ai-task-quiet:'   # the reminder queue's "path" for these
+AI_TASK_USAGE_FLAT_SECONDS = 10 * 60   # usage readings this far apart, all the same = "did not change"
+# 2026-11-13 (Ryan: "做"): a task that waits for the person (orange: an approval, a question) and got
+# no answer for this long gets the same kind of reminder — the dots and the sound reach nobody who
+# is away. Same switch; ticked off when it goes on.
+AI_TASK_WAITING_REMINDER_SECONDS = 2 * 60
+AI_TASK_HOOKS_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'AITaskHooks')
+AI_TASK_HOOK_SCRIPT_NAME = 'broccoli-ai-task-hook'
+AI_TASK_HOOK_EVENTS_NAME = 'events.jsonl'
+AI_TASK_HOOK_EVENTS_MAX_BYTES = 2 * 1024 * 1024   # the events file is emptied past this size
+AI_TASK_HOOK_WAIT_SECONDS = 6 * 3600              # an approval nobody answered is forgotten after this
+AI_TASK_HOOK_EVENTS = {
+    'claude': ('PermissionRequest', 'PostToolUse', 'Stop', 'StopFailure', 'UserPromptSubmit', 'SessionEnd'),
+    'codex': ('PermissionRequest', 'PostToolUse', 'Stop', 'UserPromptSubmit'),
+}
 AI_TASK_BROCCOLI_PROVIDER = 'broccoli'
 # agentsview's tool name → the usage bars' provider name, so one company wears one color
 AI_TASK_PROVIDER_ALIASES = {
@@ -21991,16 +23215,180 @@ def ai_task_transcript_tail(path: str, agent: str) -> tuple:
     none seen. The time is the session's latest news, not the file's: Claude Code appends undated
     bookkeeping (cost-state, last-prompt, titles) to a whole batch of old transcripts when it starts
     again (11-06 14:48 thirteen at once), so their file time moves though nothing happened there."""
-    line_state = _ai_task_claude_line_state if agent == 'claude' else _ai_task_codex_line_state
+    reading = ai_task_transcript_reading(path, agent)
+    return reading['state'], reading['said']
+
+
+_AI_TASK_RETURNED_ID = re.compile(rb'<task-id>([^<]+)</task-id>')
+
+
+def _ai_task_background_id(result) -> str:
+    """The id of background work a Claude Code tool result says it started ('' = none): a command
+    sent to the background, a sub-agent started without waiting, a workflow, a monitor."""
+    if not isinstance(result, dict):
+        return ''
+    for key in ('backgroundTaskId', 'taskId'):
+        if isinstance(result.get(key), str) and result[key]:
+            return result[key]
+    if result.get('isAsync') and isinstance(result.get('agentId'), str):
+        return result['agentId']
+    return ''
+
+
+def ai_task_claude_reading(path: str) -> dict:
+    """What the end of a Claude Code transcript says: {'state', 'reason', 'said'}.
+    state   'done' / 'running' / 'stopped' / 'waiting' / 'failed' ('' = nothing readable)
+    reason  running: 'background' = the turn ended but work it started is still out (Claude Code
+            goes on by itself when that comes back — measured 11-12: 293 of about 757 turn ends);
+            waiting: 'question' = it asked through its question tool; failed: Claude Code's own
+            word for the error (rate_limit, authentication_failed, server_error ...)
+    said    time of the newest dated line, 0.0 = none
+    Work coming back shows as <task-id>…</task-id> with the same id, on a user line or a queue line:
+    every raw line is searched for it. Read oldest first, so the last line that says something wins."""
+    started, returned = [], set()
+    state, reason, said = '', '', ''
+    with open(path, 'rb') as handle:
+        handle.seek(0, os.SEEK_END)
+        begin = max(0, handle.tell() - AI_TASK_TAIL_BYTES)
+        handle.seek(begin)
+        lines = handle.read().split(b'\n')
+    for raw in lines[1:] if begin > 0 else lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        if b'<task-id>' in raw:
+            returned.update(found.decode('utf-8', 'replace') for found in _AI_TASK_RETURNED_ID.findall(raw))
+        try:
+            item = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        if item.get('timestamp'):
+            said = item['timestamp']
+        if item.get('isSidechain'):
+            continue
+        kind = item.get('type')
+        message = item.get('message') if isinstance(item.get('message'), dict) else {}
+        if kind == 'assistant':
+            if item.get('isApiErrorMessage') or item.get('error'):
+                state, reason = AI_TASK_STATE_FAILED, str(item.get('error') or 'error')
+                continue
+            if str(message.get('stop_reason', '') or '') in ('', 'tool_use', 'pause_turn'):
+                state, reason = AI_TASK_STATE_RUNNING, ''   # a step of the turn, or still being written
+                for block in message.get('content') if isinstance(message.get('content'), list) else []:
+                    if (isinstance(block, dict) and block.get('type') == 'tool_use'
+                            and block.get('name') in AI_TASK_CLAUDE_QUESTION_TOOLS):
+                        state, reason = AI_TASK_STATE_WAITING, 'question'
+            else:
+                state, reason = AI_TASK_STATE_DONE, ''
+        elif kind == 'user':
+            task = _ai_task_background_id(item.get('toolUseResult'))
+            if task:
+                started.append(task)
+            line = _ai_task_claude_line_state(item)
+            if line:
+                state, reason = line, ''
+    if state == AI_TASK_STATE_DONE and any(task not in returned for task in started):
+        state, reason = AI_TASK_STATE_RUNNING, 'background'
+    return {'state': state, 'reason': reason, 'said': _ai_task_time(said)}
+
+
+def ai_task_transcript_reading(path: str, agent: str) -> dict:
+    """{'state', 'reason', 'said'} from the end of a Claude Code transcript or a Codex rollout."""
+    if agent == 'claude':
+        return ai_task_claude_reading(path)
     state, said = '', 0.0
     for item in _ai_task_tail_items(path):
         if not said:
             said = _ai_task_time(item.get('timestamp'))
         if not state:
-            state = line_state(item)
+            state = _ai_task_codex_line_state(item)
         if state and said:
             break
-    return state, said
+    return {'state': state, 'reason': '', 'said': said}
+
+
+# ---- OpenClaw: its sessions live in its own database, not in a file each ---------------------------
+def ai_task_openclaw_source(file_path: str) -> tuple:
+    """agentsview's path for an OpenClaw session, '<database>#<agent>:<session id>' → (database,
+    session id); ('', '') for anything else."""
+    database, _, rest = str(file_path or '').partition('#')
+    return (database, rest.rsplit(':', 1)[-1]) if database.endswith('.sqlite') and rest else ('', '')
+
+
+def ai_task_openclaw_reading(file_path: str) -> dict:
+    """An OpenClaw session from OpenClaw's own database, opened read-only: {'state', 'reason',
+    'said', 'key'}; key = the session's key (its address in OpenClaw's own page).
+    OpenClaw stores a run's outcome with the session (done / failed / timeout / killed / interrupted)
+    and clears it when the next run starts, so: an outcome = that; none = the newest readable line
+    decides (an answer that asks for a tool, a question, a tool's result = running). agentsview gives
+    no end for OpenClaw at all, which left "the last line is an answer and 8 s were quiet"."""
+    database, session_id = ai_task_openclaw_source(file_path)
+    reading = {'state': '', 'reason': '', 'said': 0.0, 'key': ''}
+    if not database or not os.path.isfile(database):
+        return reading
+    import sqlite3
+    try:
+        connection = sqlite3.connect('file:' + database + '?mode=ro', uri=True, timeout=1.0)
+    except sqlite3.Error:
+        return reading
+    try:
+        row = connection.execute('select session_key, status from session_windows where session_id = ?',
+                                 (session_id,)).fetchone()
+        outcome = ''
+        if row:
+            reading['key'], outcome = str(row[0] or ''), str(row[1] or '').strip().lower()
+        if outcome == 'done':
+            reading['state'] = AI_TASK_STATE_DONE
+        elif outcome in ('failed', 'timeout'):
+            reading['state'], reading['reason'] = AI_TASK_STATE_FAILED, outcome
+        elif outcome in ('killed', 'interrupted'):
+            reading['state'] = 'stopped'
+        rows = connection.execute('select event_json, created_at from transcript_events where session_id = ? '
+                                  'order by seq desc limit 40', (session_id,)).fetchall()
+        for event_json, created in rows:
+            if not reading['said'] and created:
+                reading['said'] = float(created) / 1000.0
+            if reading['state']:
+                break
+            if not event_json:
+                continue   # kept compressed (a long line): says nothing here
+            try:
+                event = json.loads(event_json)
+            except ValueError:
+                continue
+            message = event.get('message') if isinstance(event, dict) and isinstance(event.get('message'), dict) else {}
+            role = message.get('role')
+            if role == 'assistant':
+                reading['state'] = (AI_TASK_STATE_RUNNING if message.get('stopReason') in ('toolUse', '', None)
+                                    else AI_TASK_STATE_DONE)
+            elif role in ('user', 'toolResult'):
+                reading['state'] = AI_TASK_STATE_RUNNING
+    except (sqlite3.Error, ValueError, TypeError):
+        pass
+    finally:
+        connection.close()
+    return reading
+
+
+def openclaw_gateway_port(home: str = '') -> int:
+    """The port OpenClaw's own page is served on (its settings file; 18789 when it names none)."""
+    try:
+        with open(os.path.join(home or os.path.expanduser('~'), '.openclaw', 'openclaw.json'),
+                  encoding='utf-8') as handle:
+            port = int((json.load(handle).get('gateway') or {}).get('port') or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        port = 0
+    return port if 0 < port < 65536 else 18789
+
+
+def ai_task_openclaw_url(session_key: str, port: int) -> str:
+    """OpenClaw's page on one session (its docs, web/urls.md: this form is taken and rewritten to
+    the current path form by the page itself)."""
+    from urllib.parse import quote
+    base = 'http://127.0.0.1:{}/chat'.format(int(port))
+    return base + '?session=' + quote(session_key, safe=':') if session_key else base
 
 
 def ai_task_claude_tail_state(path: str) -> str:
@@ -22040,6 +23428,8 @@ def _ai_task_time(value) -> float:
 
 def ai_task_session_state(session: dict, now: float, activity: float, tail_state: str = '') -> str:
     """running / done / stalled for one agentsview session (tail_state: read from its transcript)."""
+    if tail_state in (AI_TASK_STATE_WAITING, AI_TASK_STATE_FAILED):
+        return tail_state   # however long ago: it still waits for the person / still ended on the error
     state = tail_state if tail_state in (AI_TASK_STATE_DONE, AI_TASK_STATE_RUNNING, 'stopped') else ''
     if not state:
         status = str(session.get('termination_status', '') or '')
@@ -22107,7 +23497,10 @@ def ai_task_session_wanted(session: dict, disabled_agents=(), codex_meta: dict |
     return True
 
 
-def ai_task_item_from_session(session: dict, state: str, activity: float, codex_meta: dict | None = None) -> dict:
+def ai_task_item_from_session(session: dict, state: str, activity: float, codex_meta: dict | None = None,
+                              reason: str = '', session_key: str = '') -> dict:
+    """reason: why it is in this state when the state alone does not say (ai_task_claude_reading,
+    'approval' from the hooks); session_key: OpenClaw's own name for the session."""
     agent = str(session.get('agent', '') or '').strip().lower()
     entrypoint = str(session.get('entrypoint', '') or '')
     in_vscode = entrypoint.endswith('vscode') or '"vscode"' in (codex_meta or {}).get('source', '')
@@ -22126,24 +23519,126 @@ def ai_task_item_from_session(session: dict, state: str, activity: float, codex_
         'file_path': str(session.get('file_path', '') or ''),
         'entrypoint': entrypoint,
         'source': 'vscode' if in_vscode else 'terminal',
+        'originator': str((codex_meta or {}).get('originator', '') or ''),
+        'session_key': session_key,
         'state': state,
+        # stalled: 'quiet' = nothing new for AI_TASKS_STALL_SECONDS, 'stopped' = the person interrupted it
+        'reason': reason if state in (AI_TASK_STATE_RUNNING, AI_TASK_STATE_WAITING, AI_TASK_STATE_FAILED,
+                                      AI_TASK_STATE_STALLED) else '',
         'activity': activity,
     }
+
+
+def ai_task_is_quiet(item: dict) -> bool:
+    """Not finished, and no news for AI_TASKS_STALL_SECONDS (not: interrupted by the person)."""
+    return (item.get('kind') == 'session' and item.get('state') == AI_TASK_STATE_STALLED
+            and item.get('reason') == 'quiet')
+
+
+def ai_task_usage_flat(history, now: float, span: float = AI_TASK_USAGE_FLAT_SECONDS) -> bool:
+    """history: [(time, used values)] of one provider's usage readings, oldest first. True when the
+    readings of the last `span` seconds reach back that far and all say the same — said beside
+    "no news", never the reason for it."""
+    slack = 7 * 60   # readings come every five minutes
+    window = [(when, used) for when, used in history or [] if used and now - when <= span + slack]
+    if len(window) < 2 or now - window[0][0] < span or now - window[-1][0] > slack:
+        return False   # they do not cover the time, or the newest is old
+    return all(used == window[-1][1] for when, used in window)
+
+
+def ai_task_is_waiting_long(item: dict) -> bool:
+    """It has waited for the person (an approval, a question) for AI_TASK_WAITING_REMINDER_SECONDS."""
+    return (item.get('kind') == 'session' and item.get('state') == AI_TASK_STATE_WAITING
+            and bool(item.get('overdue')))
+
+
+def ai_task_reminder_kind(item: dict) -> str:
+    """'quiet' / 'waiting' = this task should have a reminder in Reminders right now, '' = not."""
+    return 'quiet' if ai_task_is_quiet(item) else 'waiting' if ai_task_is_waiting_long(item) else ''
+
+
+def ai_task_quiet_reminder_key(item: dict) -> str:
+    """One reminder per quiet stretch (the task and the time of its last news), one per wait (the
+    task and since when it waits)."""
+    if ai_task_is_waiting_long(item):
+        return '{}{}:w{}'.format(AI_TASK_QUIET_REMINDER_PATH_PREFIX, item.get('key', ''),
+                                 int(item.get('waiting_since') or 0))
+    return '{}{}:{}'.format(AI_TASK_QUIET_REMINDER_PATH_PREFIX, item.get('key', ''), int(item.get('activity') or 0))
+
+
+def ai_task_quiet_reminder_text(item: dict, usage_flat: bool = False) -> tuple:
+    """(title, body) of the "no news" reminder — what is seen, not a guess at why — or of the
+    "waits for you" one."""
+    minutes = int(AI_TASKS_STALL_SECONDS // 60)
+    waiting = ai_task_is_waiting_long(item)
+    if waiting:
+        title = (_tr('{tool} · asked you a question') if item.get('reason') == 'question'
+                 else _tr('{tool} · waits for your approval')).format(tool=item.get('label', ''))
+    else:
+        title = _tr('{tool} · no news for {n} minutes').format(tool=item.get('label', ''), n=minutes)
+    subject = ' '.join(str(item.get('title', '') or '').split())
+    if len(subject) > 80:
+        subject = subject[:80].rstrip() + '…'
+    if subject:
+        title += ' · ' + subject
+    where = ai_task_where_text(item)
+    folder = os.path.basename(str(item.get('cwd', '') or '').rstrip('/'))
+    if folder:
+        where += ' · ' + folder
+    activity = float(item.get('activity') or 0)
+    lines = []
+    since = float(item.get('waiting_since') or 0)
+    if waiting and since:
+        lines.append(_tr('Waiting since {time}.').format(
+            time=datetime.datetime.fromtimestamp(since).strftime('%H:%M')))
+    elif activity:
+        lines.append(_tr('Last news at {time}.').format(
+            time=datetime.datetime.fromtimestamp(activity).strftime('%H:%M')))
+    lines.append(_tr('In {where}.').format(where=where))
+    if usage_flat and not waiting:
+        lines.append(_tr('{tool}’s usage did not change in this time either.').format(tool=item.get('label', '')))
+    lines.append(_tr('Seen by Broccoli on the Mac “{mac}”.'))   # {mac}: filled in by the queue
+    return title, '\n'.join(lines)
 
 
 class AITaskTracker:
     """Which tasks just finished a turn, and which finished ones the user has not looked at. Pure
     bookkeeping (no Qt, no I/O), fed the whole task list each time it changes. What was already
-    done when Broccoli first looked is old news (seen)."""
+    done when Broccoli first looked is old news (seen).
+    Also who just went quiet / moved again (ai_task_is_quiet), for the "no news" reminder: after
+    each update, went_quiet = the items that were running at the last look and are quiet now,
+    left_quiet = the reminder keys of those that were quiet and are not any more."""
 
     def __init__(self):
         self._states = {}      # key -> state last fed
         self._episodes = {}    # key -> number of its current "done" stretch
         self._seen = {}        # key -> the stretch the user looked at
+        self._quiet = {}       # key -> the reminder key of its current quiet stretch ('' = none sent)
         self._primed = False
+        self.went_quiet = []
+        self.left_quiet = []
 
     def update(self, items) -> list:
         finished = []
+        self.went_quiet, self.left_quiet = [], []
+        for item in items:
+            # two reasons for a reminder (2026-11-13: the second, Ryan "做"): no news for 15 minutes,
+            # or it has waited for the person for AI_TASK_WAITING_REMINDER_SECONDS
+            key, kind = item['key'], ai_task_reminder_kind(item)
+            held = self._quiet.get(key)
+            if held is not None and held[0] != kind:
+                self._quiet.pop(key)
+                if held[1]:
+                    self.left_quiet.append(held[1])
+                held = None
+            if kind and held is None:
+                # old news is not told: quiet at the first look (only one seen running before
+                # counts), or already waiting that long when Broccoli first saw the task
+                told = self._primed and (self._states.get(key) == AI_TASK_STATE_RUNNING if kind == 'quiet'
+                                         else key in self._states)
+                self._quiet[key] = (kind, ai_task_quiet_reminder_key(item) if told else '')
+                if told:
+                    self.went_quiet.append(item)
         for item in items:
             key, state = item['key'], item['state']
             previous = self._states.get(key)
@@ -22153,6 +23648,8 @@ class AITaskTracker:
                     finished.append(item)
                 else:
                     self._seen[key] = self._episodes[key]
+            elif state in AI_TASK_NEWS_STATES and previous != state and self._primed:
+                finished.append(item)   # it now waits for the person, or its turn ended on an error
             self._states[key] = state
         self._primed = True
         for item in items:
@@ -22166,12 +23663,38 @@ class AITaskTracker:
         self._seen[key] = self._episodes.get(key, 0)
 
 
+# Right presses on these places (global points) go straight through the right-drag watch, unheld: the
+# 🥦 circle, its tray's cards and its input box take the right button themselves (style book 5.1.7 —
+# a right click on the circle opens the box, a right drag on it is kept for the scan). Rebuilt as a
+# whole tuple on the main thread; the watch's own thread only reads it (no lock needed).
+_RIGHT_DRAG_PASS = {}
+RIGHT_DRAG_PASS_RECTS = ()
+
+
+def set_right_drag_pass_rect(name: str, rect=None):
+    """Where `name` (a window of Broccoli's) takes right presses itself now; None = nowhere."""
+    global RIGHT_DRAG_PASS_RECTS
+    if rect is None or rect.isEmpty():
+        _RIGHT_DRAG_PASS.pop(name, None)
+    else:
+        _RIGHT_DRAG_PASS[name] = (float(rect.x()), float(rect.y()), float(rect.width()), float(rect.height()))
+    RIGHT_DRAG_PASS_RECTS = tuple(_RIGHT_DRAG_PASS.values())
+
+
+def right_drag_passes(x: float, y: float) -> bool:
+    for left, top, width, height in RIGHT_DRAG_PASS_RECTS:
+        if left <= x < left + width and top <= y < top + height:
+            return True
+    return False
+
+
 class AITaskRightDragGesture:
     """Hold the right button, move up, let go → the AI task column. Pure bookkeeping (no Quartz):
     press() says whether to hold the press back (not with ⌘ ⌥ ⌃ ⇧ held: that right-click goes
-    through untouched); release() compares only where the button went down and came up (screen
-    points, growing downward) and says OPEN (keep the release too) or REPLAY (give the app the
-    press it has not had, where it was: its menu opens)."""
+    through untouched; nor on the circle and its own windows, RIGHT_DRAG_PASS_RECTS); release()
+    compares only where the button went down and came up (screen points, growing downward) and says
+    OPEN (keep the release too) or REPLAY (give the app the press it has not had, where it was: its
+    menu opens)."""
     OPEN = 'open'
     REPLAY = 'replay'
 
@@ -22186,7 +23709,8 @@ class AITaskRightDragGesture:
         return self.origin is not None
 
     def press(self, x: float, y: float, modifiers: bool = False) -> bool:
-        self.origin = None if modifiers else (float(x), float(y))
+        passes = modifiers or right_drag_passes(float(x), float(y))
+        self.origin = None if passes else (float(x), float(y))
         return self.origin is not None
 
     def release(self, x: float, y: float) -> str:
@@ -22216,6 +23740,252 @@ def write_agentsview_config(data_dir: str, disabled_agents) -> None:
         handle.write('\n'.join(head + kept) + '\n')
 
 
+# ---- Hooks (2026-11-12, Settings › AI tasks, off by default) -----------------------------------------
+# "It waits for you to approve" is in no transcript (it reads exactly like "a tool is running"); the
+# tools themselves know. Claude Code and Codex both run commands named in a hooks file at fixed
+# moments. With the switch on, Broccoli adds its own entry beside whatever is there (other programs'
+# entries are never touched; switching off takes out only Broccoli's). The entry runs a small script
+# in the data folder that appends the event to a file and leaves: it prints nothing and exits 0, so it
+# never decides anything for the tool. AITaskHookEvents reads that file.
+AI_TASK_HOOK_SCRIPT = '''#!/bin/sh
+# Broccoli (Settings > AI tasks): tells Broccoli's AI task dots that a session waits for an approval,
+# went on, or ended. It only appends one line to a file beside it; it prints nothing and never
+# changes what the tool does. Safe to delete: the hook entries then do nothing.
+dir=$(dirname "$0")
+{
+  printf '{"tool":"%s","at":%s,"event":' "$1" "$(date +%s)"
+  tr -d '\\n\\r' | head -c 65536
+  printf '}\\n'
+} >> "$dir/''' + AI_TASK_HOOK_EVENTS_NAME + '''" 2>/dev/null
+exit 0
+'''
+
+
+def ai_task_hook_command(script_path: str, tool: str, home: str = '') -> str:
+    """The command written into a tool's hooks file: runs only while the script is there, and names
+    the home folder by variable, so the same line is right on any Mac and for any user."""
+    home = home or os.path.expanduser('~')
+    shown = '$HOME' + script_path[len(home):] if script_path.startswith(home + os.sep) else script_path
+    return '/bin/sh -c \'[ -x "{0}" ] && "{0}" {1}; exit 0\''.format(shown, tool)
+
+
+def _ai_task_hook_is_ours(entry) -> bool:
+    return isinstance(entry, dict) and AI_TASK_HOOK_SCRIPT_NAME in str(entry.get('command', ''))
+
+
+def ai_task_hooks_merged(settings: dict, tool: str, command: str, install: bool) -> dict:
+    """A tool's settings with Broccoli's own hook entries put in (install) or taken out. Everybody
+    else's entries stay exactly as they are and where they are (Codex remembers which entries the
+    user trusted by their position: Broccoli's go last); an event the removal leaves empty is dropped."""
+    settings = json.loads(json.dumps(settings if isinstance(settings, dict) else {}))
+    hooks = settings.get('hooks')
+    if not isinstance(hooks, dict):
+        hooks = {}
+    for event in list(hooks):
+        if not isinstance(hooks[event], list):
+            continue
+        kept = []
+        for group in hooks[event]:
+            if isinstance(group, dict) and isinstance(group.get('hooks'), list):
+                inner = [entry for entry in group['hooks'] if not _ai_task_hook_is_ours(entry)]
+                if len(inner) == len(group['hooks']):
+                    kept.append(group)
+                elif inner:
+                    kept.append(dict(group, hooks=inner))
+            elif not _ai_task_hook_is_ours(group):
+                kept.append(group)
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+    if install:
+        for event in AI_TASK_HOOK_EVENTS.get(tool, ()):
+            group = {'hooks': [{'type': 'command', 'command': command, 'timeout': 5}]}
+            if event in ('PermissionRequest', 'PostToolUse'):
+                group = dict(matcher='*' if tool == 'claude' else '', **group)
+            hooks.setdefault(event, []).append(group)
+    if hooks:
+        settings['hooks'] = hooks
+    else:
+        settings.pop('hooks', None)
+    return settings
+
+
+def ai_task_hooks_present(settings) -> bool:
+    hooks = settings.get('hooks') if isinstance(settings, dict) else None
+    for groups in hooks.values() if isinstance(hooks, dict) else []:
+        for group in groups if isinstance(groups, list) else []:
+            entries = group['hooks'] if isinstance(group, dict) and isinstance(group.get('hooks'), list) else [group]
+            if any(_ai_task_hook_is_ours(entry) for entry in entries):
+                return True
+    return False
+
+
+def ai_task_hook_files(home: str = '') -> dict:
+    """tool → its hooks file, for the tools this user has (their settings folder exists)."""
+    home = home or os.path.expanduser('~')
+    files = {'claude': os.path.join(home, '.claude', 'settings.json'),
+             'codex': os.path.join(home, '.codex', 'hooks.json')}
+    return {tool: path for tool, path in files.items() if os.path.isdir(os.path.dirname(path))}
+
+
+def ai_task_hooks_apply(install: bool, home: str = '', directory: str = '') -> list:
+    """Put Broccoli's hook entries into (or take them out of) every tool's hooks file; returns the
+    files that could not be changed. A file that does not read as JSON is left alone. Before a file
+    is changed, a copy of it is kept beside it (<name>.before-broccoli)."""
+    home = home or os.path.expanduser('~')
+    directory = directory or AI_TASK_HOOKS_DIR
+    script = os.path.join(directory, AI_TASK_HOOK_SCRIPT_NAME)
+    if install:
+        os.makedirs(directory, exist_ok=True)
+        with open(script, 'w', encoding='utf-8') as handle:
+            handle.write(AI_TASK_HOOK_SCRIPT)
+        os.chmod(script, 0o755)
+    problems = []
+    for tool, path in ai_task_hook_files(home).items():
+        try:
+            existed = os.path.isfile(path)
+            if existed:
+                with open(path, encoding='utf-8') as handle:
+                    settings = json.load(handle)
+                if not isinstance(settings, dict):
+                    raise ValueError('not a JSON object')
+            elif install:
+                settings = {}
+            else:
+                continue
+            merged = ai_task_hooks_merged(settings, tool, ai_task_hook_command(script, tool, home), install)
+            if merged == settings:
+                continue
+            if existed:
+                shutil.copy2(path, path + '.before-broccoli')
+            temporary = path + '.broccoli-tmp'
+            with open(temporary, 'w', encoding='utf-8') as handle:
+                json.dump(merged, handle, ensure_ascii=False, indent=2)
+                handle.write('\n')
+            if existed:
+                shutil.copymode(path, temporary)
+            os.replace(temporary, path)
+        except (OSError, ValueError) as exc:
+            logging.info('AI tasks: hooks file %s not changed: %s', path, exc)
+            problems.append(path)
+    return problems
+
+
+def ai_task_hooks_installed(home: str = '') -> bool:
+    """Broccoli's entries are in at least one tool's hooks file."""
+    for path in ai_task_hook_files(home).values():
+        try:
+            with open(path, encoding='utf-8') as handle:
+                if ai_task_hooks_present(json.load(handle)):
+                    return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def ai_task_hook_event(line) -> dict:
+    """One line of the events file → {'tool', 'at', 'session', 'name'} ({} = not usable)."""
+    try:
+        item = json.loads(line)
+    except ValueError:
+        return {}
+    event = item.get('event') if isinstance(item, dict) else None
+    if not isinstance(event, dict):
+        return {}
+    try:
+        at = float(item.get('at') or 0)
+    except (TypeError, ValueError):
+        at = 0.0
+    return {'tool': str(item.get('tool', '') or ''), 'at': at,
+            'session': str(event.get('session_id', '') or ''),
+            'name': str(event.get('hook_event_name', '') or '')}
+
+
+class AITaskHookEvents:
+    """Which sessions wait for an approval right now, from the hooks' events file (read from where
+    the last look stopped). A request for approval = waiting; the tool running after all, a new
+    question, the turn's or the session's end = no longer. No Qt; one reader (the monitor's thread)."""
+
+    def __init__(self, directory: str = ''):
+        self.path = os.path.join(directory or AI_TASK_HOOKS_DIR, AI_TASK_HOOK_EVENTS_NAME)
+        self._offset = 0
+        self._rest = b''
+        self._waiting = {}   # session id -> when it asked
+
+    def poll(self) -> bool:
+        """Read what was added; True = somebody started or stopped waiting."""
+        try:
+            size = os.path.getsize(self.path)
+        except OSError:
+            return False
+        if size == self._offset:
+            return False
+        if size < self._offset:   # emptied (by the size limit below, or by hand)
+            self._offset, self._rest = 0, b''
+        try:
+            with open(self.path, 'rb') as handle:
+                handle.seek(self._offset)
+                data = handle.read()
+        except OSError:
+            return False
+        self._offset += len(data)
+        *lines, self._rest = (self._rest + data).split(b'\n')
+        before = dict(self._waiting)
+        for raw in lines:
+            event = ai_task_hook_event(raw.decode('utf-8', 'replace'))
+            if not event.get('session'):
+                continue
+            if event['name'] == 'PermissionRequest':
+                self._waiting[event['session']] = event['at']
+            elif event['name'] in ('PostToolUse', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd'):
+                self._waiting.pop(event['session'], None)
+        if self._offset > AI_TASK_HOOK_EVENTS_MAX_BYTES and not self._rest:
+            try:
+                with open(self.path, 'w', encoding='utf-8') as handle:   # the hook appends: nothing breaks
+                    for session, at in self._waiting.items():            # what still waits is written back
+                        handle.write(json.dumps({'tool': '', 'at': at, 'event': {
+                            'session_id': session, 'hook_event_name': 'PermissionRequest'}}) + '\n')
+                self._offset = os.path.getsize(self.path)
+            except OSError:
+                pass
+        return before != self._waiting
+
+    def waiting_since(self, session_id: str, now: float) -> float:
+        """When this session asked for the approval it still waits for (0.0 = it does not wait)."""
+        at = self._waiting.get(session_id.split(':')[-1], 0.0) if session_id else 0.0
+        return at if at and now - at < AI_TASK_HOOK_WAIT_SECONDS else 0.0
+
+
+def stop_stray_agentsview(data_dir: str) -> int:
+    """Stop every agentsview left behind on this data folder by a Broccoli that is gone (force-quit,
+    crashed, replaced by an update: only an ordinary quit stops its child). Left behind = it works in
+    this data folder and its parent is no longer there (macOS hands it to process 1); the agentsview
+    of another Broccoli that is running has that Broccoli as its parent and is not touched.
+    11-12: nine of them were found, a week's worth, about 1 GB together."""
+    import psutil
+    want = os.path.realpath(data_dir)
+    stopped = []
+    for proc in psutil.process_iter(['pid', 'name', 'ppid']):
+        try:
+            if proc.info.get('name') != AGENTSVIEW_BINARY_NAME or proc.info.get('ppid') != 1:
+                continue
+            if os.path.realpath(proc.cwd()) != want:
+                continue
+            proc.terminate()
+            stopped.append(proc)
+        except (psutil.Error, OSError):
+            continue
+    if stopped:
+        try:
+            for proc in psutil.wait_procs(stopped, timeout=3)[1]:
+                proc.kill()
+        except Exception:
+            pass
+        logging.info('AI tasks: stopped %d agentsview left behind by an earlier Broccoli.', len(stopped))
+    return len(stopped)
+
+
 class AgentsViewService:
     """Broccoli's own agentsview server: a child process on a free local port, data in
     <data folder>/AgentsView, no telemetry, no update check, no browser."""
@@ -22231,6 +24001,10 @@ class AgentsViewService:
         if not binary:
             return 'missing'
         write_agentsview_config(self.data_dir, disabled_agents)
+        try:
+            stop_stray_agentsview(self.data_dir)
+        except Exception:
+            logging.exception('AI tasks: looking for agentsview left behind failed.')
         port = _open_connector_free_port()
         env = dict(os.environ, AGENTSVIEW_DATA_DIR=self.data_dir, AGENTSVIEW_TELEMETRY_ENABLED='0',
                    TELEMETRY_ENABLED='0', DO_NOT_TRACK='1', AGENTSVIEW_NO_BROWSER='true',
@@ -22316,8 +24090,9 @@ class AITaskMonitor(QObject):
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._disabled_agents = ()
-        self._tails = {}       # path -> ((mtime, size), state)
+        self._tails = {}       # path -> ((mtime, size), reading)
         self._codex_meta = {}  # path -> who started it
+        self._hook_events = AITaskHookEvents()
         self.state = {'state': 'off', 'detail': ''}
 
     def running(self) -> bool:
@@ -22405,8 +24180,10 @@ class AITaskMonitor(QObject):
             # the old sessions whose transcript moved (agentsview no longer looks at those)
             shared = ai_task_shared_paths(catalog + sessions)
             listed = {str(s.get('id', '') or '') for s in sessions}
+            self._hook_events.poll()   # who waits for an approval (nothing to read while the hooks are off)
             items = self.items_for(sessions + ai_task_revived_sessions(catalog, listed, now, shared), now, shared)
-            signature = [(i['key'], i['state'], int(i['activity']), i['title']) for i in items]
+            signature = [(i['key'], i['state'], i['reason'], int(i['activity']), i['title'],
+                          bool(i.get('overdue'))) for i in items]
             if signature != last_items:
                 last_items = signature
                 self.sessions_changed.emit(items)
@@ -22445,32 +24222,105 @@ class AITaskMonitor(QObject):
             if not ai_task_session_wanted(session, self._disabled_agents, meta):
                 continue
             activity = _ai_task_time(session.get('ended_at') or session.get('started_at'))
-            tail = ''
-            if path and path not in shared:
+            reading = {}
+            database = ai_task_openclaw_source(path)[0] if agent == 'openclaw' else ''
+            if database:
+                # OpenClaw: one database for all its sessions, read again when it (or its journal) moved
+                try:
+                    marks = []
+                    for name in (database, database + '-wal'):
+                        try:
+                            stat = os.stat(name)
+                            marks.append((stat.st_mtime_ns, stat.st_size))
+                        except OSError:
+                            marks.append(None)
+                    cached = self._tails.get(path)
+                    if cached is not None and cached[0] == marks:
+                        reading = cached[1]
+                    else:
+                        reading = ai_task_openclaw_reading(path)
+                        self._tails[path] = (marks, reading)
+                    activity = max(activity, reading.get('said') or 0.0)
+                except Exception:
+                    reading = {}
+            elif path and path not in shared:
                 try:
                     stat = os.stat(path)
-                    said = 0.0
                     if agent in ('claude', 'codex'):
                         key = (stat.st_mtime_ns, stat.st_size)
                         cached = self._tails.get(path)
                         if cached is not None and cached[0] == key:
-                            tail, said = cached[1]
+                            reading = cached[1]
                         else:
-                            tail, said = ai_task_transcript_tail(path, agent)
-                            self._tails[path] = (key, (tail, said))
+                            reading = ai_task_transcript_reading(path, agent)
+                            self._tails[path] = (key, reading)
                     # no dated line at the end (another tool, or one huge line): the file's time
-                    activity = max(activity, said or stat.st_mtime)
+                    activity = max(activity, reading.get('said') or stat.st_mtime)
                 except OSError:
-                    tail = ''
+                    reading = {}
             if activity and now - activity > AI_TASKS_RECENT_HOURS * 3600:
                 continue
-            state = ai_task_session_state(session, now, activity, tail)
-            items.append(ai_task_item_from_session(session, state, activity, meta))
+            state = ai_task_session_state(session, now, activity, reading.get('state', ''))
+            reason = reading.get('reason', '')
+            asked = self._hook_events.waiting_since(str(session.get('id', '') or ''), now)
+            # the hooks: it asked for an approval and its transcript has said nothing since
+            if asked and state in (AI_TASK_STATE_RUNNING, AI_TASK_STATE_STALLED) and activity <= asked + 2.0:
+                state, reason = AI_TASK_STATE_WAITING, 'approval'
+            if state == AI_TASK_STATE_STALLED:
+                reason = 'stopped' if reading.get('state') == 'stopped' else 'quiet'
+            item = ai_task_item_from_session(session, state, activity, meta, reason, reading.get('key', ''))
+            if state == AI_TASK_STATE_WAITING:
+                # since when it waits: the approval was asked then (the hooks), a question = its last news
+                since = float(asked or 0) if reason == 'approval' else float(activity or 0)
+                item['waiting_since'] = since
+                item['overdue'] = bool(since) and now - since >= AI_TASK_WAITING_REMINDER_SECONDS
+            items.append(item)
         return items
 
 
+# A click on a capsule goes to the task (2026-11-12, one order for every tool):
+#   1. the tool has an address for one conversation → open that (Claude in VS Code: the extension's
+#      link; OpenClaw: its own page, in Broccoli's Localhost tab; Codex's desktop app: its thread link)
+#   2. else the app the session's process runs in comes to the front (a terminal)
+#   3. else a short tag at the pointer says so (before: nothing happened — OpenClaw has no working
+#      folder and runs as a background service, so step 2 never found it)
 class AITaskOpenSignals(QObject):
     inside_broccoli = pyqtSignal()   # the task's process runs in one of Broccoli's own terminal tabs
+    not_found = pyqtSignal()         # no address and no window: say so
+
+
+def ai_task_codex_desktop_url(session_id: str) -> str:
+    """The Codex desktop app's link to one thread (in its bundle: codex://threads/<id>)."""
+    from urllib.parse import quote
+    return 'codex://threads/' + quote(str(session_id or '').split(':')[-1])
+
+
+def url_scheme_app_path(scheme: str) -> str:
+    """The app macOS would open this kind of link with ('' = none installed)."""
+    try:
+        url = AppKit.NSURL.URLWithString_(scheme + '://')
+        found = AppKit.NSWorkspace.sharedWorkspace().URLForApplicationToOpenURL_(url)
+        return str(found.path() or '') if found is not None else ''
+    except Exception:
+        return ''
+
+
+def ai_task_conversation_link(item: dict, scheme_app=url_scheme_app_path) -> str:
+    """The link that opens this one conversation in its own app ('' = the tool has none here).
+    Codex: only a session its desktop app started, and only while that app is installed."""
+    if item.get('agent') == 'codex' and 'desktop' in str(item.get('originator', '') or '').lower() \
+            and item.get('id') and scheme_app('codex'):
+        return ai_task_codex_desktop_url(item['id'])
+    return ''
+
+
+def local_port_answers(port: int, timeout: float = 0.4) -> bool:
+    import socket
+    try:
+        with socket.create_connection(('127.0.0.1', int(port)), timeout=timeout):
+            return True
+    except (OSError, ValueError):
+        return False
 
 
 def ai_task_find_process(agent: str, cwd: str, session_id: str = '') -> int:
@@ -24067,6 +25917,19 @@ COLLAPSED_BUTTON_HOME_WITH_MAIN_KEY = 'collapsed_button_home_with_main_window'
 COLLAPSED_BUTTON_SHORTCUT_KEY = 'collapsed_button_shortcut'
 DEFAULT_COLLAPSED_BUTTON_SHORTCUT = ''
 COLLAPSED_LAUNCHER_SLOTS = 8
+# 2026-11-12 (style book 5.1.11 / 5.1.12): Broccoli's own quick commands, and the grid's layers 2–5
+# (layer 1 = COLLAPSED_BUTTON_SHORTCUTS_KEY). A place in any layer holds a shortcut of the Shortcuts
+# app ({'id', 'name'}) or one of the quick commands ({'command': its id}).
+CIRCLE_COMMANDS_KEY = 'circle_commands'
+COLLAPSED_BUTTON_LAYERS_KEY = 'collapsed_button_layers'
+COLLAPSED_BUTTON_DOUBLE_CLICK_KEY = 'collapsed_button_double_click'
+CIRCLE_LAST_CONVERSATION_KEY = 'circle_last_conversation'   # the conversation last asked from the circle (a double click shows its answer again)
+COLLAPSED_LAUNCHER_LAYERS = 5
+# one optional global shortcut per layer of the grid (Settings › Shortcuts & tools)
+COLLAPSED_BUTTON_LAYER_SHORTCUT_KEYS = tuple(f'collapsed_button_layer_{number}_shortcut'
+                                             for number in range(1, COLLAPSED_LAUNCHER_LAYERS + 1))
+CIRCLE_COMMANDS_MAX = 200
+CIRCLE_COMMAND_KINDS = (('ask', 'Ask the Agent'), ('applescript', 'AppleScript'), ('shell', 'Shell script'))
 COLLAPSED_BUTTON_SIZE = 50
 # The collapsed window is the circle plus a clear margin: system glass draws its rim one pixel
 # wider than its frame left and right (measured on macOS 27, every style), and a window exactly as
@@ -24075,6 +25938,52 @@ COLLAPSED_WINDOW_MARGIN = 1
 # The circle out of sight under its moving stand-in (CollapsedCircleBody): not quite 0, so a press
 # on it while the stand-in still settles reaches the circle and not the app behind it.
 COLLAPSED_UNDER_BODY_OPACITY = 0.01
+# 2026-11-11: things dragged onto the circle go into its tray and stick out above it like bookmarks
+# (style book 5.1.6; Ryan: "先做 dropover 类似的，文件拖入可以变成 tray 这样的功能"). Kept in order,
+# oldest first; the newest CIRCLE_TRAY_MAX_ITEMS.
+CIRCLE_TRAY_ITEMS_KEY = 'circle_tray_items'
+CIRCLE_TRAY_MAX_ITEMS = 48
+
+
+def circle_tray_item_key(item: dict) -> str:
+    """One thing in the circle's tray: a file by its path, a link by its address."""
+    if str(item.get('kind', '') or '') == 'url':
+        return 'url:' + str(item.get('url', '') or '')
+    return 'file:' + str(item.get('path', '') or '')
+
+
+def normalize_circle_tray_items(value) -> list:
+    """The tray's things in the order they came in (oldest first): {'kind': 'file', 'path', 'name',
+    'own'} ('own' = a file Broccoli kept itself, a dropped picture or piece of text) or {'kind': 'url',
+    'url', 'name'}. The same thing twice keeps the later place; at most CIRCLE_TRAY_MAX_ITEMS."""
+    items = []
+    for raw in list(value) if isinstance(value, (list, tuple)) else []:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get('kind', '') or '').strip().lower()
+        name = str(raw.get('name', '') or '').strip()
+        if kind == 'file':
+            path = str(raw.get('path', '') or '').strip()
+            if len(path) > 1:
+                path = path.rstrip('/')
+            if not path or not os.path.isabs(path):
+                continue
+            item = {'kind': 'file', 'path': path, 'name': name or os.path.basename(path) or path,
+                    'own': bool(raw.get('own', False))}
+            scan = raw.get('scan')
+            if isinstance(scan, dict):   # a window taken by the circle's scan (style book 5.1.13)
+                item['scan'] = {field: str(scan.get(field, '') or '')[:2000] for field in ('app', 'title', 'doc', 'url', 'text')}
+        elif kind == 'url':
+            url = str(raw.get('url', '') or '').strip()
+            if not re.match(r'^[A-Za-z][A-Za-z0-9+.\-]*:', url):
+                continue
+            item = {'kind': 'url', 'url': url, 'name': name or url}
+        else:
+            continue
+        key = circle_tray_item_key(item)
+        items = [old for old in items if circle_tray_item_key(old) != key]
+        items.append(item)
+    return items[-CIRCLE_TRAY_MAX_ITEMS:]
 
 
 def normalize_collapsed_button_position(value) -> list:
@@ -24090,9 +25999,39 @@ def normalize_collapsed_button_shortcuts(value) -> list:
     """The grid's shortcuts in their order (empty places of the first version are dropped)."""
     shortcuts = []
     for item in list(value) if isinstance(value, (list, tuple)) else []:
-        if isinstance(item, dict) and (str(item.get('id', '') or '').strip() or str(item.get('name', '') or '').strip()):
+        if isinstance(item, dict) and str(item.get('command', '') or '').strip():
+            shortcuts.append({'command': str(item.get('command', '') or '').strip()})   # a quick command (5.1.11)
+        elif isinstance(item, dict) and (str(item.get('id', '') or '').strip() or str(item.get('name', '') or '').strip()):
             shortcuts.append({'id': str(item.get('id', '') or '').strip(), 'name': str(item.get('name', '') or '').strip()})
     return shortcuts[:COLLAPSED_LAUNCHER_SLOTS]
+
+
+def normalize_collapsed_button_layers(value) -> list:
+    """The grid's layers 2–5: always four lists, each as layer 1's."""
+    layers = [normalize_collapsed_button_shortcuts(layer) for layer in (list(value) if isinstance(value, (list, tuple)) else [])]
+    layers = layers[:COLLAPSED_LAUNCHER_LAYERS - 1]
+    return layers + [[] for _ in range(COLLAPSED_LAUNCHER_LAYERS - 1 - len(layers))]
+
+
+def normalize_circle_commands(value) -> list:
+    """Broccoli's own quick commands (style book 5.1.11), in the order of the Settings list:
+    {'id', 'name', 'kind' (CIRCLE_COMMAND_KINDS), 'text', 'icon' (a system symbol's name or ''),
+    'with_tray' (an "ask": the tray's things go with it)}. Without a name or text: dropped."""
+    commands, seen = [], set()
+    kinds = dict(CIRCLE_COMMAND_KINDS)
+    for item in list(value) if isinstance(value, (list, tuple)) else []:
+        if not isinstance(item, dict):
+            continue
+        identifier = str(item.get('id', '') or '').strip()
+        name = ' '.join(str(item.get('name', '') or '').split())
+        text = str(item.get('text', '') or '').strip()
+        if not identifier or identifier in seen or not name or not text:
+            continue
+        seen.add(identifier)
+        kind = str(item.get('kind', '') or '').strip().lower()
+        commands.append({'id': identifier, 'name': name[:80], 'kind': kind if kind in kinds else 'ask', 'text': text,
+                         'icon': str(item.get('icon', '') or '').strip()[:80], 'with_tray': bool(item.get('with_tray', False))})
+    return commands[:CIRCLE_COMMANDS_MAX]
 
 
 def normalize_collapsed_button_icon(value) -> str:
@@ -24249,6 +26188,8 @@ GLOBAL_SETTING_SPECS = [
     (AI_TASKS_COUNT_KEY, AI_TASKS_DEFAULT_COUNT, ('coerce_int', AI_TASKS_DEFAULT_COUNT, 1, AI_TASKS_MAX_COUNT)),
     (AI_TASKS_SHORTCUT_KEY, DEFAULT_AI_TASKS_SHORTCUT, ('fn', 'safe_normalize_optional_shortcut_text')),
     (AI_TASKS_RIGHT_DRAG_KEY, True, 'bool'),   # 2026-11-01: hold the right button and move up
+    (AI_TASK_HOOKS_KEY, False, 'bool'),        # 2026-11-12: Broccoli's entry in Claude Code's / Codex's hooks
+    (AI_TASKS_QUIET_REMINDER_KEY, True, 'bool'),   # 2026-11-12: a reminder when a task had no news for 15 minutes
     (AI_TASKS_DISABLED_AGENTS_KEY, [], ('fn', 'normalize_ai_tasks_disabled_agents')),
     # 2026-11-01: the collapsed 🥦 circle — where it was dragged to, and its grid's shortcuts
     (COLLAPSED_BUTTON_POSITION_KEY, [], ('fn', 'normalize_collapsed_button_position')),
@@ -24259,7 +26200,14 @@ GLOBAL_SETTING_SPECS = [
     (COLLAPSED_BUTTON_WITH_MAIN_KEY, True, 'bool'),
     (COLLAPSED_BUTTON_HOME_WITH_MAIN_KEY, True, 'bool'),
     (COLLAPSED_BUTTON_SHORTCUT_KEY, DEFAULT_COLLAPSED_BUTTON_SHORTCUT, ('fn', 'safe_normalize_optional_shortcut_text')),
-]
+    # 2026-11-11: what the circle's tray holds (style book 5.1.6)
+    (CIRCLE_TRAY_ITEMS_KEY, [], ('fn', 'normalize_circle_tray_items')),
+    # 2026-11-12: Broccoli's own quick commands; the grid's layers 2–5; a double click opens layer 2
+    (CIRCLE_COMMANDS_KEY, [], ('fn', 'normalize_circle_commands')),
+    (COLLAPSED_BUTTON_LAYERS_KEY, [[], [], [], []], ('fn', 'normalize_collapsed_button_layers')),
+    (COLLAPSED_BUTTON_DOUBLE_CLICK_KEY, True, 'bool'),
+    (CIRCLE_LAST_CONVERSATION_KEY, '', 'str_strip'),
+] + [(_layer_key, '', ('fn', 'safe_normalize_optional_shortcut_text')) for _layer_key in COLLAPSED_BUTTON_LAYER_SHORTCUT_KEYS]
 
 # 成组设置：默认值整组展开，读入时整组归一（组归一函数吃整个 raw globals）。
 # computer_use 一组必须在这里：load_settings_store 的结构性透传只认默认键集，
@@ -27065,6 +29013,8 @@ def chat_message_render_hash(message: dict) -> str:
             'model_label': str(message.get('model_label', '') or ''),
             'attachments': message.get('attachments') or [],
         }
+        if message.get('outcome'):   # only when there is one: every other message keeps its hash
+            payload['outcome'] = str(message.get('outcome') or '')
         return str(hash(json.dumps(payload, ensure_ascii=False, sort_keys=True)))
     except Exception:
         return str(hash(str(message)))
@@ -28675,6 +30625,8 @@ def normalize_chat_history_message(item: dict) -> dict | None:
     model_label = str(item.get('model_label', '') or '').strip()
     if model_label and role == 'assistant':
         normalized['model_label'] = model_label[:120]   # "model · profile" that wrote the answer
+    if role == 'assistant' and str(item.get('outcome', '') or '').strip() == AGENT_USAGE_END_OUTCOME:
+        normalized['outcome'] = AGENT_USAGE_END_OUTCOME   # the run did not finish: the usage ran out
     if isinstance(item.get('attachments'), list):
         attachments = []
         for attachment in item['attachments']:
@@ -28785,6 +30737,8 @@ def render_chat_message_display_html(message: dict, index: int, *, include_separ
     model_label = str(message.get('model_label', '') or '').strip()
     if model_label and message['role'] == 'assistant':   # the model (and profile) that answered
         meta_parts.append(f'<span class="qa-time qa-model">{html.escape(model_label)}</span>')
+    if message['role'] == 'assistant' and message.get('outcome') == AGENT_USAGE_END_OUTCOME:
+        meta_parts.append(f'<span class="qa-time qa-outcome">{html.escape(_tr("Not finished"))}</span>')
     if meta_parts:
         blocks.append(
             f'<div class="qa-meta-row"><span class="qa-label qa-label-{label_class}">{label}</span>'
@@ -29161,7 +31115,7 @@ def get_current_chat_history_messages() -> list[dict]:
     return messages
 
 
-def append_chat_turn(history_messages: list[dict], question_text: str, answer_text: str, attachments: list[dict] | None = None, assistant_display_prefix_html: str = '', persist_current: bool = True, model_label: str = '') -> tuple[list[dict], str]:
+def append_chat_turn(history_messages: list[dict], question_text: str, answer_text: str, attachments: list[dict] | None = None, assistant_display_prefix_html: str = '', persist_current: bool = True, model_label: str = '', outcome: str = '') -> tuple[list[dict], str]:
     new_messages = list(history_messages)
     user_message = {'role': 'user', 'content': question_text.strip(), 'timestamp': current_chat_timestamp()}
     if attachments:
@@ -29178,6 +31132,8 @@ def append_chat_turn(history_messages: list[dict], question_text: str, answer_te
         assistant_message['display_prefix_html'] = str(assistant_display_prefix_html).strip()
     if str(model_label or '').strip():
         assistant_message['model_label'] = str(model_label).strip()
+    if str(outcome or '').strip():
+        assistant_message['outcome'] = str(outcome).strip()
     new_messages.append(assistant_message)
     if persist_current:
         markdown = save_chat_history_messages(new_messages)
@@ -29283,6 +31239,12 @@ def normalize_output_record(item: dict, fallback_index: int = 0) -> dict | None:
     edited_at = str(item.get('edited_at', '') or '').strip()
     if edited_at:
         normalized['edited_at'] = edited_at
+    # a file the AI created or changed in that turn (2026-11-11): the copy kept of it as it was
+    # then, and which recorded change it comes from
+    for key in ('snapshot_path', 'change_id', 'action'):
+        value = str(item.get(key, '') or '').strip()
+        if value:
+            normalized[key] = value
     return normalized
 
 
@@ -29298,6 +31260,91 @@ def normalize_output_records(items) -> list[dict]:
         seen.add(record['id'])
         normalized.append(record)
     return normalized
+
+
+# ── Generated outputs by turn (2026-11-11, Ryan) ─────────────────────────────────────────────
+# Ryan: "只要是生成的东西，在 generated outputs 里甚至可以左右去选择多个被生成的东西，比如同一个对话下
+# 有三个文件被生成，然后继续到下一个提问回合变成四个，然后上面的选框可以选是哪个对话批次，三个的可以左右
+# 切三个文件，四个的同理切四个文件". So the panel shows one TURN at a time (the dropdown), and within it
+# everything the conversation had generated up to that turn (‹ ›): the AI's text / code outputs and
+# every file the AI created or changed (any type), each as it was at that turn.
+OUTPUT_FILE_SNAPSHOT_MAX_BYTES = 100 * 1024 * 1024    # a bigger file is listed without a kept copy
+OUTPUT_FILE_SNAPSHOT_TURN_BYTES = 500 * 1024 * 1024   # copies kept for one turn, in all
+OUTPUT_FILES_PER_TURN = 40                            # a command may touch thousands: the newest ones
+OUTPUT_TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
+OUTPUT_DOCUMENT_EXTS = {'.pdf', '.docx', '.doc', '.pptx', '.xlsx', '.xlsm', '.xls'}
+
+
+def output_display_path(output) -> str:
+    """The file to SHOW for an output: the copy kept of it at its turn when there is one, else the
+    file itself ('' when it has no file)."""
+    output = output if isinstance(output, dict) else {}
+    snapshot = str(output.get('snapshot_path', '') or '').strip()
+    if snapshot and os.path.isfile(snapshot):
+        return snapshot
+    return str(output.get('path', '') or '').strip()
+
+
+def output_display_name(output, index: int = 0) -> str:
+    output = output if isinstance(output, dict) else {}
+    path = str(output.get('path', '') or '').strip()
+    name = str(output.get('filename', '') or '').strip() or (os.path.basename(path) if path else '')
+    return name or str(output.get('title', '') or '').strip() or _tr('Output {n}').format(n=index + 1)
+
+
+def output_batches(outputs: list) -> list[dict]:
+    """The outputs grouped for the panel: one entry per turn that generated something, oldest first:
+    {'question_index', 'question', 'ids'} — ids = every output up to that turn (cumulative), a file
+    listed once, as its newest state up to that turn. Outputs without a turn (other tabs' outputs,
+    old records) form one group of their own."""
+    outputs = [item for item in (outputs or []) if isinstance(item, dict)]
+    if not outputs:
+        return []
+
+    def turn_of(item):
+        try:
+            return int(item.get('question_index', -1))
+        except (TypeError, ValueError):
+            return -1
+    turns = sorted({turn_of(item) for item in outputs})
+    batches = []
+    for turn in turns:
+        chosen, by_path = [], {}
+        for position, item in enumerate(outputs):
+            if turn_of(item) > turn:
+                continue
+            path = str(item.get('path', '') or '').strip()
+            key = os.path.normpath(path) if path else ''
+            if key and key in by_path:
+                held = chosen[by_path[key]]
+                if (turn_of(item), str(item.get('created_at', ''))) >= (turn_of(held[1]), str(held[1].get('created_at', ''))):
+                    chosen[by_path[key]] = (held[0], item)     # the file's newer state, at its first place
+                continue
+            if key:
+                by_path[key] = len(chosen)
+            chosen.append((position, item))
+        question = next((str(item.get('question', '') or '').strip() for item in outputs
+                         if turn_of(item) == turn and str(item.get('question', '') or '').strip()), '')
+        batches.append({'question_index': turn, 'question': question,
+                        'ids': [str(item.get('id', '') or '') for _position, item in chosen]})
+    return batches
+
+
+def output_file_wanted(path: str) -> bool:
+    """Is a file the AI wrote something to show as a generated output? Not Broccoli's own data,
+    not hidden / dependency folders, not temporary files."""
+    path = str(path or '')
+    if not path or path.endswith(('~', '.tmp', '.swp', '.pyc', '.DS_Store')):
+        return False
+    try:
+        if os.path.commonpath([os.path.realpath(path), os.path.realpath(BROCCOLI_APPLICATION_SUPPORT_DIR)]) == \
+                os.path.realpath(BROCCOLI_APPLICATION_SUPPORT_DIR):
+            return False
+    except Exception:
+        pass
+    parts = path.split(os.sep)
+    return not any(part in CONVERSATION_GROUP_SKIP_DIRS or (part.startswith('.') and part not in ('.', '..'))
+                   for part in parts[-6:])
 
 
 def remap_text_annotations(text: str, annotations: list) -> list[dict]:
@@ -33336,8 +35383,33 @@ def rename_conversation_record(path: str, new_title: str) -> dict | None:
     return write_conversation_record(new_path, record)
 
 
+OPENAI_KEYLESS_PLACEHOLDER = 'no-key'
+
+
+def openai_client_api_key(api_key) -> str:
+    """The key handed to OpenAI(). openai 3 refuses an empty key when the client is made ("Missing
+    credentials"); a server that needs no key (a local model server) used to get an empty Bearer —
+    now this stand-in, which such a server ignores the same way (2026-11-10)."""
+    key = str(api_key or '')
+    return key if key.strip() else OPENAI_KEYLESS_PLACEHOLDER
+
+
+def llm_error_text(exc) -> str:
+    """An LLM error as text, with the error body the server sent. openai 3 (3.38) puts only the
+    server's message into str(exc) — "Error code: 400 - <message>" — while the retry checks also look
+    at its type / code / param fields (or a body that is not JSON), all of which openai 2 printed.
+    The body is added the way openai 2 printed it, so those checks see the same text (2026-11-10)."""
+    text = str(exc if exc is not None else '')
+    body = getattr(exc, 'body', None)
+    if body not in (None, '', {}, []):
+        extra = str(body)
+        if extra not in text:
+            text = f'{text} - {extra}'
+    return text
+
+
 def create_openai_client(api_key: str, endpoint: str, timeout: int):
-    return OpenAI(api_key=api_key, base_url=endpoint, timeout=timeout)
+    return OpenAI(api_key=openai_client_api_key(api_key), base_url=endpoint, timeout=timeout)
 
 
 def _merge_leading_system_messages_into_user(messages: list[dict]) -> list[dict]:
@@ -33372,7 +35444,7 @@ def _should_retry_without_system_role(exc: Exception, messages: list[dict]) -> b
     first_role = str(messages[0].get('role', '') if isinstance(messages[0], dict) else '').strip().lower()
     if first_role != 'system':
         return False
-    text = str(exc)
+    text = llm_error_text(exc)
     return (
         'messages.0.role' in text
         and ('Invalid input' in text or 'invalid_request_error' in text or 'invalid' in text.lower())
@@ -33382,7 +35454,7 @@ def _should_retry_without_system_role(exc: Exception, messages: list[dict]) -> b
 def _should_retry_with_default_max_tokens(exc: Exception, kwargs: dict) -> bool:
     if 'max_tokens' in kwargs or 'max_completion_tokens' in kwargs:
         return False
-    text = str(exc)
+    text = llm_error_text(exc)
     return (
         'max_tokens' in text
         and 'Invalid input' in text
@@ -33686,7 +35758,7 @@ def save_reasoning_probe_record(profile: dict, record: dict):
 
 
 def _is_unsupported_reasoning_param_error(exc) -> bool:
-    text = str(exc or '').lower()
+    text = llm_error_text(exc).lower()
     if 'reasoning_effort' in text or 'reasoning.effort' in text or "'reasoning'" in text:
         return True
     status = getattr(exc, 'status_code', None)
@@ -34019,11 +36091,79 @@ def _is_model_unavailable_error(exc: Exception) -> bool:
             return True
     except (TypeError, ValueError):
         pass
-    text = str(exc).lower()
+    text = llm_error_text(exc).lower()
     for code in ('429', '401', '402', '408', '409', '500', '502', '503', '504'):
         if code in text:
             return True
     return any(marker in text for marker in _MODEL_UNAVAILABLE_MARKERS)
+
+
+# ---- the usage ran out and no other model is left (2026-11-12) -------------------------------------
+# Ryan: "如果有次位的，直接用第二位的补上；但如果没有，你得让对话先体面结束，然后显示没有走完".
+# The run still ends as 'failed' for every existing table (badge, notes, reminders …); what differs is
+# what it says: a few fixed lines instead of the raw error (no model is left to write anything), the
+# answer's message carries outcome = AGENT_USAGE_END_OUTCOME (its A row says "Not finished"), and the
+# run carries run['usage_limit'] = the model. Nothing is scheduled and nobody is asked when to ask again.
+AGENT_USAGE_END_OUTCOME = 'usage_limit'
+AGENT_USAGE_END_MARK = '⚠️ '   # the fixed lines start with it (a turn that is no answer: no next question is guessed from it)
+_USAGE_LIMIT_MARKERS = (
+    'rate limit', 'rate_limit', 'ratelimit', 'too many requests', 'usage limit', 'usage_limit',
+    'limit reached', 'quota', 'insufficient credit', 'insufficient balance', 'insufficient funds',
+    'credit balance', 'billing', 'payment required', 'model_cooldown', 'cooling down',
+)
+_USAGE_LIMIT_RE = re.compile(r"\b(?:429|402)\b|hit your .{0,40}limit")
+_STEP_FAILED_RE = re.compile(r'^[^\n:]{0,80}?[Ss]tep failed: (.*)', re.S)
+
+
+def usage_limit_error_text(text) -> bool:
+    """An error's words say the usage ran out (a rate limit, a quota, a balance) — not a lapsed
+    sign-in, a server fault or a timeout, which stay ordinary failures. Only what is clearly named:
+    anything unsure is an ordinary failure."""
+    text = str(text or '').lower()
+    return bool(text) and (any(marker in text for marker in _USAGE_LIMIT_MARKERS)
+                           or _USAGE_LIMIT_RE.search(text) is not None)
+
+
+def agent_step_result_failed(result) -> bool:
+    """A step's result that is only its "… step failed: <error>" line (steps have no status of their own)."""
+    return _STEP_FAILED_RE.match(str((result or {}).get('text_output', '') or '').strip()) is not None
+
+
+def agent_step_result_usage_limited(result) -> bool:
+    """The step did not run because its model's usage ran out and no other model was left for it."""
+    if not isinstance(result, dict):
+        return False
+    if (result.get('metadata') or {}).get('usage_limit'):
+        return True
+    failed = _STEP_FAILED_RE.match(str(result.get('text_output', '') or '').strip())
+    return failed is not None and usage_limit_error_text(failed.group(1))
+
+
+def agent_usage_limited_step_model(step_results) -> str:
+    """The model of the first step that ran out of usage ('' = none did)."""
+    for result in step_results or []:
+        if agent_step_result_usage_limited(result):
+            return str(result.get('model_name', '') or result.get('profile_name', '') or '').strip() or '?'
+    return ''
+
+
+def agent_usage_end_text(model: str, step_results=None) -> str:
+    """The fixed lines in the answer's place when the usage ran out mid-run: what happened, how far
+    the plan got, which steps are done. Written by Broccoli itself — no model is left to write."""
+    model = str(model or '').strip()
+    lines = [AGENT_USAGE_END_MARK + (_tr('Not finished: the usage of {model} ran out.').format(model=model)
+                                     if model and model != '?' else _tr('Not finished: the model’s usage ran out.'))]
+    steps = [result for result in step_results or [] if isinstance(result, dict)
+             and str(result.get('capability', '') or '') != 'user_supplement']
+    if steps:
+        done = [result for result in steps if not agent_step_result_failed(result)]
+        lines.append(_tr('{done} of {total} steps were done.').format(done=len(done), total=len(steps)))
+        for result in done:
+            title = ' '.join(str((result.get('metadata') or {}).get('goal', '')
+                                 or result.get('capability_label', '') or '').split())
+            if title:
+                lines.append('- ' + (title[:140].rstrip() + '…' if len(title) > 140 else title))
+    return '\n'.join(lines)
 
 
 BROWSER_USE_FAILOVER_ERROR_TAIL = 5
@@ -35183,6 +37323,7 @@ def build_planner_messages(user_text: str,
                 'Analyze the user request and decide whether any specialized capabilities are needed.\n'
                 'Available capabilities:\n'
                 + planner_capability_list_text()
+                + planner_unavailable_capabilities_note()
                 + skill_rules
                 + '\n'
                 'Step design rules:\n'
@@ -36176,6 +38317,44 @@ def html_has_math(html_text: str) -> bool:
     return MATH_HTML_MARK in str(html_text or '')
 
 
+# markdown2 2.5.5 reads **bold** by GitHub's rule: a closing ** right after punctuation must be
+# followed by a space or punctuation, so "**我的判断：**这里" / "**「引用」**は" stay literal stars —
+# common in model answers. markdown2_html marks each **…** the way 2.5.4 read it (per line, outside
+# code) before markdown2 runs and puts <strong> there afterwards (2026-11-10). Checked on all 652
+# saved answers: bold as before, plus the ** that 2.5.4 left as stars after an HTML block.
+_MARKDOWN_BOLD_RE = re.compile(r'\*\*(?=\S)(.+?[*_]?)(?<=\S)\*\*')   # 2.5.4's rule, ** only (code-friendly: no __)
+_MARKDOWN_RULE_LINE_RE = re.compile(r'^ {0,3}([*\-_])([ \t]*\1){2,}[ \t]*$')   # *** --- ___ lines
+_MARKDOWN_CODE_RE = re.compile(r'(^[ \t]*(?:```|~~~).*?^[ \t]*(?:```|~~~)[ \t]*$|`+[^`\n]*?`+)', re.S | re.M)
+
+
+def markdown2_html(text, **kwargs) -> str:
+    """markdown2.markdown with **bold** read as markdown2 2.5.4 did (see above). The marks are
+    full-width brackets around a random code: no markdown syntax, never part of a link, not escaped."""
+    nonce = uuid.uuid4().hex[:12]
+    opening, closing = f'【{nonce}o】', f'【{nonce}c】'
+
+    def bold(segment):
+        lines = segment.split('\n')
+        for i, line in enumerate(lines):
+            if '**' in line and not _MARKDOWN_RULE_LINE_RE.match(line):
+                lines[i] = _MARKDOWN_BOLD_RE.sub(lambda match: opening + match.group(1) + closing, line)
+        return '\n'.join(lines)
+
+    parts = _MARKDOWN_CODE_RE.split(str(text or ''))   # odd parts are code: left as they are
+    marked = ''.join(part if i % 2 else bold(part) for i, part in enumerate(parts))
+    html = markdown2.markdown(marked, **kwargs)
+    if nonce not in html:
+        return html
+    # inside code markdown2 found itself (an indented block) the marks are the plain ** again
+    html = re.sub(r'<(pre|code)\b.*?</\1>',
+                  lambda match: match.group(0).replace(opening, '**').replace(closing, '**'), html, flags=re.S)
+    # a heading's id is made from its letters: the marks' letters go
+    html = re.sub(r'\b(?:id|href)="[^"]*"',
+                  lambda match: match.group(0).replace(opening, '').replace(closing, '')
+                  .replace(nonce + 'o', '').replace(nonce + 'c', ''), html)
+    return html.replace(opening, '<strong>').replace(closing, '</strong>')
+
+
 def render_markdown_fragment(mdstr: str, escape_html: bool = False) -> str:
     """markdown → HTML 片段。escape_html=True 时把来源文本里的原始 HTML 当文字
     转义（markdown 语法照常渲染）。专项步骤输出是文本，不应有权向页面注入标签：
@@ -36200,9 +38379,9 @@ def render_markdown_fragment(mdstr: str, escape_html: bool = False) -> str:
     protected, formulas, nonce = protect_markdown_math(text)
     protected = re.sub(r'\|(\n(\t)*\n(\t)*)\|', '|\n|', protected)
     if escape_html:
-        rendered = markdown2.markdown(protected, extras=extras, link_patterns=BROCCOLI_LINK_PATTERNS, safe_mode='escape')
+        rendered = markdown2_html(protected, extras=extras, link_patterns=BROCCOLI_LINK_PATTERNS, safe_mode='escape')
     else:
-        rendered = markdown2.markdown(protected, extras=extras, link_patterns=BROCCOLI_LINK_PATTERNS)
+        rendered = markdown2_html(protected, extras=extras, link_patterns=BROCCOLI_LINK_PATTERNS)
     return restore_markdown_math(rendered, formulas, nonce)
 
 
@@ -37425,6 +39604,7 @@ def build_pipeline_display_prefix(plan: dict, step_results: list[dict]) -> str:
         title = _tr(label) + (f' · {model_label}' if model_label else '')   # "Web search · gpt-5 · Work"
         goal = str((result.get('metadata') or {}).get('goal', '') or '').strip()
         body = str(result.get('text_output', '')).strip()
+        body = person_facing_step_text(body)   # Broccoli's own notes in the person's language
         if goal:
             body = _tr('Goal: {goal}').format(goal=goal) + '\n\n' + body
         code_executions = (result.get('metadata') or {}).get('code_executions') or (result.get('metadata') or {}).get('python_executions') or []
@@ -37604,7 +39784,7 @@ def specialized_step_review_summary(result: dict) -> str:
 
 
 def specialized_progress_snippet(text: str, limit: int = SPECIALIZED_PROGRESS_SNIPPET_CHARS) -> str:
-    content = re.sub(r'\s+', ' ', str(text or '')).strip()
+    content = re.sub(r'\s+', ' ', person_facing_step_text(text)).strip()
     if len(content) <= limit:
         return content
     return content[:limit].rstrip() + '...'
@@ -37634,7 +39814,12 @@ def build_finalize_prompt(question_text: str,
         sources_text = specialized_result_sources_text(result)
         artifact_paths = [str(path).strip() for path in (result.get('artifacts') or []) if str(path).strip()]
         if not raw_evidence and not reviewed_facts and not artifact_paths:
-            continue
+            if not capability or not goal:
+                continue
+            # A step that came back empty stays in the package with its goal (2026-11-11): the
+            # answering model has to know it was tried and gave nothing — and the goal is often
+            # the only place that names what the request is about.
+            raw_evidence, raw_mode = 'This step returned nothing: no text and no files.', 'none'
         skill_name = str((result.get('metadata') or {}).get('skill_name', '') or '').strip()
         header_capability = f'{capability}:{skill_name}' if capability == SPECIALIZED_SKILL_CAPABILITY and skill_name else capability
         entries.append({
@@ -37756,7 +39941,9 @@ def build_specialized_step_review_messages(capability: str,
                                            archive_manifest: str = '') -> list[dict]:
     downstream_need = downstream_extract.strip() or final_focus.strip() or 'the final user-facing answer'
     artifact_text = '\n'.join(f'- {path}' for path in artifact_paths if path)
-    available = dynamic_available_capability_names(bool(str(skill_catalog or '').strip()))
+    # a tool with no model on this Mac is not offered for a retry / added step (it returns nothing)
+    available = [name for name in dynamic_available_capability_names(bool(str(skill_catalog or '').strip()))
+                 if capability_has_usable_model(name)]
     available_capabilities = ', '.join(available)
     skill_instruction = ''
     if str(skill_catalog or '').strip():
@@ -39123,7 +41310,7 @@ def _ocr_pdf_text(path: str) -> str:
     # Image/scanned PDFs have no text layer. Render each page with PyMuPDF and OCR it via
     # macOS Vision. Returns '' if anything is unavailable -- never raises.
     try:
-        import fitz  # pymupdf
+        import pymupdf as fitz  # the `fitz` name is deprecated in PyMuPDF 2
         import tempfile
     except Exception:
         return ''
@@ -40081,6 +42268,7 @@ class AsyncPreflightThread(threading.Thread):
                     return
                 context_blocks = []
                 prompt_history_messages = []
+                steps_history_block = ''
                 active_profile = load_active_settings_profile()
                 # another person's task (their shared folder): their memory, none of the owner's
                 guest_share = guest_share_for_request(self.config.get('remote_request'))
@@ -40126,6 +42314,14 @@ class AsyncPreflightThread(threading.Thread):
                         ))
                         if history_context:
                             context_blocks.append(history_context)
+                    elif prompt_history_messages:
+                        # Sent "as displayed": nothing is retrieved, the turns themselves go to the
+                        # answering model as real turns. The plan's steps have no such turns, so they
+                        # get the same text as a block (2026-11-11; they used to get nothing at all).
+                        steps_history_block = (
+                            'Conversation history context (the earlier turns of this conversation, in full):\n'
+                            + build_history_context(prompt_history_messages)
+                        )
                 if not skip_retrieval_for_blank_prompt and guest_share is None:
                     progress(_tr('Preparing external context and MCP sources'))
                     external_context = timed('external_context', lambda: owner._build_external_context_prompt_context(
@@ -40148,6 +42344,7 @@ class AsyncPreflightThread(threading.Thread):
                     'attachment_context': attachment_context,
                     'attachment_references': attachment_references,
                     'prompt_history_messages': prompt_history_messages,
+                    'steps_history_block': steps_history_block,
                     'history': history,
                     'shared_context': '\n\n'.join(
                         block for block in ([history, attachment_context] if attachment_context else [history]) if block
@@ -40377,7 +42574,11 @@ class AsyncPreflightThread(threading.Thread):
                     return owner._execute_specialized_plan(
                         plan_to_run,
                         question_text,
-                        '\n\n'.join(block for block in [effective_shared_context, extra_context] if str(block or '').strip()),
+                        # steps_history_block: only the steps need it — the answer after them gets
+                        # the same turns as real turns (_launch_main_chat_request)
+                        '\n\n'.join(block for block in [effective_shared_context,
+                                                        context_parts.get('steps_history_block', ''),
+                                                        extra_context] if str(block or '').strip()),
                         history_messages,
                         retrieval_documents,
                         api_key,
@@ -40629,6 +42830,11 @@ class AsyncPreflightThread(threading.Thread):
         return plan, all_results
 
 
+class EditorEditReviewSignals(QObject):
+    # a review of an editor_edit finished in its thread: {'proposal', 'review'}
+    done = pyqtSignal(object)
+
+
 class AsyncChatSignals(QObject):
     delta = pyqtSignal(str)
     # the tool loop streams each round; text before a tool call is taken back (it was never part
@@ -40637,6 +42843,8 @@ class AsyncChatSignals(QObject):
     status = pyqtSignal(str)
     tool_permission = pyqtSignal(object)
     terminal_command = pyqtSignal(object)
+    # the office tool: the editor (GUI thread) reads / runs a script on an open office document
+    office_document = pyqtSignal(object)
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
 
@@ -41270,6 +43478,16 @@ except Exception:
     _SdkHookMatcher = None
 
 
+def _claude_sdk_bundled_cli_present() -> bool:
+    """True when claude_agent_sdk carries its own Claude Code (<package>/_bundled/claude) — the one it
+    runs before any installed `claude` (and the one Broccoli ships)."""
+    try:
+        import claude_agent_sdk as _sdk_package
+        return (Path(_sdk_package.__file__).parent / '_bundled' / 'claude').is_file()
+    except Exception:
+        return False
+
+
 class SdkClaudeSession(threading.Thread):
     """Long-lived Claude Code session driven through claude_agent_sdk's ClaudeSDKClient
     on a background asyncio loop. Drop-in for PersistentTerminalSession: same
@@ -41437,10 +43655,23 @@ class SdkClaudeSession(threading.Thread):
 
     async def _main(self):
         self._loop = _sdk_asyncio.get_running_loop()
-        options = {'cwd': self.cwd, 'permission_mode': self.permission_mode, 'can_use_tool': self._can_use_tool}
+        options = {'cwd': self.cwd, 'permission_mode': self.permission_mode, 'can_use_tool': self._can_use_tool,
+                   # Claude Code's own instructions: without this the SDK sends an EMPTY system prompt
+                   # (2026-11-09: the session ran with no instructions at all)
+                   'system_prompt': {'type': 'preset', 'preset': 'claude_code'}}
+        # the PATH of the user's login shell, so its hooks and MCP servers that run node are found
+        # when Broccoli was opened from the Dock (same as cli_child_environment for Codex)
+        login_path = (await self._loop.run_in_executor(None, cli_child_environment)).get('PATH', '')
+        if login_path:
+            options['env'] = {'PATH': login_path}
         if _SdkHookMatcher is not None:
-            options['hooks'] = {'PreToolUse': [_SdkHookMatcher(matcher='|'.join(EXTERNAL_CLI_EDIT_TOOLS),
-                                                               hooks=[self._pre_tool_hook])]}
+            matcher_kwargs = {'matcher': '|'.join(EXTERNAL_CLI_EDIT_TOOLS), 'hooks': [self._pre_tool_hook]}
+            if _claude_sdk_bundled_cli_present() and 'on_failure' in getattr(_SdkHookMatcher, '__dataclass_fields__', {}):
+                # a failing edit hook blocks the edit instead of counting as "no decision" (2026-11-10).
+                # Only with the SDK's own Claude Code (2.1.317+ honours it): an older installed one
+                # would refuse the whole connection
+                matcher_kwargs['on_failure'] = 'block'
+            options['hooks'] = {'PreToolUse': [_SdkHookMatcher(**matcher_kwargs)]}
         opts = _ClaudeAgentOptions(**options)
         try:
             async with _ClaudeSDKClient(options=opts) as client:
@@ -41465,6 +43696,11 @@ class SdkClaudeSession(threading.Thread):
                         self._emit(self.signals.failed, {'run_id': self._current_run_id, 'error': f'turn failed: {exc}'})
                         continue
                     self.state = 'idle'
+                    if getattr(self, '_turn_usage_limit', False):
+                        self._emit(self.signals.failed, {
+                            'run_id': self._current_run_id,
+                            'error': 'usage limit: ' + str(final or 'Claude Code’s usage ran out.')})
+                        continue
                     self._emit(self.signals.finished, self._finished_payload(
                         final or 'Claude finished but returned no text.', 'done', False))
         finally:
@@ -41477,7 +43713,13 @@ class SdkClaudeSession(threading.Thread):
         # loop simply keeps receiving and naturally continues to the ResultMessage once
         # the user decides.
         final = None
+        self._turn_usage_limit = False
         async for msg in client.receive_response():
+            # Claude Code names the error itself: 'rate_limit' on the answer's message, 429 on the
+            # result. Its sentence ("You've hit your session limit · resets 3:10pm") is then not an
+            # answer: the turn fails with it, as "the usage ran out" (2026-11-12)
+            if str(getattr(msg, 'error', '') or '') == 'rate_limit' or getattr(msg, 'api_error_status', None) == 429:
+                self._turn_usage_limit = True
             if isinstance(msg, _SdkAssistantMessage):
                 for block in getattr(msg, 'content', None) or []:
                     if isinstance(block, _SdkTextBlock):
@@ -41612,19 +43854,35 @@ class SdkClaudeSession(threading.Thread):
         return _PermissionResultAllow()
 
 
+def _bundled_codex():
+    """(program, folder of its helper tools) of the Codex Broccoli ships — OpenAI's own PyPI package
+    openai-codex-cli-bin (module codex_cli_bin), as claude_agent_sdk ships Claude Code. Ryan
+    2026-11-10: the Agent's @Claude Code and @Codex use the bundled copies. A native program: no
+    Node needed. ('', '') when the package is not there (then the user's installed codex)."""
+    try:
+        from codex_cli_bin import bundled_codex_path, bundled_path_dir
+        program = str(bundled_codex_path())
+        helpers = bundled_path_dir()
+        return program, (str(helpers) if helpers else '')
+    except Exception:
+        return '', ''
+
+
 def _discover_codex_bin():
     import shutil
     cand = shutil.which('codex')
     if cand:
         return cand
     for p in (os.path.join(str(Path.home()), '.npm-global/bin/codex'),
-              '/usr/local/bin/codex', os.path.join(str(Path.home()), '.local/bin/codex')):
+              '/usr/local/bin/codex', '/opt/homebrew/bin/codex',
+              os.path.join(str(Path.home()), '.local/bin/codex')):
         if os.path.exists(p):
             return p
     return None
 
 
-_CODEX_BIN = _discover_codex_bin()
+_CODEX_BUNDLED_BIN, _CODEX_BUNDLED_PATH_DIR = _bundled_codex()
+_CODEX_BIN = _CODEX_BUNDLED_BIN or _discover_codex_bin()
 _HAVE_CODEX_APPSERVER = bool(_CODEX_BIN)
 
 
@@ -41701,6 +43959,7 @@ class CodexAppServerSession(threading.Thread):
         self._file_changes = {}  # itemId -> [{path, diff}] so a fileChange approval can show the diff
         self._stop_flag = False
         self.conversation_path = str(config.get('conversation_path', '') or '')
+        self._stderr_tail = []   # codex's last error lines: the reason when the start-up fails
 
     # ---- main-thread interface ----
     def is_alive_session(self):
@@ -41917,27 +44176,54 @@ class CodexAppServerSession(threading.Thread):
         rid = self._next_id()
         ev = threading.Event()
         self._pending_calls[rid] = [ev, None]
+        if self._proc is not None and self._proc.poll() is not None:
+            # codex already exited: nobody will answer, do not wait the full timeout
+            self._pending_calls.pop(rid, None)
+            return None
         self._send({'jsonrpc': '2.0', 'id': rid, 'method': method, 'params': params})
         ev.wait(timeout)
         return self._pending_calls.pop(rid, [None, None])[1]
 
+    def _drain_stderr(self):
+        # Read codex's error output so the pipe never fills; keep the last lines for the failure message.
+        try:
+            for line in self._proc.stderr:
+                line = line.rstrip()
+                if line:
+                    self._stderr_tail.append(line)
+                    del self._stderr_tail[:-20]
+        except Exception:
+            pass
+
     # ---- worker ----
     def run(self):
-        if not _CODEX_BIN:
+        # The PATH the user's login shell sees (opened from the Dock, Broccoli has only the system
+        # folders and the npm `codex` is a Node script -> "env: node: No such file or directory").
+        env = cli_child_environment()
+        if _CODEX_BUNDLED_BIN:
+            # the bundled Codex first (Ryan 2026-11-10); its own helper tools (rg) first on PATH,
+            # the way OpenAI's Python SDK starts it
+            codex_bin = _CODEX_BUNDLED_BIN
+            if _CODEX_BUNDLED_PATH_DIR:
+                env['PATH'] = os.pathsep.join(p for p in (_CODEX_BUNDLED_PATH_DIR, env.get('PATH', '')) if p)
+        else:
+            codex_bin = shutil.which('codex', path=env.get('PATH', '')) or _CODEX_BIN
+        if not codex_bin:
             self.state = 'dead'
             self._emit(self.signals.failed, {'run_id': self._current_run_id, 'error': 'codex CLI not found'})
             return
         try:
             self._proc = subprocess.Popen(
-                [_CODEX_BIN, 'app-server'],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, bufsize=1, cwd=self.cwd,
+                [codex_bin, 'app-server'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1, cwd=self.cwd, env=env,
                 start_new_session=True)   # own process group -> clean group-kill on stop
         except Exception as exc:
             self.state = 'dead'
             self._emit(self.signals.failed, {'run_id': self._current_run_id, 'error': f'codex app-server failed to start: {exc}'})
             return
         threading.Thread(target=self._reader, daemon=True).start()
+        threading.Thread(target=self._drain_stderr, daemon=True).start()
         try:
             self._call('initialize', {'clientInfo': {'name': 'broccoli', 'version': '1'}})
             self._send({'jsonrpc': '2.0', 'method': 'initialized'})
@@ -41948,7 +44234,14 @@ class CodexAppServerSession(threading.Thread):
                 raise RuntimeError('no threadId from thread/start')
         except Exception as exc:
             self.state = 'dead'
-            self._emit(self.signals.failed, {'run_id': self._current_run_id, 'error': f'codex handshake failed: {exc}'})
+            detail = str(exc)
+            if self._proc.poll() is not None:
+                time.sleep(0.2)   # let the error reader take codex's last lines
+                detail = f'codex app-server exited ({self._proc.returncode})'
+            tail = ' | '.join(self._stderr_tail[-3:])
+            if tail:
+                detail = f'{detail}: {tail}'
+            self._emit(self.signals.failed, {'run_id': self._current_run_id, 'error': f'codex handshake failed: {detail}'})
             try:
                 self._proc.terminate()
             except Exception:
@@ -42095,6 +44388,12 @@ class CodexAppServerSession(threading.Thread):
         except Exception:
             pass
         finally:
+            # codex is gone: wake every call still waiting for an answer
+            for slot in list(self._pending_calls.values()):
+                try:
+                    slot[0].set()
+                except Exception:
+                    pass
             if not self._stop_flag:
                 self._turn_error = self._turn_error or 'codex app-server exited'
                 self._turn_done.set()
@@ -42619,7 +44918,7 @@ def tool_request_refusal_kind(exc) -> str:
         status = getattr(getattr(exc, 'response', None), 'status_code', None)
     if not isinstance(status, int) or not 400 <= status < 500 or status in (401, 403, 404, 408, 409, 429):
         return ''
-    text = str(exc).lower()
+    text = llm_error_text(exc).lower()
     if 'stream' in text:
         return 'stream'
     if re.search(r'tool|function', text):
@@ -42847,7 +45146,7 @@ class AsyncChatThread(threading.Thread):
         cand = candidates[idx]
         try:
             new_client = OpenAI(
-                api_key=cand['api_key'],
+                api_key=openai_client_api_key(cand['api_key']),
                 base_url=cand['endpoint'],
                 timeout=cand.get('timeout', self.config.get('timeout', 60)),
             )
@@ -43060,6 +45359,45 @@ class AsyncChatThread(threading.Thread):
             'command': str(request.get('command', '') or ''),
         }
 
+    def _run_office_document(self, arguments: dict) -> str:
+        """The office tool. The document lives in the editor's view (GUI thread): the request is
+        handed over there and this thread waits — for a changing script that includes the user's
+        decision."""
+        arguments = arguments if isinstance(arguments, dict) else {}
+        action = str(arguments.get('action', '') or '').strip().lower()
+        if action not in ('layout', 'script'):
+            return 'action must be "layout" or "script".'
+        if action == 'script' and not str(arguments.get('script', '') or '').strip():
+            return 'action "script" needs a non-empty "script".'
+        self.signals.status.emit(_tr('Reading the document layout') if action == 'layout'
+                                 else _tr('Running a script on the document'))
+        request = {
+            'run_id': str(self.config.get('run_id', '') or ''),
+            'conversation_path': str(self.config.get('conversation_path', '') or ''),
+            'action': action,
+            'file': str(arguments.get('file', '') or ''),
+            'script': str(arguments.get('script', '') or ''),
+            'summary': str(arguments.get('summary', '') or ''),
+            'images': [str(item) for item in (arguments.get('images') or []) if isinstance(item, str)][:8],
+            'result': '',
+            'event': threading.Event(),
+        }
+        self.signals.office_document.emit(request)
+        stop_event = getattr(self, '_stop_event', None)
+        deadline = time.time() + OFFICE_SCRIPT_WAIT_SECONDS
+        while not request['event'].wait(0.25):
+            if time.time() > deadline:
+                request['abandoned'] = True
+                return 'The document did not answer in time; nothing was written.'
+            if stop_event is not None and stop_event.is_set():
+                request['abandoned'] = True
+                return 'Stopped.'
+        if action == 'layout' and request.get('data') is not None:
+            # the bytes were read on the GUI thread; listing them is done here
+            return office_files.office_layout(request['data'], str(request.get('kind') or ''), arguments.get('page')) \
+                or 'Nothing to list.'
+        return str(request.get('result') or 'No result.')
+
     def _run_editor_read(self, arguments: dict) -> str:
         """Native editor read: slice the requested lines from the live-text
         snapshot captured at send time. No shell, no approval, no GUI access
@@ -43245,6 +45583,10 @@ class AsyncChatThread(threading.Thread):
                 },
             })
             tool_map[editor_read_tool_name] = {'runtime': 'editor_read'}
+            office_tool = office_document_tool_definition(editor_read_files.keys())
+            if office_tool is not None and getattr(self.signals, 'office_document', None) is not None:
+                tool_defs.append(office_tool)
+                tool_map[OFFICE_DOCUMENT_TOOL_NAME] = {'runtime': 'office_document'}
         if bool(self.config.get('web_page_tool_enabled', False)):
             tool_defs.append(web_page_read_tool_definition())
             tool_map[WEB_PAGE_READ_TOOL_NAME] = {'runtime': 'read_web_page'}
@@ -43301,7 +45643,9 @@ class AsyncChatThread(threading.Thread):
         stop_event = getattr(self, '_stop_event', None)
         tools_key = (str(self.config.get('endpoint', '') or ''), str(self.config.get('model', '') or ''))
         # Open Connector needs a few more rounds: find the action, read its guide, run it, retry
-        max_rounds = (OPEN_CONNECTOR_TOOL_ROUNDS if any(meta.get('connector') for meta in tool_map.values())
+        # … and so does scripting an office document: layout, look up a method, run, correct, run
+        max_rounds = (OPEN_CONNECTOR_TOOL_ROUNDS if any(meta.get('connector') or meta.get('runtime') == 'office_document'
+                                                        for meta in tool_map.values())
                       else MCP_TOOL_RUNTIME_MAX_ROUNDS)
         for round_index in range(max_rounds):
             if stop_event is not None and stop_event.is_set():
@@ -43401,7 +45745,7 @@ class AsyncChatThread(threading.Thread):
                 # a file is read / changed again on purpose (it may have changed, a write may have
                 # come back "busy"): never answered from the cache
                 if tool_meta is not None and str(tool_meta.get('runtime', '') or '') not in (
-                        'terminal_command', 'file_read', 'file_edit', 'task_board'):
+                        'terminal_command', 'file_read', 'file_edit', 'task_board', 'office_document'):
                     dedupe_key = function_name + '\n' + json.dumps(
                         arguments, ensure_ascii=False, sort_keys=True, default=str
                     )
@@ -43425,6 +45769,8 @@ class AsyncChatThread(threading.Thread):
                 elif tool_meta.get('runtime') == 'editor_read':
                     self.signals.status.emit(_tr('Reading editor file'))
                     result_text = self._run_editor_read(arguments)
+                elif tool_meta.get('runtime') == 'office_document':
+                    result_text = self._run_office_document(arguments)
                 elif tool_meta.get('runtime') == 'read_web_page':
                     self.signals.status.emit(_tr('Reading web page: {url}').format(
                         url=str(arguments.get('url', '') or '')[:120]))
@@ -43580,7 +45926,7 @@ class AsyncChatThread(threading.Thread):
         try:
             timeout = self.config.get('timeout', 60)
             client = OpenAI(
-                api_key=self.config['api_key'],
+                api_key=openai_client_api_key(self.config['api_key']),
                 base_url=self.config['endpoint'],
                 timeout=timeout,
             )
@@ -44536,6 +46882,7 @@ class BrowserUseThread(threading.Thread):
         # setdefault 保留用户显式环境变量的覆盖权。
         env.setdefault('ANONYMIZED_TELEMETRY', 'false')
         env.setdefault('BROWSER_USE_CLOUD_SYNC', 'false')
+        env.setdefault('BROWSER_USE_CLOUD_HINTS', 'false')   # no "use cloud browsers" ad in the log (0.13.12+)
         os.makedirs(env['BROWSER_USE_CONFIG_DIR'], exist_ok=True)
         worker_config = dict(attempt_config)
         # The helper only needs the active model. Keep alternate credentials in
@@ -45154,13 +47501,15 @@ def task_capsule_error_code(exc: BaseException) -> str:
         return 'model_blocked'
     if isinstance(exc, (openai.APITimeoutError, TimeoutError)):
         return 'timeout'
-    try:
-        import httpx
-        if isinstance(exc, httpx.TimeoutException):   # 流式读取中途超时是 httpx 原样抛出
-            return 'timeout'
-    except Exception:
-        pass
-    text = str(exc or '').lower()
+    # a raw transport timeout while streaming (openai 3 wraps it as APITimeoutError already; openai 2
+    # let httpx's own exception through — openai 3 uses httpx2)
+    for _transport in ('httpx2', 'httpx'):
+        try:
+            if isinstance(exc, __import__(_transport).TimeoutException):
+                return 'timeout'
+        except Exception:
+            pass
+    text = llm_error_text(exc).lower()
     if getattr(exc, 'status_code', None) == 413 or any(marker in text for marker in _TASK_CAPSULE_CONTEXT_ERROR_MARKERS):
         return 'context_too_long'
     if 'timed out' in text or 'timeout' in text:
@@ -45940,6 +48289,14 @@ class NativeHotkeyTapThread(threading.Thread):
             CFRunLoopStop(self._runloop)
 
 
+# Written by the main window, read by the key listener's thread: it looks at Esc only while the
+# circle scans (style book 5.1.13). (A right press on the circle is let through by the watch below
+# already: RIGHT_DRAG_PASS_RECTS.)
+CIRCLE_SCAN_RUNNING = {'on': False}
+# … and at ⌘C only while something is selected in the circle's answer card (it never has the keyboard).
+CIRCLE_ANSWER_SELECTION = {'on': False}
+
+
 class NativeRightDragTapThread(threading.Thread):
     """Hold the right button, move up, let go = the AI task column (AITaskRightDragGesture). A tap
     of its own that hears only the right button (down, drag, up): left clicks, moves and scrolls
@@ -46265,6 +48622,9 @@ class GlobalHotkeyManager(QObject):
     edge_toggle_pressed = pyqtSignal()
     ai_tasks_pressed = pyqtSignal()            # 2026-10-31: the AI task column at the pointer
     collapsed_circle_pressed = pyqtSignal()    # 2026-11-07: the 🥦 circle in / out while the main window is open
+    grid_layer_pressed = pyqtSignal(int)       # 2026-11-12: a layer of the circle's grid (0 = layer 1)
+    escape_pressed = pyqtSignal()              # 2026-11-12: Esc, anywhere (it calls off the circle's scan)
+    copy_pressed = pyqtSignal()                # 2026-11-12: ⌘C while the circle's answer card has a selection
     shortcut_recorded = pyqtSignal(str, str)
     shortcut_record_failed = pyqtSignal(str, str)
     backend_ready = pyqtSignal()
@@ -46284,6 +48644,7 @@ class GlobalHotkeyManager(QObject):
         self._edge_toggle_spec = self._read_settings_shortcut_spec('edge_toggle_shortcut')
         self._ai_tasks_spec = self._read_ai_tasks_spec()
         self._collapsed_circle_spec = self._read_settings_shortcut_spec(COLLAPSED_BUTTON_SHORTCUT_KEY)
+        self._grid_layer_specs = [self._read_settings_shortcut_spec(key) for key in COLLAPSED_BUTTON_LAYER_SHORTCUT_KEYS]
         self._right_drag_thread = None
         self._right_drag_failed = False
         self._right_drag_wanted = self._read_right_drag_wanted()
@@ -46371,13 +48732,14 @@ class GlobalHotkeyManager(QObject):
             self._edge_toggle_spec = self._read_settings_shortcut_spec('edge_toggle_shortcut')
             self._ai_tasks_spec = self._read_ai_tasks_spec()
             self._collapsed_circle_spec = self._read_settings_shortcut_spec(COLLAPSED_BUTTON_SHORTCUT_KEY)
+            self._grid_layer_specs = [self._read_settings_shortcut_spec(key) for key in COLLAPSED_BUTTON_LAYER_SHORTCUT_KEYS]
             self._right_drag_wanted = self._read_right_drag_wanted()
         self._sync_right_drag()
 
     def begin_recording(self, target: str) -> bool:
         if not self.available or not self._backend_ready_flag or target not in {
                 'ui', 'same_position_screenshot', 'region_screenshot', 'edge_toggle', 'ai_tasks',
-                'collapsed_circle'}:
+                'collapsed_circle'} | {f'grid_layer_{number}' for number in range(1, COLLAPSED_LAUNCHER_LAYERS + 1)}:
             return False
         with self._lock:
             self._record_target = target
@@ -46396,6 +48758,10 @@ class GlobalHotkeyManager(QObject):
         self.backend_failed.emit()
 
     def handle_keydown(self, flags: int, keycode: int):
+        if keycode == 53 and CIRCLE_SCAN_RUNNING.get('on'):   # Esc while the circle scans: called off
+            self.escape_pressed.emit()
+        if keycode == 8 and CIRCLE_ANSWER_SELECTION.get('on') and flags == MODIFIER_FLAG_BITS.get('cmd'):
+            self.copy_pressed.emit()   # ⌘C with something selected in the circle's answer card
         key_token = KEYCODE_TO_TOKEN.get(keycode)
         if key_token is None:
             return
@@ -46422,6 +48788,8 @@ class GlobalHotkeyManager(QObject):
             ai_tasks_spec = dict(self._ai_tasks_spec) if self._ai_tasks_spec is not None else None
             collapsed_circle_spec = (dict(self._collapsed_circle_spec)
                                      if self._collapsed_circle_spec is not None else None)
+            grid_layer_specs = [dict(spec) if spec is not None else None
+                                for spec in getattr(self, '_grid_layer_specs', [])]
 
         if record_target is not None:
             if flags == 0:
@@ -46445,6 +48813,12 @@ class GlobalHotkeyManager(QObject):
                     self._ai_tasks_spec = updated_spec
                 elif record_target == 'collapsed_circle':
                     self._collapsed_circle_spec = updated_spec
+                elif record_target.startswith('grid_layer_'):
+                    layer_index = int(record_target.rsplit('_', 1)[1]) - 1
+                    specs = list(getattr(self, '_grid_layer_specs', [])) + [None] * COLLAPSED_LAUNCHER_LAYERS
+                    specs = specs[:COLLAPSED_LAUNCHER_LAYERS]
+                    specs[layer_index] = updated_spec
+                    self._grid_layer_specs = specs
                 self._record_target = None
 
             self.shortcut_recorded.emit(record_target, normalized)
@@ -46483,6 +48857,11 @@ class GlobalHotkeyManager(QObject):
             and flags == collapsed_circle_spec['flags']
         ):
             matched_action = 'collapsed_circle'
+        else:
+            for layer_index, layer_spec in enumerate(grid_layer_specs):
+                if layer_spec is not None and keycode == layer_spec['keycode'] and flags == layer_spec['flags']:
+                    matched_action = f'grid_layer_{layer_index}'
+                    break
         if matched_action is None:
             return
         if now - self._last_trigger < self._cooldown_seconds:
@@ -46498,6 +48877,8 @@ class GlobalHotkeyManager(QObject):
             self.ai_tasks_pressed.emit()
         elif matched_action == 'collapsed_circle':
             self.collapsed_circle_pressed.emit()
+        elif matched_action.startswith('grid_layer_'):
+            self.grid_layer_pressed.emit(int(matched_action.rsplit('_', 1)[1]))
         else:
             self.ui_hotkey_pressed.emit()
 
@@ -58480,6 +60861,23 @@ def login_shell_search_path() -> str:
     return cached
 
 
+def cli_child_environment() -> dict:
+    """The environment for a CLI Broccoli starts itself without a shell (the Codex app-server, Claude
+    Code through its SDK): this process's environment with the PATH of the user's login shell —
+    the same rebuild the terminal targets do. Opened from Finder/Dock, Broccoli has only
+    /usr/bin:/bin:/usr/sbin:/sbin, so a CLI that is a Node script, or whose hooks and MCP servers
+    call node, fails ("env: node: No such file or directory"). Runs one shell the first time
+    (cached): call it on a worker thread, never the main thread."""
+    env = os.environ.copy()
+    try:
+        login_path = login_shell_search_path()
+        if login_path:
+            env['PATH'] = login_path
+    except Exception:
+        pass
+    return env
+
+
 _AGENT_CLI_EXECUTABLE_CACHE: dict[str, tuple[float, str]] = {}
 AGENT_CLI_EXECUTABLE_CACHE_SECONDS = 2.0
 
@@ -62005,6 +64403,24 @@ class AssistantCapsuleButton(QPushButton):
         painter.end()
 
 
+class ShownWithChild(QObject):
+    """A wrapper widget that is shown exactly while the one child it wraps is shown (the child is
+    shown and hidden by code that does not know about the wrapper)."""
+
+    def __init__(self, child, wrapper):
+        super().__init__(wrapper)
+        self._wrapper = wrapper
+        child.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind == QEvent.Type.ShowToParent:
+            self._wrapper.setVisible(True)
+        elif kind == QEvent.Type.HideToParent:
+            self._wrapper.setVisible(False)
+        return False
+
+
 class AssistantHoverStack(QWidget):
     """
     Wraps a main capsule button; on hover shows additional capsule buttons
@@ -63932,7 +66348,8 @@ def suggest_next_question_for_path(path: str, api_key: str, endpoint: str, model
     last = turns[-1] if turns and isinstance(turns[-1], dict) else {}
     question = str(last.get('question', '') or '').strip()
     answer = _NEXT_QUESTION_TAG_RE.sub(' ', str(last.get('answer', '') or '')).strip()
-    if not answer or answer.startswith('Error, please try again!'):   # the finish handler's error turn
+    if not answer or answer.startswith('Error, please try again!') or answer.startswith(AGENT_USAGE_END_MARK):
+        # the finish handler's error turn, or the fixed lines of a run whose usage ran out
         result['reason'] = 'no_answer'
         return result
     summary = str((record.get('memory') or {}).get('running_summary', '') or '')
@@ -64011,12 +66428,48 @@ class AssistantPromptInlineEdit(QPlainTextEdit):
     # colour, font and place: Qt's own placeholder shows only in a fully empty box, so a box that
     # holds a carried-over @target would never show it. While a suggestion is set, Qt's placeholder
     # is blanked; placeholderText() keeps returning the normal hint.
+    #
+    # A normal hint too long for the one row ("Runs on <a long device name> — Send goes there") is
+    # drawn here as well: Qt wraps its placeholder, and the row shows only the first line of it with
+    # nothing to say the rest is cut. Drawn here it ends in "…" and hovering shows all of it, like
+    # the suggested question. A hint that fits stays Qt's own.
     def setPlaceholderText(self, text):
         self._base_placeholder = str(text or '')
-        super().setPlaceholderText('' if self._next_question else self._base_placeholder)
+        self._sync_hint()
 
     def placeholderText(self):
         return self._base_placeholder
+
+    def setToolTip(self, text):
+        self._base_tooltip = str(text or '')
+        self._sync_hint()
+
+    def _hint_left(self) -> int:
+        return max(0, self.cursorRect(QTextCursor(self.document())).left())
+
+    def hint_overflows(self) -> bool:
+        """The normal hint does not fit on the one row."""
+        if not self._base_placeholder:
+            return False
+        metrics = PyQt6.QtGui.QFontMetrics(self.document().defaultFont())
+        return metrics.horizontalAdvance(self._base_placeholder) > self.viewport().width() - self._hint_left() - 2
+
+    def _sync_hint(self):
+        """Who draws the hint (Qt, or this box when it is a suggestion or too long) and what
+        hovering says: the suggestion's key, else the whole of a cut hint, else the box's own tip."""
+        overflows = self.hint_overflows()
+        qt_text = '' if (self._next_question or overflows) else self._base_placeholder
+        if QPlainTextEdit.placeholderText(self) != qt_text:
+            super().setPlaceholderText(qt_text)
+        if self._next_question:
+            tip = _tr('Press Return to fill in: {text}').format(text=self._next_question)
+        elif overflows:
+            tip = self._base_placeholder
+        else:
+            tip = self._base_tooltip
+        if self.toolTip() != tip:
+            super().setToolTip(tip)
+        self.viewport().update()
 
     def next_question(self) -> str:
         return self._next_question
@@ -64025,12 +66478,8 @@ class AssistantPromptInlineEdit(QPlainTextEdit):
         text = ' '.join(str(text or '').split())
         if text == self._next_question:
             return
-        if not self._next_question:
-            self._base_tooltip = self.toolTip()
         self._next_question = text
-        super().setPlaceholderText('' if text else self._base_placeholder)
-        self.setToolTip(_tr('Press Return to fill in: {text}').format(text=text) if text else self._base_tooltip)
-        self.viewport().update()
+        self._sync_hint()
 
     def _next_question_anchor(self) -> int:
         """Where the suggestion goes: the end of the line the cursor is on (right after a
@@ -64064,16 +66513,25 @@ class AssistantPromptInlineEdit(QPlainTextEdit):
     def inputMethodEvent(self, event):
         self._preedit_active = bool(event.preeditString())
         super().inputMethodEvent(event)
-        if self._next_question:
+        if self._next_question or self.hint_overflows():
             self.viewport().update()
+
+    def cut_hint_shown(self) -> bool:
+        """This box is drawing the too-long normal hint: empty box, nothing being composed."""
+        return (not self._next_question and not self._preedit_active and self.document().isEmpty()
+                and self.hint_overflows())
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if not self.next_question_shown():
+        if self.next_question_shown():
+            text, anchor = self._next_question, self._next_question_anchor()
+        elif self.cut_hint_shown():
+            text, anchor = self._base_placeholder, 0
+        else:
             return
         viewport = self.viewport()
         cursor = QTextCursor(self.document())
-        cursor.setPosition(self._next_question_anchor())
+        cursor.setPosition(anchor)
         caret = self.cursorRect(cursor)
         font = self.document().defaultFont()
         metrics = PyQt6.QtGui.QFontMetrics(font)
@@ -64081,7 +66539,7 @@ class AssistantPromptInlineEdit(QPlainTextEdit):
         available = viewport.width() - x - 2
         if available < metrics.horizontalAdvance('…') * 4:
             return
-        shown = metrics.elidedText(self._next_question, Qt.TextElideMode.ElideRight, available)
+        shown = metrics.elidedText(text, Qt.TextElideMode.ElideRight, available)
         painter = QPainter(viewport)
         try:
             painter.setFont(font)
@@ -64134,6 +66592,7 @@ class AssistantPromptInlineEdit(QPlainTextEdit):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._sync_hint()   # a hint that fitted may be cut now, and the other way round
         self.anchor_geometry_changed.emit()
         self._schedule_multiline_check()
 
@@ -64143,6 +66602,7 @@ class AssistantPromptInlineEdit(QPlainTextEdit):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._sync_hint()
         self._schedule_multiline_check()
 
     def changeEvent(self, event):
@@ -66977,7 +69437,7 @@ def _encode_attachment_file(path: str) -> 'dict | None':
         _PDF_MAX_PAGES = load_pdf_max_pages()   # 0 = unlimited
         # ── Primary path: render each page to WebP via pymupdf ───────────────
         try:
-            import fitz  # pymupdf
+            import pymupdf as fitz  # the `fitz` name is deprecated in PyMuPDF 2
             import io
             from PIL import Image as _PILImage
             doc = fitz.open(path)
@@ -68205,7 +70665,7 @@ class TranslationWorkerThread(threading.Thread):
     def run(self):
         try:
             client = OpenAI(
-                api_key=self.config['api_key'],
+                api_key=openai_client_api_key(self.config['api_key']),
                 base_url=self.config['endpoint'],
                 timeout=int(self.config.get('timeout', 60) or 60),
             )
@@ -69163,15 +71623,15 @@ class TranslationPopupWindow(QWidget):
 
 def paint_ai_task_dot(painter, center: QPointF, diameter: float, state: str, seen: bool, spin: float = 0.0):
     """One AI task's status dot (style book 5.1.3): running = grey with a turning arc, done = green
-    (hollow once looked at), stopped = grey ring; always with a 1.5 white halo so it shows on any
-    background."""
+    (hollow once looked at), stopped = grey ring, waiting for the person = orange, ended on an error =
+    red ring (2026-11-12); always with a 1.5 white halo so it shows on any background."""
     radius = diameter / 2.0
     color = QColor(AI_TASK_STATUS_COLORS.get(state, AI_TASK_STATUS_COLORS[AI_TASK_STATE_RUNNING]))
     painter.save()
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(255, 255, 255, 235))
     painter.drawEllipse(center, radius + 1.5, radius + 1.5)
-    hollow = state == AI_TASK_STATE_STALLED or (state == AI_TASK_STATE_DONE and seen)
+    hollow = state in (AI_TASK_STATE_STALLED, AI_TASK_STATE_FAILED) or (state == AI_TASK_STATE_DONE and seen)
     if hollow:
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(color, 2.0))
@@ -69199,8 +71659,29 @@ def ai_task_age_text(activity: float, now: float | None = None) -> str:
 
 
 def ai_task_where_text(item: dict) -> str:
+    if item.get('agent') == 'openclaw':
+        return _tr('OpenClaw page')
     return {'vscode': _tr('VS Code'), 'agent': _tr('Agent'),
             'broccoli_terminal': _tr('Broccoli terminal')}.get(item.get('source'), _tr('Terminal'))
+
+
+def ai_task_reason_text(item: dict) -> str:
+    """The few words for a state the dot's color alone does not explain ('' = none): shown in the
+    capsule in place of where the task lives."""
+    state, reason = item.get('state'), str(item.get('reason', '') or '')
+    if state == AI_TASK_STATE_WAITING:
+        return _tr('Asked you') if reason == 'question' else _tr('Needs approval')
+    if state == AI_TASK_STATE_FAILED:
+        return {'rate_limit': _tr('Usage limit'), 'authentication_failed': _tr('Signed out'),
+                'timeout': _tr('Timed out')}.get(reason, _tr('Error'))
+    if state == AI_TASK_STATE_RUNNING and reason == 'background':
+        return _tr('Background work')
+    return ''
+
+
+def ai_task_meta_text(item: dict) -> str:
+    return '{} · {}'.format(ai_task_reason_text(item) or ai_task_where_text(item),
+                            ai_task_age_text(item.get('activity', 0)))
 
 
 class AITaskCapsule(TranslationGlassButton):
@@ -69232,7 +71713,9 @@ class AITaskCapsule(TranslationGlassButton):
         tip = [str(item.get('title', '') or '')]
         if item.get('cwd'):
             tip.append(str(item['cwd']))
-        tip.append('{} · {}'.format(ai_task_where_text(item), ai_task_age_text(item.get('activity', 0))))
+        tip.append(ai_task_meta_text(item))
+        if ai_task_reason_text(item):
+            tip.append(ai_task_where_text(item))
         self.setToolTip('\n'.join(line for line in tip if line))
         self.update()
 
@@ -69261,7 +71744,7 @@ class AITaskCapsule(TranslationGlassButton):
         right = rect.right() - (2 * self.DOT_INSET if self.mirrored else 14)
         small = QFont('Helvetica Neue')
         small.setPixelSize(11)
-        meta = '{} · {}'.format(ai_task_where_text(item), ai_task_age_text(item.get('activity', 0)))
+        meta = ai_task_meta_text(item)
         meta_color = QColor(self._text_color)
         meta_color.setAlpha(153)
         painter.setFont(small)
@@ -69726,6 +72209,8 @@ def shortcut_icon_pixmap(shortcut: dict, color: QColor, size: int, dpr: float = 
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     glyph = mac_shortcut_glyph_image(int((shortcut or {}).get('glyph', 0) or 0))
+    if glyph is None:
+        glyph = system_symbol_image((shortcut or {}).get('symbol', ''))   # a quick command's line icon (5.1.11)
     if glyph is not None:
         painter.drawImage(QRectF(0, 0, size, size), glyph)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
@@ -69823,6 +72308,102 @@ def spring_progress(t: float, damping: float, omega: float) -> float:
 
 class MacShortcutSignals(QObject):
     run_failed = pyqtSignal(str, str)   # name, the tool's message
+    command_failed = pyqtSignal(str, str)   # a quick command's script: name, what it printed
+
+
+# ── Broccoli's own quick commands (style book 5.1.11) ──
+# The icons one can pick: system line icons (SF Symbols) by name, with the word the list shows.
+CIRCLE_COMMAND_SYMBOLS = (
+    ('bolt.fill', 'Bolt'), ('star.fill', 'Star'), ('heart.fill', 'Heart'), ('globe', 'Globe'),
+    ('newspaper', 'News'), ('magnifyingglass', 'Search'), ('envelope', 'Mail'), ('calendar', 'Calendar'),
+    ('clock', 'Clock'), ('doc.text', 'Document'), ('folder', 'Folder'), ('terminal', 'Terminal'),
+    ('chevron.left.forwardslash.chevron.right', 'Code'), ('music.note', 'Music'), ('photo', 'Photo'),
+    ('camera', 'Camera'), ('video', 'Video'), ('mic', 'Microphone'), ('bubble.left', 'Chat'), ('phone', 'Phone'),
+    ('map', 'Map'), ('cart', 'Cart'), ('creditcard', 'Card'), ('chart.bar', 'Chart'), ('book', 'Book'),
+    ('graduationcap', 'Study'), ('lightbulb', 'Idea'), ('wand.and.stars', 'Magic'), ('sparkles', 'Sparkles'),
+    ('gearshape', 'Gear'), ('house', 'Home'), ('person', 'Person'), ('cloud', 'Cloud'), ('sun.max', 'Sun'),
+    ('moon', 'Moon'), ('flag', 'Flag'), ('bookmark', 'Bookmark'), ('tag', 'Tag'), ('paperplane', 'Send'),
+    ('trash', 'Trash'), ('lock', 'Lock'), ('key', 'Key'), ('wifi', 'Wi-Fi'), ('desktopcomputer', 'Computer'),
+    ('keyboard', 'Keyboard'), ('printer', 'Printer'), ('gamecontroller', 'Game'), ('cup.and.saucer', 'Coffee'),
+    ('airplane', 'Travel'), ('hammer', 'Tools'),
+)
+_SYSTEM_SYMBOL_IMAGES = {}   # symbol name -> QImage (ink on clear, 128 px) or None
+
+
+def system_symbol_image(name: str):
+    """A system line icon (SF Symbol) by its name: its ink on clear, 128 pixels square (64 points),
+    or None (no such symbol, not on a Mac). Drawn once."""
+    name = str(name or '').strip()
+    if not name:
+        return None
+    if name in _SYSTEM_SYMBOL_IMAGES:
+        return _SYSTEM_SYMBOL_IMAGES[name]
+    image = None
+    if AppKit is not None and objc is not None:
+        try:
+            symbol = AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, None)
+            if symbol is not None:
+                config = AppKit.NSImageSymbolConfiguration.configurationWithPointSize_weight_(38.0, AppKit.NSFontWeightMedium)
+                symbol = symbol.imageWithSymbolConfiguration_(config) or symbol
+                size = symbol.size()
+                scale = min(1.0, 56.0 / max(1.0, size.width), 56.0 / max(1.0, size.height))
+                width, height = size.width * scale, size.height * scale
+                bitmap = AppKit.NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
+                    None, 128, 128, 8, 4, True, False, AppKit.NSDeviceRGBColorSpace, 0, 0)
+                bitmap.setSize_(AppKit.NSMakeSize(64, 64))
+                context = AppKit.NSGraphicsContext.graphicsContextWithBitmapImageRep_(bitmap)
+                AppKit.NSGraphicsContext.saveGraphicsState()
+                try:
+                    AppKit.NSGraphicsContext.setCurrentContext_(context)
+                    symbol.drawInRect_fromRect_operation_fraction_(
+                        AppKit.NSMakeRect((64 - width) / 2.0, (64 - height) / 2.0, width, height),
+                        AppKit.NSZeroRect, AppKit.NSCompositingOperationSourceOver, 1.0)
+                finally:
+                    AppKit.NSGraphicsContext.restoreGraphicsState()
+                png = bitmap.representationUsingType_properties_(AppKit.NSBitmapImageFileTypePNG, {})
+                drawn = QImage.fromData(bytes(png))
+                if not drawn.isNull() and _image_has_ink(drawn):
+                    image = drawn
+        except Exception:
+            logging.exception('Drawing the system symbol %s failed.', name)
+            image = None
+    _SYSTEM_SYMBOL_IMAGES[name] = image
+    return image
+
+
+def run_circle_script(command: dict):
+    """Run a quick command of the script kinds and wait until it is done (call it off the main
+    thread): AppleScript through osascript, a shell script through the login shell. Raises with
+    what the script printed as its error."""
+    text = str(command.get('text', '') or '')
+    if not text.strip():
+        raise RuntimeError('empty script')
+    if str(command.get('kind', '') or '') == 'applescript':
+        arguments = ['/usr/bin/osascript', '-e', text]
+    else:
+        arguments = [os.environ.get('SHELL') or '/bin/zsh', '-lc', text]
+    result = subprocess.run(arguments, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                            cwd=os.path.expanduser('~'))
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or '').strip()[-600:] or f'exit {result.returncode}')
+
+
+def mouse_button_held_anywhere() -> bool:
+    """Is a mouse button held right now, in any app (read from the system, nothing is changed)."""
+    if AppKit is not None:
+        try:
+            return bool(AppKit.NSEvent.pressedMouseButtons())
+        except Exception:
+            pass
+    return QGuiApplication.mouseButtons() != Qt.MouseButton.NoButton
+
+
+def circle_command_free_layer(layers: list, first: int = 1):
+    """The first layer (its index, from `first`: 1 = layer 2) with a free place, or None."""
+    for index in range(max(0, int(first)), len(layers)):
+        if len(layers[index]) < COLLAPSED_LAUNCHER_SLOTS:
+            return index
+    return None
 
 
 class CollapsedLauncherPanel(QWidget):
@@ -69869,6 +72450,9 @@ class CollapsedLauncherPanel(QWidget):
     def mouseDoubleClickEvent(self, event):
         self.launcher.panel_press(event)
 
+    def wheelEvent(self, event):
+        self.launcher.panel_wheel(event)
+
     def contextMenuEvent(self, event):
         self.launcher.panel_context_menu(event)
 
@@ -69888,6 +72472,15 @@ class CollapsedButtonLauncher(QWidget):
     menu_requested = pyqtSignal(str, int, QPoint)   # 'home' / 'item' / 'empty', its index, where
     home_drag_started = pyqtSignal()
     closed = pyqtSignal()
+    layer_requested = pyqtSignal(int)          # a page dot, the wheel, a swipe: show this layer (0 = layer 1)
+    DOT = 6                   # the page dots under the grid (style book 5.1.12)
+    DOT_GAP = 8
+    DOT_FROM_BOTTOM = 8       # their middle above the panel's bottom edge
+    DOT_HIT = 14              # each dot takes clicks in a square this big
+    FLIP_MS = 180
+    FLIP_SLIDE = 22.0         # the new layer's shortcuts come in from this far to the side
+    WHEEL_STEP = 120.0        # one notch of a mouse wheel; a swipe on the trackpad adds up to it
+    WHEEL_REST_S = 0.35       # after a flip the wheel is ignored this long (one swipe = one layer)
     CELL = 88
     PAD = 12
     PANEL = 2 * PAD + 3 * CELL
@@ -69955,6 +72548,21 @@ class CollapsedButtonLauncher(QWidget):
         self._closing = False
         self._pixmaps = {}
         self._bubble_grid = -1
+        self.layer = 0               # the layer it shows (0 = layer 1)
+        self.layer_count = 1         # how many page dots (1 = none)
+        self.by_key = False          # opened by a shortcut: it stays until the pointer has been in it and left
+        self._entered = False
+        self.buttons_down = None     # callable: is a mouse button held anywhere (set by the main window)
+        self._flip = 1.0             # 0 → 1 while a new layer comes in
+        self._flip_direction = 1
+        self._flip_anim = QVariantAnimation(self)
+        self._flip_anim.setStartValue(0.0)
+        self._flip_anim.setEndValue(1.0)
+        self._flip_anim.setDuration(self.FLIP_MS)
+        self._flip_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._flip_anim.valueChanged.connect(self._on_flip)
+        self._wheel_sum = 0.0
+        self._wheel_rest_until = 0.0
         self._poll = QTimer(self)
         self._poll.setInterval(40)
         self._poll.timeout.connect(self._on_poll)
@@ -69978,6 +72586,69 @@ class CollapsedButtonLauncher(QWidget):
 
     def layout_places(self) -> tuple:
         return COLLAPSED_LAUNCHER_LAYOUTS[min(len(self.items), COLLAPSED_LAUNCHER_SLOTS)]
+
+    # ── the layers (style book 5.1.12) ──────────────────────────────────────
+    def dot_rects(self) -> list:
+        """The page dots (window coordinates), one per layer, centred under the grid; none with one layer."""
+        count = int(self.layer_count)
+        if count <= 1:
+            return []
+        panel = QRectF(self.panel_rect())
+        width = count * self.DOT + (count - 1) * self.DOT_GAP
+        left = panel.center().x() - width / 2.0
+        top = panel.bottom() - self.DOT_FROM_BOTTOM - self.DOT / 2.0
+        return [QRectF(left + index * (self.DOT + self.DOT_GAP), top, self.DOT, self.DOT) for index in range(count)]
+
+    def dot_at(self, window_pos) -> int:
+        point = QPointF(window_pos)
+        for index, dot in enumerate(self.dot_rects()):
+            grow = (self.DOT_HIT - self.DOT) / 2.0
+            if dot.adjusted(-grow, -grow, grow, grow).contains(point):
+                return index
+        return -1
+
+    def show_layer(self, layer: int, items: list, layer_count: int, direction: int = 1):
+        """Another layer's shortcuts take the grid's places: they come in from the side they were
+        flipped from (the middle and the panel stay)."""
+        self.layer = int(layer)
+        self.layer_count = max(1, int(layer_count))
+        self.set_items(items, self.dark, self.home_icon)
+        self.hover = -1
+        self._pressed = -1
+        self._drag_from = -1
+        self._flip_direction = 1 if direction >= 0 else -1
+        self._flip_anim.stop()
+        self._flip = 0.0
+        self._flip_anim.start()
+
+    def _on_flip(self, value):
+        self._flip = float(value)
+        self.panel.update()
+
+    def request_layer(self, layer: int):
+        if 0 <= int(layer) < self.layer_count and int(layer) != self.layer and self._ready():
+            self.layer_requested.emit(int(layer))
+
+    def panel_wheel(self, event):
+        """The wheel or a swipe over the grid flips the layers: down / to the left = the next one."""
+        event.accept()
+        if self.layer_count <= 1 or not self._ready() or self._drag_from >= 0:
+            return
+        now = time.monotonic()
+        if now < self._wheel_rest_until:
+            return
+        delta = event.angleDelta()
+        step = delta.x() if abs(delta.x()) > abs(delta.y()) else delta.y()
+        if step == 0:
+            return
+        if (step > 0) != (self._wheel_sum > 0):
+            self._wheel_sum = 0.0
+        self._wheel_sum += float(step)
+        if abs(self._wheel_sum) >= self.WHEEL_STEP:
+            target = self.layer + (1 if self._wheel_sum < 0 else -1)
+            self._wheel_sum = 0.0
+            self._wheel_rest_until = now + self.WHEEL_REST_S
+            self.request_layer(target)
 
     def empty_places(self) -> list:
         if len(self.items) >= COLLAPSED_LAUNCHER_SLOTS:
@@ -70052,7 +72723,7 @@ class CollapsedButtonLauncher(QWidget):
 
     # ── showing ─────────────────────────────────────────────────────────────
     def open_at(self, circle: QRect, items: list, dark: bool, home_icon=None, home_font=None, center: QPoint | None = None,
-                home_shown: bool = True):
+                home_shown: bool = True, layer: int = 0, layer_count: int = 1, by_key: bool = False):
         """Grow out of the circle at `circle` (global) into the grid centred on `center` (default: on
         the circle). Near a screen edge the main window passes a centre where the whole grid fits:
         the grid travels there while it grows, so the circle turns into the grid in one move (Ryan:
@@ -70061,6 +72732,13 @@ class CollapsedButtonLauncher(QWidget):
         self._closing = False
         self.circle_rect = QRect(circle)
         self.home_shown = bool(home_shown)
+        self.layer = int(layer)
+        self.layer_count = max(1, int(layer_count))
+        self.by_key = bool(by_key)
+        self._entered = False
+        self._flip_anim.stop()
+        self._flip = 1.0
+        self._wheel_sum = 0.0
         self.set_items(items, dark, home_icon, home_font)
         top_left = self.place_for(center if center is not None else circle.center())
         self.move(top_left)
@@ -70182,6 +72860,14 @@ class CollapsedButtonLauncher(QWidget):
             self.panel.update()   # the whole name of a cut-off one
         if self.pointer_on_it() or self._pressed >= 0:
             self._left_at = None
+            self._entered = True
+            return
+        if self.by_key and not self._entered:
+            # opened by a shortcut, the pointer has not been in it yet: it stays until a click
+            # somewhere else (style book 5.1.12)
+            self._left_at = None
+            if callable(self.buttons_down) and self._ready() and self.buttons_down():
+                self.close_animated()
             return
         now = time.monotonic()
         if self._left_at is None:
@@ -70197,6 +72883,11 @@ class CollapsedButtonLauncher(QWidget):
             event.accept()
             return
         pos = self._window_pos(event)
+        dot = self.dot_at(pos)
+        if dot >= 0:   # a page dot: that layer
+            self.request_layer(dot)
+            event.accept()
+            return
         grid = self.grid_at(pos)
         self._pressed = grid
         self._press_pos = pos.toPoint()
@@ -70266,7 +72957,8 @@ class CollapsedButtonLauncher(QWidget):
                 self.close_now()
                 self.item_clicked.emit(places.index(grid))
         elif grid in self.empty_places():
-            self.close_now()
+            # (stays open: the main window either picks a shortcut at once — that closes it — or
+            # shows the choice between a shortcut and a quick command over it)
             self.add_requested.emit(self.insert_index_for(grid))
 
     def panel_context_menu(self, event):
@@ -70315,6 +73007,10 @@ class CollapsedButtonLauncher(QWidget):
         if appear > 0.0:
             painter.save()
             self._content_transform(painter, appear, scale, shift)
+            self._paint_dots(painter)
+            if self._flip < 1.0:   # a new layer coming in: its shortcuts slide in from the side and fade in
+                painter.setOpacity(painter.opacity() * self._flip)
+                painter.translate(QPointF((1.0 - self._flip) * self.FLIP_SLIDE * self._flip_direction, 0.0))
             self._paint_places(painter)
             painter.restore()
         self._paint_home_icon(painter, scale, shift)
@@ -70379,7 +73075,12 @@ class CollapsedButtonLauncher(QWidget):
                 and self.label_lines(places.index(self.hover))[1]:
             self._bubble_grid = self.hover
         if self.home_shown:
+            painter.save()
+            if self._flip < 1.0:   # the middle stays where it is while a layer flips
+                painter.translate(QPointF(-(1.0 - self._flip) * self.FLIP_SLIDE * self._flip_direction, 0.0))
+                painter.setOpacity(painter.opacity() / max(0.001, self._flip))
             self._paint_place(painter, COLLAPSED_LAUNCHER_HOME, 'home')
+            painter.restore()
         for index, grid in enumerate(places):
             if index == self._drag_from:   # its place stays empty while it is dragged
                 if target == grid:
@@ -70388,6 +73089,20 @@ class CollapsedButtonLauncher(QWidget):
             self._paint_place(painter, grid, 'item', index, drop_target=target == grid)
         if self._drag_from < 0 and self.hover in self.empty_places():
             self._paint_place(painter, self.hover, 'empty')
+
+    def _paint_dots(self, painter):
+        """The page dots: the layer shown in the text colour, the others faint."""
+        dots = self.dot_rects()
+        if not dots:
+            return
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        for index, dot in enumerate(dots):
+            color = self._text_color()
+            color.setAlpha(235 if index == self.layer else 70)
+            painter.setBrush(color)
+            painter.drawEllipse(dot)
+        painter.restore()
 
     def _paint_overlays(self, painter):
         if self._drag_from >= 0:
@@ -70797,6 +73512,94 @@ class CollapsedCircleBody(QWidget):
 
 
 # The circle without glass (style book 5.1.2): white, a thin grey line, round.
+# ── the circle's green glow (style book 5.1.10): an Agent conversation finished while the main
+# window is away in the circle and nobody has looked at it yet ──
+CIRCLE_GLOW_COLOR = (52, 199, 89)     # #34C759 = the AI tasks' "done · not looked at" green (5.1.3)
+CIRCLE_GLOW_PEAK = 0.45               # the glass tinted this strongly at the top of a pulse
+CIRCLE_GLOW_PULSE_S = 0.6             # one pulse: up and back
+CIRCLE_GLOW_PULSES = 2
+CIRCLE_GLOW_PAUSE_S = 5.0
+CIRCLE_GLOW_STEADY = 0.2              # "reduce motion": it stays this green, no pulsing
+CIRCLE_GLOW_FADE_S = 0.3              # looked at: the green leaves over this
+CIRCLE_GLOW_TICK_MS = 33
+
+
+def circle_glow_strength(t: float, reduced: bool = False) -> float:
+    """How green the circle is `t` seconds after the glow began (0 … CIRCLE_GLOW_PEAK): two pulses,
+    a pause, again."""
+    if reduced:
+        return CIRCLE_GLOW_STEADY
+    pulses = CIRCLE_GLOW_PULSES * CIRCLE_GLOW_PULSE_S
+    t = max(0.0, float(t)) % (pulses + CIRCLE_GLOW_PAUSE_S)
+    if t >= pulses:
+        return 0.0
+    return CIRCLE_GLOW_PEAK * math.sin(math.pi * (t % CIRCLE_GLOW_PULSE_S) / CIRCLE_GLOW_PULSE_S) ** 2
+
+
+class CircleGlow(QObject):
+    """Drives the circle's green glow (style book 5.1.10). `set_on(True)`: it pulses until
+    `set_on(False)`, then the green leaves over CIRCLE_GLOW_FADE_S. The circle's window shows it
+    (CollapsedCircleWindow.apply_glow: its glass tinted, the look kept)."""
+
+    def __init__(self, circle, clock=None, reduced=None):
+        super().__init__(circle)
+        self._circle = circle
+        self._clock = clock or time.monotonic
+        self._reduced = reduced or CircleDrip.motion_reduced
+        self.on = False
+        self.strength = 0.0
+        self._since = 0.0
+        self._fade_from = 0.0
+        self._fade_since = None
+        self._timer = QTimer(self)
+        self._timer.setInterval(CIRCLE_GLOW_TICK_MS)
+        self._timer.timeout.connect(self.tick)
+
+    def set_on(self, on: bool):
+        on = bool(on)
+        if on == self.on:
+            return
+        self.on = on
+        now = self._clock()
+        if on:
+            self._since, self._fade_since = now, None
+        else:
+            self._fade_from, self._fade_since = self.strength, now
+        if not self._timer.isActive():
+            self._timer.start()
+        self.tick()
+
+    def stop(self):
+        """At once (the circle is going away)."""
+        self.on = False
+        self._fade_since = None
+        self._timer.stop()
+        self._show(0.0)
+
+    def tick(self):
+        now = self._clock()
+        if self.on:
+            self._show(circle_glow_strength(now - self._since, bool(self._reduced())))
+            return
+        left = 1.0 - (now - self._fade_since) / CIRCLE_GLOW_FADE_S if self._fade_since is not None else 0.0
+        if left <= 0.0:
+            self._fade_since = None
+            self._timer.stop()
+            self._show(0.0)
+        else:
+            self._show(self._fade_from * left)
+
+    def _show(self, strength: float):
+        strength = max(0.0, min(1.0, float(strength)))
+        if abs(strength - self.strength) < 0.004 and (strength > 0.0) == (self.strength > 0.0):
+            return
+        self.strength = strength
+        try:
+            self._circle.apply_glow(strength)
+        except RuntimeError:
+            self._timer.stop()
+
+
 COLLAPSED_BUTTON_PLAIN_QSS = '''
                         border: 1px outset grey;
                         background-color: #FFFFFF;
@@ -70812,7 +73615,10 @@ class CollapsedCircleWindow(QWidget):
     window is open (Ryan: "我希望主界面在显示的时候，这个小圆点也可以出现"). It looks exactly as before:
     a 52 × 52 window, the 50 circle in it with a 1 pt clear margin, the Control Center glass, no
     window shadow under the glass. Like the grid it never activates Broccoli. The main window drives
-    it (click, drag, the long hover, the grid, the stand-in): see MyWidget._collapsed_*."""
+    it (click, drag, the long hover, the grid, the stand-in): see MyWidget._collapsed_*.
+    Things dragged onto it go into its tray (2026-11-11, style book 5.1.6): the drag is handed to
+    `drop_target` (CircleTray); `moved` lets the tray's cards follow it."""
+    moved = pyqtSignal()
 
     def __init__(self):
         super().__init__(None)   # never a child of the main window (winId poison)
@@ -70824,6 +73630,8 @@ class CollapsedCircleWindow(QWidget):
         if hasattr(Qt.WidgetAttribute, 'WA_MacAlwaysShowToolWindow'):
             self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.drop_target = None
+        self.setAcceptDrops(True)
         side = COLLAPSED_BUTTON_SIZE + 2 * COLLAPSED_WINDOW_MARGIN
         self.setFixedSize(side, side)
         layout = QHBoxLayout(self)
@@ -70837,6 +73645,7 @@ class CollapsedCircleWindow(QWidget):
         layout.addWidget(self.button)
         self._all_spaces = False
         self._native_configured = False
+        self._glow = 0.0   # how green it is now (CircleGlow, style book 5.1.10)
         # Its own NSWindow now, before any glass is made in it: the glass must be registered as
         # "always active" first (it is never the front window, it would go the inactive grey).
         window = None
@@ -70850,13 +73659,36 @@ class CollapsedCircleWindow(QWidget):
             _want_active_glass(window, self)
         # The Control Center look (Ryan 2026-10-28: "朝着这个感觉去做 … 白色底还是太多了"): no tint,
         # the usual light veil on hover / press, light or dark with the theme.
-        glass_button(self.button, tint_for=lambda b: None, dark_for=lambda b: is_dark_theme(app),
+        # … and green while a finished conversation waits to be looked at (the glow, 5.1.10).
+        glass_button(self.button, tint_for=lambda b, me=self: me.glow_tint(), dark_for=lambda b: is_dark_theme(app),
                      radius_for=lambda b: b.height() / 2.0, wanted_for=lambda b: True,
                      on_change=lambda active, me=self: me.sync_shadow(active),
                      look=GLASS_LOOK_CONTROL_CENTER)
 
     def glass_helper(self):
         return getattr(self.button, '_broccoli_inwindow_glass', None)
+
+    def glow_tint(self):
+        """The glass's tint for the glow right now, or None (no glow: the usual hover / press veil)."""
+        if self._glow <= 0.0:
+            return None
+        red, green, blue = CIRCLE_GLOW_COLOR
+        return QColor(red, green, blue, max(1, int(round(255 * self._glow))))
+
+    def apply_glow(self, strength: float):
+        """Show the glow at this strength (0 = none): the glass tinted green, its look kept; without
+        glass the white circle itself goes that much green."""
+        self._glow = max(0.0, min(1.0, float(strength)))
+        skin = getattr(self.button, '_broccoli_glass_skin', None)
+        if skin is not None and skin.active:
+            skin._update_tint()
+            return
+        red, green, blue = CIRCLE_GLOW_COLOR
+        level = int(round(self._glow * 32)) / 32.0   # (a restyle only when it shows)
+        mixed = '#%02X%02X%02X' % tuple(int(round(255 + (c - 255) * level)) for c in (red, green, blue))
+        if mixed != getattr(self, '_glow_plain', '#FFFFFF'):
+            self._glow_plain = mixed
+            self.button.setStyleSheet(COLLAPSED_BUTTON_PLAIN_QSS.replace('#FFFFFF', mixed))
 
     def present(self):
         """Show it without activating Broccoli, in front of other windows (also while Broccoli is in the
@@ -70923,6 +73755,43 @@ class CollapsedCircleWindow(QWidget):
         helper = self.glass_helper()
         if helper is not None:
             helper.sync()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if self.isVisible():
+            set_right_drag_pass_rect('circle', self.geometry())
+        self.moved.emit()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        set_right_drag_pass_rect('circle', self.geometry())   # its right button is its own (5.1.7)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        set_right_drag_pass_rect('circle', None)
+
+    # ── things dragged onto the circle go into its tray (style book 5.1.6) ──
+    def dragEnterEvent(self, event):
+        if self.drop_target is not None:
+            self.drop_target.drag_enter(event)
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self.drop_target is not None:
+            self.drop_target.drag_move(event)
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        if self.drop_target is not None:
+            self.drop_target.drag_leave()
+
+    def dropEvent(self, event):
+        if self.drop_target is not None:
+            self.drop_target.drop(event)
+        else:
+            event.ignore()
 
 
 def capture_own_window_cgimage(widget):
@@ -72322,6 +75191,97 @@ class TerminalFavoriteEditDialog(QDialog):
             return
         if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
             self._apply_theme()
+
+
+class CircleCommandDialog(TerminalFavoriteEditDialog):
+    """One of Broccoli's own quick commands (style book 5.1.11): its name, what kind it is (a
+    question for the Agent, an AppleScript, a shell script), its icon, which layer of the collapsed
+    button's grid it sits in, and its text. The favourite-command dialog with one more row."""
+
+    def __init__(self, parent=None, dark: bool = False, command: dict | None = None, layer='auto', new: bool = True):
+        command = dict(command or {})
+        super().__init__(caption=str(command.get('name', '') or ''), command=str(command.get('text', '') or ''),
+                         parent=parent, dark=dark,
+                         title_text=_tr('New quick command') if new else _tr('Edit quick command'))
+        self.setMinimumSize(520, 400)
+        self.caption_input.setPlaceholderText(_tr('Name'))
+        self.kind_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        for value, label in CIRCLE_COMMAND_KINDS:
+            self.kind_combo.addItem(_tr(label), value)
+        self.kind_combo.setCurrentIndex(max(0, self.kind_combo.findData(str(command.get('kind', '') or 'ask'))))
+        self.icon_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.icon_combo.addItem(_tr('Icon: first letter'), '')
+        for value, label in CIRCLE_COMMAND_SYMBOLS:
+            self.icon_combo.addItem(_tr(label), value)
+        self.icon_combo.setCurrentIndex(max(0, self.icon_combo.findData(str(command.get('icon', '') or ''))))
+        self.icon_preview = QLabel(self)
+        self.icon_preview.setFixedSize(22, 22)
+        self.layer_combo = DropdownButton(self, always_dark=False, compact_light=True)
+        self.layer_combo.addItem(_tr('Layer: automatic'), 'auto')
+        for number in range(COLLAPSED_LAUNCHER_LAYERS):
+            self.layer_combo.addItem(_tr('Layer {n}').format(n=number + 1), number)
+        self.layer_combo.addItem(_tr('Not in the grid'), 'none')
+        self.layer_combo.setCurrentIndex(max(0, self.layer_combo.findData(layer)))
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        row.addWidget(self.kind_combo, 1)
+        row.addWidget(self.icon_preview, 0)
+        row.addWidget(self.icon_combo, 1)
+        row.addWidget(self.layer_combo, 1)
+        self.layout().insertLayout(2, row)
+        self.with_tray_checkbox = QCheckBox(_tr('Send the tray\'s files with the question'), self)
+        self.with_tray_checkbox.setChecked(bool(command.get('with_tray', False)))
+        self.layout().insertWidget(3, self.with_tray_checkbox)
+        self.kind_combo.currentIndexChanged.connect(lambda _index: self._kind_changed())
+        self.icon_combo.currentIndexChanged.connect(lambda _index: self._show_icon())
+        self.caption_input.textChanged.connect(lambda _text: self._show_icon())
+        self._kind_changed()
+        self._show_icon()
+
+    def kind(self) -> str:
+        return str(self.kind_combo.currentData() or 'ask')
+
+    def layer(self):
+        return self.layer_combo.currentData()
+
+    def result_command(self) -> dict:
+        kind = self.kind()
+        return {'name': self.caption(), 'kind': kind, 'text': self.command(), 'icon': str(self.icon_combo.currentData() or ''),
+                'with_tray': kind == 'ask' and self.with_tray_checkbox.isChecked()}
+
+    def _accept_if_valid(self):
+        if self.caption() and self.command():
+            self.accept()
+        elif not self.caption():
+            self.caption_input.setFocus()
+        else:
+            self.command_edit.setFocus()
+
+    def _kind_changed(self):
+        kind = self.kind()
+        self.with_tray_checkbox.setVisible(kind == 'ask')
+        self.command_edit.setPlaceholderText({
+            'ask': _tr('The question the Agent gets every time'),
+            'applescript': _tr('AppleScript: runs at once, without the AI'),
+        }.get(kind, _tr('Shell script: runs at once, without the AI')))
+        self._apply_theme()
+
+    def _show_icon(self):
+        color = QColor('#F2F2F7' if self._dark else '#20242B')
+        shown = {'symbol': str(self.icon_combo.currentData() or ''), 'name': self.caption() or '?'}
+        self.icon_preview.setPixmap(shortcut_icon_pixmap(shown, color, 22))
+
+    def _apply_theme(self):
+        super()._apply_theme()
+        if getattr(self, 'kind_combo', None) is None:
+            return
+        if self.kind() == 'ask':   # a question is prose: the usual font
+            self.command_edit.setStyleSheet(_settings_textedit_stylesheet(self._dark))
+        self.with_tray_checkbox.setStyleSheet(
+            'font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 13px; '
+            f'color: {"#F2F2F7" if self._dark else "#20242B"};')
+        self._show_icon()
 
 
 # ── Apple Notes 集成（做法移植自 Watermelon：osascript + argv 传参 +
@@ -73775,6 +76735,7 @@ class CompletionAlertSignals(QObject):
     # worker thread / system queue → GUI thread
     reminder_state = pyqtSignal(object)
     reminder_probe_done = pyqtSignal(object)
+    quiet_reminder_probe_done = pyqtSignal(object)   # Settings › AI tasks: the "no news" reminder's check
     sound_state = pyqtSignal(object)
 
 
@@ -75138,7 +78099,7 @@ def selection_markdown_to_apple_notes_html(text: str) -> str:
     if not text.strip():
         return '<div><br></div>'
     try:
-        rendered = markdown2.markdown(
+        rendered = markdown2_html(
             text,
             extras=[
                 'fenced-code-blocks',
@@ -75166,7 +78127,7 @@ def markdown_source_to_apple_notes_html(source_md: str) -> str:
     if not source_md.strip():
         return ''
     try:
-        rendered = markdown2.markdown(
+        rendered = markdown2_html(
             source_md,
             extras=[
                 'fenced-code-blocks',
@@ -77692,6 +80653,4951 @@ class BranchGraphHintTag(EdgeTriggerHintTag):
         painter.end()
 
 
+# ── the circle's tray (style book 5.1.6, 2026-11-11) ──────────────────────────────────────────────
+# Ryan: "先做 dropover 类似的，文件拖入可以变成 tray 这样的功能"、"样式是书签插入一样，鳞次栉比，有点扇形的
+# 分布"、"鼠标放上去应该横向展开，用户可以选择是哪个文件". Things dragged onto the 🥦 circle go into it and
+# stick out above it like bookmarks (a fan); a resting pointer lays them out in a row to pick one:
+# click = Quick Look, double-click = open, drag = into another app, right click = remove.
+CIRCLE_TRAY_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'CircleTray')   # pictures / text Broccoli keeps itself
+CIRCLE_TRAY_CARD_W = 28.0
+CIRCLE_TRAY_CARD_H = 42.0
+CIRCLE_TRAY_CARD_RADIUS = 9.0            # self-drawn, tier 7 (style book 2.1)
+CIRCLE_TRAY_CARD_ICON = 18.0
+CIRCLE_TRAY_CARD_ICON_TOP = 4.0
+CIRCLE_TRAY_CARD_ICON_SIDE = 3.0         # a card with one in front of it: its icon on the left, the part that shows
+CIRCLE_TRAY_FAN_MAX = 7
+CIRCLE_TRAY_FAN_PIVOT = 12.0             # the fan turns about a point this far below the circle's centre
+CIRCLE_TRAY_FAN_RISE = 26.0              # the middle card's far edge this far beyond the circle's edge
+CIRCLE_TRAY_FAN_STEP = 16.0              # degrees between two cards, at most …
+CIRCLE_TRAY_FAN_SPREAD = 60.0            # … and between the outer two
+CIRCLE_TRAY_FAN_STAGGER = (0.0, 3.0, -2.0, 2.0, -1.0, 3.0, -2.0)   # from the newest: a little longer / shorter
+CIRCLE_TRAY_FAN_TURN_MAX = 60.0          # at a screen edge the whole fan turns inwards, this much at most
+CIRCLE_TRAY_DROP_SPREAD = 1.3            # something dragged over the circle: the fan opens up
+CIRCLE_TRAY_MORE_APART = 6.0             # the "+N" card leans this much further out (its text shows)
+CIRCLE_TRAY_TILE_W = 64.0
+CIRCLE_TRAY_TILE_H = 84.0
+CIRCLE_TRAY_TILE_RADIUS = 18.0           # self-drawn, tier 5
+CIRCLE_TRAY_TILE_ICON = 44.0
+CIRCLE_TRAY_TILE_ICON_TOP = 8.0
+CIRCLE_TRAY_TILE_NAME_GAP = 5.0
+CIRCLE_TRAY_NAME_PX = 11
+CIRCLE_TRAY_ROW_MAX = 8
+CIRCLE_TRAY_GAP = 8.0
+CIRCLE_TRAY_ROW_LIFT = 10.0              # from the circle (style book §3: 10 from what it floats over)
+CIRCLE_TRAY_SCREEN_MARGIN = 8.0
+CIRCLE_TRAY_HOVER_S = 0.15
+CIRCLE_TRAY_LEAVE_S = 0.4
+CIRCLE_TRAY_TAG_S = 0.35
+CIRCLE_TRAY_TAG_GAP = 10.0
+CIRCLE_TRAY_FADE_MS = 150
+CIRCLE_TRAY_DROP_LEAVE_MS = 120
+CIRCLE_TRAY_OPEN_SPRING = (0.72, 19.0)   # as the grid's (5.1.4)
+CIRCLE_TRAY_CLOSE_SPRING = (1.0, 26.0)
+CIRCLE_TRAY_CARD_SPRING = (0.72, 19.0)   # a card rising into the fan, the fan opening and closing
+CIRCLE_TRAY_ROW_SPRING = (0.85, 22.0)    # tiles making room in the row
+CIRCLE_TRAY_SPRING_DONE_S = 0.6          # the open / close springs are still after this
+CIRCLE_TRAY_PAD = 18.0                   # room around the cards in their window (shadow, lift, overshoot)
+CIRCLE_TRAY_HIT_PAD = 5.0                # the shadow around a card takes the mouse too (the mask)
+CIRCLE_TRAY_RISE_FROM = 32.0             # a new card starts this much deeper in the circle (out of sight)
+CIRCLE_TRAY_IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif', '.bmp', '.tif', '.tiff', '.avif')
+CIRCLE_TRAY_DOWNLOAD_MAX = 30 * 1024 * 1024
+CIRCLE_TRAY_THUMB_PT = 88                # thumbnails asked for: twice the tile's icon
+CIRCLE_TRAY_ICONS_PER_PAINT = 8          # system icons read per paint (the rest the next frame)
+
+
+def circle_tray_card_corners(center: QPointF, angle: float, width: float, height: float) -> list:
+    """A card's four corners (global): `width` × `height` around `center`, turned `angle` degrees
+    clockwise (top left, top right, bottom right, bottom left)."""
+    rad = math.radians(float(angle))
+    c, s = math.cos(rad), math.sin(rad)
+    return [QPointF(center.x() + dx * c - dy * s, center.y() + dx * s + dy * c)
+            for dx, dy in ((-width / 2.0, -height / 2.0), (width / 2.0, -height / 2.0),
+                           (width / 2.0, height / 2.0), (-width / 2.0, height / 2.0))]
+
+
+def circle_tray_fan_poses(count: int, circle: QRectF, area: QRectF, spread: float = 1.0, first_apart: float = 0.0) -> list:
+    """Where the cards stick out of the circle (style book 5.1.6): [(centre, angle, hanging)] for at
+    most CIRCLE_TRAY_FAN_MAX cards, left (oldest) to right (newest). They fan out about a point below
+    the circle's centre, the lower half of each in the circle, each a few points longer or shorter
+    than its neighbour; at a screen edge the whole fan turns inwards until every card is on the
+    screen; with no room above the circle it hangs below it (`hanging`). `first_apart` leans the
+    leftmost card that much further out (the "+N" card: its text must show)."""
+    n = max(0, min(int(count), CIRCLE_TRAY_FAN_MAX))
+    if n == 0:
+        return []
+    total = 0.0 if n == 1 else min(CIRCLE_TRAY_FAN_SPREAD, CIRCLE_TRAY_FAN_STEP * (n - 1))
+    total *= max(0.0, float(spread))
+    base = [(-total / 2.0 + total * i / (n - 1)) if n > 1 else 0.0 for i in range(n)]
+    if n > 1 and first_apart:
+        base[0] -= float(first_apart)
+    middle = QPointF(circle.center())
+    reach = circle.height() / 2.0 + CIRCLE_TRAY_FAN_RISE + CIRCLE_TRAY_FAN_PIVOT   # pivot → a card's far edge
+    room = QRectF(area).adjusted(2.0, 2.0, -2.0, -2.0)
+
+    def poses(turn: float, hanging: bool) -> list:
+        placed = []
+        for i, angle in enumerate(base):
+            stagger = CIRCLE_TRAY_FAN_STAGGER[(n - 1 - i) % len(CIRCLE_TRAY_FAN_STAGGER)]
+            dist = reach + stagger - CIRCLE_TRAY_CARD_H / 2.0
+            rad = math.radians(angle + turn)
+            if hanging:
+                pivot_y = middle.y() - CIRCLE_TRAY_FAN_PIVOT
+                placed.append((QPointF(middle.x() + math.sin(rad) * dist, pivot_y + math.cos(rad) * dist),
+                               -(angle + turn), True))
+            else:
+                pivot_y = middle.y() + CIRCLE_TRAY_FAN_PIVOT
+                placed.append((QPointF(middle.x() + math.sin(rad) * dist, pivot_y - math.cos(rad) * dist),
+                               angle + turn, False))
+        return placed
+
+    def overflow(placed: list) -> float:
+        worst = 0.0
+        for center, angle, _hanging in placed:
+            for p in circle_tray_card_corners(center, angle, CIRCLE_TRAY_CARD_W, CIRCLE_TRAY_CARD_H):
+                worst = max(worst, room.left() - p.x(), p.x() - room.right(), room.top() - p.y(), p.y() - room.bottom())
+        return worst
+
+    upright = poses(0.0, False)
+    top = min(p.y() for center, angle, _h in upright
+              for p in circle_tray_card_corners(center, angle, CIRCLE_TRAY_CARD_W, CIRCLE_TRAY_CARD_H))
+    hanging = top < room.top()
+    best, best_over = None, None
+    step, k = 2.0, 0
+    while k * step <= CIRCLE_TRAY_FAN_TURN_MAX:
+        for turn in ((0.0,) if k == 0 else (-k * step, k * step)):
+            placed = poses(turn, hanging)
+            over = overflow(placed)
+            if over <= 0.0:
+                return placed
+            if best_over is None or over < best_over - 1e-6:
+                best, best_over = placed, over
+        k += 1
+    return best
+
+
+def circle_tray_row_rects(count: int, circle: QRectF, area: QRectF) -> tuple:
+    """The tiles laid out in a row by the circle (style book 5.1.6): ([rect], below). At most
+    CIRCLE_TRAY_ROW_MAX a row, further rows away from the circle; the oldest top left, the newest bottom
+    right. The block is centred on the circle and kept CIRCLE_TRAY_SCREEN_MARGIN inside the screen; it
+    sits CIRCLE_TRAY_ROW_LIFT above the circle, or below it when there is no room above."""
+    n = max(0, int(count))
+    if n == 0:
+        return [], False
+    per = CIRCLE_TRAY_ROW_MAX
+    rows = (n + per - 1) // per
+    sizes = [per] * (rows - 1) + [n - per * (rows - 1)]
+    w, h, gap, margin = CIRCLE_TRAY_TILE_W, CIRCLE_TRAY_TILE_H, CIRCLE_TRAY_GAP, CIRCLE_TRAY_SCREEN_MARGIN
+    area = QRectF(area)
+    block_h = rows * h + (rows - 1) * gap
+    above_top = circle.top() - CIRCLE_TRAY_ROW_LIFT - block_h
+    below_top = circle.bottom() + CIRCLE_TRAY_ROW_LIFT
+    room_above = above_top - (area.top() + margin)
+    room_below = (area.bottom() - margin) - (below_top + block_h)
+    below = room_above < 0 and room_below > room_above
+    top = below_top if below else above_top
+    widest = max(sizes) * w + (max(sizes) - 1) * gap
+    cx = circle.center().x()
+    cx = max(area.left() + margin + widest / 2.0, min(cx, area.right() - margin - widest / 2.0))
+    rects = []
+    for r, k in enumerate(sizes):
+        row_w = k * w + (k - 1) * gap
+        # a shorter row leans towards the circle, within the block
+        row_cx = max(cx - widest / 2.0 + row_w / 2.0, min(circle.center().x(), cx + widest / 2.0 - row_w / 2.0))
+        left = round(row_cx - row_w / 2.0)
+        y = round(top + r * (h + gap))
+        rects.extend(QRectF(left + i * (w + gap), y, w, h) for i in range(k))
+    return rects, below
+
+
+def circle_tray_fit_rect(width: float, height: float, box: QRectF) -> QRectF:
+    """`width` × `height` scaled to fit `box`, centred in it."""
+    if width <= 0 or height <= 0:
+        return QRectF(box)
+    scale = min(box.width() / width, box.height() / height)
+    w, h = width * scale, height * scale
+    return QRectF(box.center().x() - w / 2.0, box.center().y() - h / 2.0, w, h)
+
+
+def circle_tray_mime_usable(mime) -> bool:
+    """Something the tray can hold: files, folders, links, a picture, a piece of text."""
+    if mime is None:
+        return False
+    return bool(mime.hasUrls() or mime.hasImage() or (mime.hasText() and mime.text().strip()))
+
+
+def _circle_tray_safe_name(name: str, fallback: str) -> str:
+    name = re.sub(r'[\x00-\x1f/:\\]+', ' ', str(name or ''))
+    name = re.sub(r'\s+', ' ', name).strip().strip('.')
+    return name[:80].strip() or fallback
+
+
+def _circle_tray_stamp() -> str:
+    return time.strftime('%Y-%m-%d %H.%M.%S')
+
+
+def _circle_tray_new_path(name: str, root: str | None = None) -> str:
+    """A fresh place for a file Broccoli keeps itself (a picture, a piece of text): a folder of its own
+    in the tray's folder, so the file keeps its plain name when it is dragged out."""
+    folder = os.path.join(root or CIRCLE_TRAY_DIR, uuid.uuid4().hex[:12])
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, name)
+
+
+def _circle_tray_save_image(image: QImage, base: str, root: str | None = None):
+    name = _circle_tray_safe_name(base, _tr('Image') + ' ' + _circle_tray_stamp()) + '.png'
+    try:
+        path = _circle_tray_new_path(name, root)
+        if not image.save(path, 'PNG'):
+            return None
+    except Exception:
+        logging.exception('Keeping a picture dropped on the circle failed.')
+        return None
+    return {'kind': 'file', 'path': path, 'name': name, 'own': True}
+
+
+def _circle_tray_save_text(text: str, root: str | None = None):
+    first = next((line.strip() for line in str(text).splitlines() if line.strip()), '')
+    name = _circle_tray_safe_name(first[:40], _tr('Text') + ' ' + _circle_tray_stamp()) + '.txt'
+    try:
+        path = _circle_tray_new_path(name, root)
+        with open(path, 'w', encoding='utf-8') as handle:
+            handle.write(str(text))
+    except Exception:
+        logging.exception('Keeping text dropped on the circle failed.')
+        return None
+    return {'kind': 'file', 'path': path, 'name': name, 'own': True}
+
+
+def circle_tray_url_name(url: QUrl) -> str:
+    """A link's name on its card when the page gave none: the address without the scheme."""
+    host, path = url.host(), url.path()
+    if host and path and path != '/':
+        return (host + path)[:160]
+    return host or url.toString()
+
+
+def circle_tray_items_from_mime(mime, root: str | None = None) -> tuple:
+    """What was dropped on the circle, as tray things (style book 5.1.6): ([item], [address to
+    download]). Files and folders by their path; links by their address; a picture the page gave as
+    data is kept as PNG, one it gave only the address of (Chrome) is a link for now and its address
+    is downloaded; a piece of text is kept as .txt (a lone address in it is a link)."""
+    items, downloads = [], []
+    if mime is None:
+        return items, downloads
+    urls = list(mime.urls()) if mime.hasUrls() else []
+    markup = mime.html() if mime.hasHtml() else ''
+    pictures = {src.replace('&amp;', '&') for src in re.findall(r'<img[^>]+src\s*=\s*["\']([^"\']+)', markup, re.I)}
+    remote = []
+    for url in urls:
+        if url.isLocalFile():
+            path = url.toLocalFile()
+            if len(path) > 1:
+                path = path.rstrip('/')
+            if path and os.path.exists(path):
+                items.append({'kind': 'file', 'path': path, 'name': os.path.basename(path) or path, 'own': False})
+        elif url.isValid() and url.scheme():
+            remote.append(url)
+    image = mime.imageData() if mime.hasImage() else None
+    if isinstance(image, QPixmap):
+        image = image.toImage()
+    has_image = isinstance(image, QImage) and not image.isNull()
+    if has_image and len(remote) == 1 and not items:
+        saved = _circle_tray_save_image(image, os.path.splitext(os.path.basename(remote[0].path()))[0], root)
+        if saved:
+            return [saved], downloads
+    title = mime.text().strip() if mime.hasText() and len(remote) == 1 else ''
+    for url in remote:
+        address = url.toString()
+        name = title if (title and title != address and '\n' not in title and len(title) <= 200) else circle_tray_url_name(url)
+        items.append({'kind': 'url', 'url': address, 'name': name})
+        ext = os.path.splitext(url.path())[1].lower()
+        if url.scheme().lower() in ('http', 'https') and (address in pictures or ext in CIRCLE_TRAY_IMAGE_EXTS):
+            downloads.append(address)
+    if urls:
+        return items, downloads
+    if has_image:
+        saved = _circle_tray_save_image(image, '', root)
+        return ([saved] if saved else []), downloads
+    text = mime.text() if mime.hasText() else ''
+    if text.strip():
+        lone = text.strip()
+        if re.fullmatch(r'(https?|ftp)://\S+', lone):
+            items.append({'kind': 'url', 'url': lone, 'name': circle_tray_url_name(QUrl(lone))})
+        else:
+            saved = _circle_tray_save_text(text, root)
+            if saved:
+                items.append(saved)
+    return items, downloads
+
+
+def circle_tray_download_picture(url: str, fallback_name: str, root: str | None = None):
+    """A picture a page gave only the address of, fetched and kept as a file (a tray item), or None
+    (not a picture, too big, unreachable). Runs off the main thread."""
+    response = requests.get(url, timeout=15, stream=True)
+    try:
+        kind = str(response.headers.get('Content-Type', '') or '').split(';')[0].strip().lower()
+        if response.status_code != 200 or not kind.startswith('image/'):
+            return None
+        data = bytearray()
+        for chunk in response.iter_content(65536):
+            data.extend(chunk)
+            if len(data) > CIRCLE_TRAY_DOWNLOAD_MAX:
+                return None
+    finally:
+        response.close()
+    if not data:
+        return None
+    path_part = urlparse(url).path
+    ext = os.path.splitext(path_part)[1].lower()
+    if ext not in CIRCLE_TRAY_IMAGE_EXTS:
+        ext = mimetypes.guess_extension(kind) or '.img'
+        if ext == '.jpe':
+            ext = '.jpg'
+    name = _circle_tray_safe_name(os.path.splitext(os.path.basename(path_part))[0], fallback_name) + ext
+    path = _circle_tray_new_path(name, root)
+    with open(path, 'wb') as handle:
+        handle.write(bytes(data))
+    return {'kind': 'file', 'path': path, 'name': name, 'own': True}
+
+
+def circle_tray_discard_own(item: dict, root: str | None = None):
+    """A file Broccoli kept itself for the tray goes with its card — never anything outside the tray's
+    folder (the user's own files are only pointed at)."""
+    if not isinstance(item, dict) or not item.get('own') or item.get('kind') != 'file':
+        return
+    base = os.path.realpath(root or CIRCLE_TRAY_DIR)
+    path = os.path.realpath(str(item.get('path', '') or ''))
+    if not path.startswith(base + os.sep):
+        return
+    scan_text = os.path.realpath(str((item.get('scan') or {}).get('text', '') or '')) if isinstance(item.get('scan'), dict) else ''
+    if scan_text.startswith(base + os.sep) and os.path.isfile(scan_text):
+        try:
+            os.remove(scan_text)   # what was read of a scanned window lies next to its picture
+        except OSError:
+            pass
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        elif os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        logging.exception('Removing a file the circle kept failed.')
+    folder = os.path.dirname(path)
+    if folder != base and folder.startswith(base + os.sep):
+        try:
+            os.rmdir(folder)
+        except OSError:
+            pass
+
+
+def circle_tray_file_icon(path: str, size: int = 64, dpr: float = 2.0) -> QImage:
+    """The icon the Finder shows for `path`, size × size points (without AppKit: Qt's file icon)."""
+    pixels = int(round(size * dpr))
+    if AppKit is not None:
+        try:
+            icon = AppKit.NSWorkspace.sharedWorkspace().iconForFile_(str(path))
+            if icon is not None:
+                rep = AppKit.NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
+                    None, pixels, pixels, 8, 4, True, False, AppKit.NSDeviceRGBColorSpace, 0, 0)
+                rep.setSize_(AppKit.NSMakeSize(size, size))
+                AppKit.NSGraphicsContext.saveGraphicsState()
+                try:
+                    AppKit.NSGraphicsContext.setCurrentContext_(
+                        AppKit.NSGraphicsContext.graphicsContextWithBitmapImageRep_(rep))
+                    icon.drawInRect_(AppKit.NSMakeRect(0, 0, size, size))
+                finally:
+                    AppKit.NSGraphicsContext.restoreGraphicsState()
+                png = rep.representationUsingType_properties_(AppKit.NSBitmapImageFileTypePNG, {})
+                image = QImage.fromData(bytes(png))
+                if not image.isNull():
+                    image.setDevicePixelRatio(dpr)
+                    return image
+        except Exception:
+            logging.debug('The system icon of a tray file could not be drawn.', exc_info=True)
+    icon = PyQt6.QtWidgets.QFileIconProvider().icon(PyQt6.QtCore.QFileInfo(str(path)))
+    image = icon.pixmap(QSize(int(size), int(size)), float(dpr)).toImage()
+    return image
+
+
+def circle_tray_request_thumbnail(path: str, key: str, signals) -> bool:
+    """Asks the system for a picture of the file's content (Quick Look's thumbnail: a photo, a PDF's
+    first page, a text page); `signals.thumbnail_ready(key, PNG bytes)` when it comes. False when
+    Quick Look's thumbnails are not available here."""
+    if AppKit is None or objc is None:
+        return False
+    try:
+        import QuickLookThumbnailing as qlt
+    except Exception:
+        return False
+    try:
+        url = AppKit.NSURL.fileURLWithPath_(str(path))
+        kinds = int(getattr(qlt, 'QLThumbnailGenerationRequestRepresentationTypeThumbnail', 1 << 2))
+        request = qlt.QLThumbnailGenerationRequest.alloc().initWithFileAtURL_size_scale_representationTypes_(
+            url, AppKit.NSMakeSize(CIRCLE_TRAY_THUMB_PT, CIRCLE_TRAY_THUMB_PT), 2.0, kinds)
+
+        def done(representation, error, k=key, s=signals):
+            if representation is None:
+                return   # no picture of its content (a folder, an app): its icon stays
+            try:
+                bitmap = AppKit.NSBitmapImageRep.alloc().initWithCGImage_(representation.CGImage())
+                png = bitmap.representationUsingType_properties_(AppKit.NSBitmapImageFileTypePNG, {})
+                if png is not None:
+                    s.thumbnail_ready.emit(k, bytes(png))
+            except Exception:
+                pass
+
+        qlt.QLThumbnailGenerator.sharedGenerator().generateBestRepresentationForRequest_completionHandler_(request, done)
+        return True
+    except Exception:
+        logging.debug('Asking Quick Look for a tray thumbnail failed.', exc_info=True)
+        return False
+
+
+_CIRCLE_TRAY_PREVIEW = {'class': None, 'source': None}
+
+
+def _circle_tray_preview_source_class():
+    """The data source Quick Look's panel reads the tray's files from (made once)."""
+    cls = _CIRCLE_TRAY_PREVIEW.get('class')
+    if cls is not None or objc is None or AppKit is None:
+        return cls
+    try:
+        cls = objc.lookUpClass('BroccoliCircleTrayPreviewSource')
+    except Exception:
+        class BroccoliCircleTrayPreviewSource(AppKit.NSObject):
+            @objc.typedSelector(b'q@:@')
+            def numberOfPreviewItemsInPreviewPanel_(self, panel):
+                return len(getattr(self, 'urls', None) or [])
+
+            @objc.typedSelector(b'@@:@q')
+            def previewPanel_previewItemAtIndex_(self, panel, index):
+                urls = getattr(self, 'urls', None) or []
+                return urls[index] if 0 <= index < len(urls) else None
+
+        cls = BroccoliCircleTrayPreviewSource
+    _CIRCLE_TRAY_PREVIEW['class'] = cls
+    return cls
+
+
+def circle_tray_quick_look(paths: list, index: int = 0, activate: bool = True):
+    """Quick Look — the preview the space bar opens — on the tray's files, showing `index`; the arrow
+    keys go through the others. `activate` brings Broccoli forward so the preview takes Esc and the
+    space bar. Returns the system's panel (to watch it close), True when the stand-in tool showed it,
+    None when nothing could."""
+    paths = [str(p) for p in paths if p]
+    if not paths:
+        return None
+    index = max(0, min(int(index), len(paths) - 1))
+    if objc is not None and AppKit is not None:
+        try:
+            import Quartz
+            panel_class = getattr(Quartz, 'QLPreviewPanel', None)
+            source_class = _circle_tray_preview_source_class()
+            if panel_class is not None and source_class is not None:
+                source = source_class.alloc().init()
+                source.urls = [AppKit.NSURL.fileURLWithPath_(p) for p in paths]
+                _CIRCLE_TRAY_PREVIEW['source'] = source   # the panel does not keep its data source alive
+                panel = panel_class.sharedPreviewPanel()
+                if activate:
+                    AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+                panel.setDataSource_(source)
+                panel.reloadData()
+                panel.setCurrentPreviewItemIndex_(index)
+                if activate:
+                    panel.makeKeyAndOrderFront_(None)
+                else:
+                    panel.orderFront_(None)
+                if panel.dataSource() is None:   # it looked for a controller, found none and let go of it
+                    panel.setDataSource_(source)
+                    panel.reloadData()
+                    panel.setCurrentPreviewItemIndex_(index)
+                return panel
+        except Exception:
+            logging.exception('Quick Look on the tray failed; the stand-in tool is used.')
+    try:
+        subprocess.Popen(['qlmanage', '-p', paths[index]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        logging.exception('Quick Look via qlmanage failed.')
+        return None
+
+
+def circle_tray_tag_text(item: dict) -> str:
+    """What the small tag over a card of the tray says: its name and where it is; a scanned window
+    (5.1.13) also how much of its text was read."""
+    if item.get('kind') == 'url':
+        where = str(item.get('url', ''))
+        text = where if str(item.get('name', '')) in ('', where) else str(item.get('name', '')) + '\n' + where
+    else:
+        folder = os.path.dirname(str(item.get('path', '')))
+        home = os.path.expanduser('~')
+        if folder == home or folder.startswith(home + os.sep):
+            folder = '~' + folder[len(home):]
+        text = str(item.get('name', '')) + '\n' + folder
+        scan = item.get('scan')
+        if isinstance(scan, dict):
+            # a scanned window (5.1.13): where it lives and how much of its text was read
+            where = str(scan.get('url', '') or scan.get('doc', '') or '')
+            text = circle_scan_card_name(scan.get('app', ''), scan.get('title', '')) + ('\n' + where if where else '')
+            count = 0
+            try:
+                if scan.get('text') and os.path.isfile(scan['text']):
+                    with open(scan['text'], encoding='utf-8', errors='ignore') as handle:
+                        count = len(handle.read(CIRCLE_SCAN_TEXT_MAX + 1))
+            except OSError:
+                count = 0
+            text += '\n' + (_tr('Text read: {n} characters').format(n=count) if count else _tr('No text read'))
+    return text
+
+
+class CircleTrayHintTag(BranchGraphHintTag):
+    """The tray's hover tag (style book 5.1.6): 5.1.5's tag in its several-line form (as in 5.7.3), each
+    line of the text a paragraph of its own (the whole name, then where it is), wrapped."""
+    PARAGRAPH_LINES = 3
+
+    def set_content(self, text: str, symbol: str = '', dark: bool = False):
+        text, dark = str(text or ''), bool(dark)
+        if (text, dark) == (self.text, self.dark) and self._lines:
+            return
+        self.text, self.symbol, self.dark, self._icon = text, '', dark, None
+        font = self._font()
+        lines = []
+        for paragraph in [part.strip() for part in text.split('\n') if part.strip()]:
+            wrapped, _cut = collapsed_launcher_label_lines(paragraph, font, self.MAX_TEXT_W, self.PARAGRAPH_LINES)
+            lines.extend(wrapped)
+        self._lines = lines or ['']
+        metrics = PyQt6.QtGui.QFontMetricsF(font)
+        text_w = max(metrics.horizontalAdvance(line) for line in self._lines)
+        if len(self._lines) <= 1:
+            height = self.HEIGHT
+        else:
+            height = max(self.HEIGHT, int(math.ceil(len(self._lines) * metrics.lineSpacing() + 2 * self.PAD_Y)))
+        self.setFixedSize(int(math.ceil(self.PAD_X * 2 + text_w)), height)
+        self._sync_glass_appearance()
+        self.update()
+
+
+class CircleTraySignals(QObject):
+    thumbnail_ready = pyqtSignal(str, bytes)   # item key, PNG (from Quick Look's thread)
+    download_done = pyqtSignal(str, object)    # the picture's address, its kept file's item (None = failed)
+
+
+class CircleTrayWindow(QWidget):
+    """The tray's cards (style book 5.1.6) in a window of their own, ordered right below the circle's
+    window: the circle's glass covers the part of each card that is stuck in it. Never activates
+    Broccoli; only the cards take the mouse (mask). Draws and does what CircleTray says."""
+
+    def __init__(self, tray):
+        super().__init__(None)   # never a child of the main window (winId poison)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint
+                            | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        if hasattr(Qt.WidgetAttribute, 'WA_MacAlwaysShowToolWindow'):
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAcceptDrops(True)
+        self._tray = tray
+        self._native_configured = False
+
+    def present(self, circle):
+        """Shown without activating Broccoli, right below the circle's window, on the Spaces it is on."""
+        if not self.isVisible():
+            self.show()
+        if AppKit is None or objc is None:
+            return
+        window = _broccoli_own_ns_window(self)
+        if window is None:
+            return
+        if not self._native_configured:
+            self._native_configured = True
+            configure_nonactivating_ns_window(window)
+            try:
+                window.setHasShadow_(False)   # the cards draw their own soft shadow (style book 2.3)
+            except Exception:
+                pass
+        above = None
+        try:
+            if circle is not None and circle.isVisible():
+                above = _broccoli_own_ns_window(circle)
+        except RuntimeError:
+            above = None
+        try:
+            if above is not None:
+                window.setCollectionBehavior_(above.collectionBehavior())
+                # one level under the circle's: in the same level anything that brings the cards forward
+                # (a real click on them, Quick Look bringing Broccoli forward) put them over the circle
+                # (2026-11-11, Ryan: "这个文件会跑到小圆点前面来")
+                window.setLevel_(max(0, int(above.level()) - 1))
+                window.orderWindow_relativeTo_(int(getattr(AppKit, 'NSWindowBelow', -1)), int(above.windowNumber()))
+            else:
+                window.orderFrontRegardless()
+        except Exception:
+            pass
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            self._tray.paint(painter, self)
+        finally:
+            painter.end()
+
+    def mousePressEvent(self, event):
+        self._tray.mouse_press(event)
+
+    def mouseMoveEvent(self, event):
+        self._tray.mouse_move(event)
+
+    def mouseReleaseEvent(self, event):
+        self._tray.mouse_release(event)
+
+    def mouseDoubleClickEvent(self, event):
+        self._tray.mouse_double_click(event)
+
+    def contextMenuEvent(self, event):
+        event.accept()
+        self._tray.context_menu(event.globalPos())
+
+    def dragEnterEvent(self, event):
+        self._tray.drag_enter(event)
+
+    def dragMoveEvent(self, event):
+        self._tray.drag_move(event)
+
+    def dragLeaveEvent(self, event):
+        self._tray.drag_leave()
+
+    def dropEvent(self, event):
+        self._tray.drop(event)
+
+
+class CircleTray(QObject):
+    """The circle's tray (style book 5.1.6): what it holds (kept in the settings), its cards sticking out
+    above the circle in a fan, laid out in a row under a resting pointer, and what a card does (Quick
+    Look, open, drag into another app, the right-click menu). `window` = the main window (the circle's
+    state is asked there), `circle` = the circle's window (things are dropped on it). Hover is read
+    from the pointer's position: Broccoli is usually in the background, and a background app's windows
+    get no hover events.
+
+    Each card has a place in the fan and a place in the row, both springing to where they belong (a new
+    card rises out of the circle, the others make room); `progress` (a spring too, 0 = fan, 1 = row)
+    blends the two."""
+    FRAME_MS = 16
+    TICK_MS = 50
+    IDLE_TICK_MS = 250
+    MORE_KEY = '\x00more'
+
+    def __init__(self, window, circle):
+        super().__init__(window)
+        self._main = window
+        self._circle = circle
+        self._view = None
+        self._tag = None
+        self._tag_key = None
+        self._signals = CircleTraySignals(self)
+        self._signals.thumbnail_ready.connect(self._on_thumbnail)
+        self._signals.download_done.connect(self._on_download_done)
+        self._images = {}            # item key → its picture (thumbnail or icon)
+        self._link_icons = {}        # dark → the "globe" for links
+        self._thumbs_asked = set()
+        self._names = {}             # item key → the name's lines on its tile
+        self._icon_budget = CIRCLE_TRAY_ICONS_PER_PAINT
+        self._fan = {}               # key → [x, y, angle, vx, vy, va]: the card's place in the fan (springing)
+        self._row = {}               # key → [x, y, vx, vy]: its tile's centre in the row (springing)
+        self._veil = {}              # key → [hover, pressed], 0 … 1, easing
+        self._fan_targets = {}
+        self._row_targets = {}
+        self._row_rects = {}
+        self._fan_bounds = QRectF()
+        self._rising = set()         # keys just dropped in: they rise out of the circle even on first showing
+        self.row_below = False
+        self.hanging = False
+        self._spread = 1.0
+        self.expanded = False
+        self.progress = 0.0
+        self._p_from, self._p_to, self._p_since = 0.0, 0.0, None
+        self._p_spring = CIRCLE_TRAY_OPEN_SPRING
+        self._circle_at = None
+        self._hover_since = None
+        self._leave_since = None
+        self.hovered = None          # the tile (key) under the pointer, in the row
+        self._hovered_since = None
+        self._press = None           # (global position, key)
+        self._pressed = None
+        self._click_key = None
+        self._after_double = False
+        self.dragging_out = False
+        self.menu_open = False
+        self.drop_hover = False
+        self._swollen = False
+        self._unswell_at = 0.0
+        self._shown = False
+        self._fade_anim = None
+        self._visual_cache = None
+        self._last_frame = None
+        self._preview_panel = None
+        self._preview_previous = None
+        self._preview_watch = QTimer(self)
+        self._preview_watch.setInterval(250)
+        self._preview_watch.timeout.connect(self._watch_preview)
+        self._frame = QTimer(self)
+        self._frame.setTimerType(Qt.TimerType.PreciseTimer)
+        self._frame.setInterval(self.FRAME_MS)
+        self._frame.timeout.connect(self._on_frame)
+        self._tick = QTimer(self)
+        self._tick.setInterval(self.TICK_MS)
+        self._tick.timeout.connect(self._on_tick)
+        self._drop_leave = QTimer(self)
+        self._drop_leave.setSingleShot(True)
+        self._drop_leave.setInterval(CIRCLE_TRAY_DROP_LEAVE_MS)
+        self._drop_leave.timeout.connect(self._end_drop_hover)
+        self._single_click = QTimer(self)
+        self._single_click.setSingleShot(True)
+        self._single_click.timeout.connect(self._on_single_click)
+        circle.moved.connect(self._on_circle_moved)
+        circle.drop_target = self
+        self.items = normalize_circle_tray_items(settings_global_value(CIRCLE_TRAY_ITEMS_KEY, []))
+        self.prune_missing()
+        if self.items:
+            self._tick.start()
+
+    # ── what it holds ───────────────────────────────────────────────────────
+    def item(self, key):
+        return next((item for item in self.items if circle_tray_item_key(item) == key), None)
+
+    def keys(self) -> list:
+        return [circle_tray_item_key(item) for item in self.items]
+
+    def _save(self):
+        try:
+            update_settings_globals({CIRCLE_TRAY_ITEMS_KEY: normalize_circle_tray_items(self.items)})
+        except Exception:
+            logging.exception('Saving the circle tray failed.')
+
+    def _forget(self, key):
+        for store in (self._fan, self._row, self._veil, self._images, self._names):
+            store.pop(key, None)
+        self._thumbs_asked.discard(key)
+        if self.hovered == key:
+            self.hovered = None
+        if self._tag_key == key:
+            self._hide_tag()
+
+    def add_items(self, new_items: list, downloads=()):
+        """Dropped things go in as the newest (style book 5.1.6): one card each; something already in
+        the tray moves to the newest place; the oldest go beyond CIRCLE_TRAY_MAX_ITEMS."""
+        new_items = [item for item in normalize_circle_tray_items(new_items)]
+        if not new_items:
+            return
+        for item in new_items:
+            key = circle_tray_item_key(item)
+            self.items = [old for old in self.items if circle_tray_item_key(old) != key]
+            self.items.append(item)
+        while len(self.items) > CIRCLE_TRAY_MAX_ITEMS:
+            dropped = self.items.pop(0)
+            circle_tray_discard_own(dropped)
+            self._forget(circle_tray_item_key(dropped))
+        self._save()
+        for url in downloads or ():
+            self._download(url)
+        self._rising = {circle_tray_item_key(item) for item in new_items}
+        try:
+            self._changed()
+        finally:
+            self._rising = set()
+
+    def remove(self, key):
+        item = self.item(key)
+        if item is None:
+            return
+        self.items = [old for old in self.items if circle_tray_item_key(old) != key]
+        circle_tray_discard_own(item)
+        self._forget(key)
+        self._save()
+        self._changed()
+
+    def release_scans(self, keys):
+        """Scanned windows that went with a question leave the tray (style book 5.1.13). Their files
+        stay a little longer — the run that was just started is still reading them."""
+        gone = [item for item in self.items if circle_tray_item_key(item) in set(keys or ()) and isinstance(item.get('scan'), dict)]
+        if not gone:
+            return
+        gone_keys = {circle_tray_item_key(item) for item in gone}
+        self.items = [item for item in self.items if circle_tray_item_key(item) not in gone_keys]
+        for key in gone_keys:
+            self._forget(key)
+        self._save()
+        self._changed()
+        QTimer.singleShot(CIRCLE_SCAN_KEEP_SENT_MS, lambda items=gone: [circle_tray_discard_own(item) for item in items])
+
+    def remove_all(self):
+        for item in self.items:
+            circle_tray_discard_own(item)
+        for key in self.keys():
+            self._forget(key)
+        self.items = []
+        self._save()
+        self._changed()
+
+    def prune_missing(self) -> bool:
+        """Files no longer where they were are dropped from the tray (style book 5.1.6)."""
+        gone = [item for item in self.items if item.get('kind') == 'file' and not os.path.exists(str(item.get('path', '')))]
+        if not gone:
+            return False
+        for item in gone:
+            circle_tray_discard_own(item)   # (only an empty folder of Broccoli's own is left)
+            self._forget(circle_tray_item_key(item))
+        gone_keys = {circle_tray_item_key(item) for item in gone}
+        self.items = [item for item in self.items if circle_tray_item_key(item) not in gone_keys]
+        self._save()
+        return True
+
+    def _changed(self):
+        self._update_targets()
+        if not self.items:
+            self.expanded = False
+            self.progress = 0.0
+            self._p_since = None
+            self.hovered = None
+            self._hide_tag()
+        if self.items and not self._tick.isActive():
+            self._tick.start()
+        self._on_tick()
+        self._start_frame()
+        self._refresh()
+        drip = getattr(self._main, '_circle_drip', None)
+        if drip is not None:
+            drip.refresh_clip()   # the paperclip mark in the circle's input box counts them (5.1.9)
+
+    def _download(self, url: str):
+        signals = self._signals
+        fallback = _tr('Image') + ' ' + _circle_tray_stamp()
+
+        def work(address=url):
+            item = None
+            try:
+                item = circle_tray_download_picture(address, fallback)
+            except Exception:
+                logging.info('Downloading a picture dropped on the circle failed: %s', address, exc_info=True)
+            try:
+                signals.download_done.emit(address, item)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=work, daemon=True, name='circle-tray-download').start()
+
+    def _on_download_done(self, url: str, item):
+        """A picture's address fetched: its link card becomes the picture (kept in the tray's folder)."""
+        if not item:
+            return
+        key = 'url:' + str(url)
+        index = next((i for i, old in enumerate(self.items) if circle_tray_item_key(old) == key), -1)
+        if index < 0:
+            circle_tray_discard_own(item)   # removed meanwhile
+            return
+        self.items[index] = item
+        new_key = circle_tray_item_key(item)
+        for store in (self._fan, self._row, self._veil):
+            if key in store:
+                store[new_key] = store.pop(key)
+        self._images.pop(key, None)
+        self._names.pop(key, None)
+        if self.hovered == key:
+            self.hovered = new_key
+        self._save()
+        self._changed()
+
+    # ── pictures and names on the cards ─────────────────────────────────────
+    def _picture(self, item, allow_load: bool = True):
+        key = circle_tray_item_key(item)
+        if item.get('kind') == 'url':
+            dark = is_dark_theme(app)
+            image = self._link_icons.get(dark)
+            if image is None:
+                color = QColor('#F2F2F7') if dark else QColor('#20242B')
+                pixmap = edge_hint_symbol_pixmap('globe', color, int(CIRCLE_TRAY_TILE_ICON))
+                image = pixmap.toImage() if pixmap is not None else QImage()
+                self._link_icons[dark] = image
+            return image if not image.isNull() else None
+        if key in self._images:
+            return self._images[key]
+        if not allow_load or self._icon_budget <= 0:
+            self._icon_budget -= 1
+            return None
+        self._icon_budget -= 1
+        path = str(item.get('path', '') or '')
+        image = circle_tray_file_icon(path, int(CIRCLE_TRAY_TILE_ICON))
+        self._images[key] = image if image is not None and not image.isNull() else None
+        self._ask_thumbnail(key, path)
+        return self._images.get(key)
+
+    def _ask_thumbnail(self, key: str, path: str):
+        if key in self._thumbs_asked or os.path.isdir(path):
+            return
+        self._thumbs_asked.add(key)
+        if circle_tray_request_thumbnail(path, key, self._signals):
+            return
+        if os.path.splitext(path)[1].lower() not in CIRCLE_TRAY_IMAGE_EXTS:
+            return
+        reader = PyQt6.QtGui.QImageReader(path)   # without Quick Look (tests): Qt reads pictures
+        reader.setAutoTransform(True)
+        size = reader.size()
+        side = CIRCLE_TRAY_THUMB_PT * 2
+        if size.isValid() and size.width() > 0 and size.height() > 0:
+            reader.setScaledSize(size.scaled(side, side, Qt.AspectRatioMode.KeepAspectRatio))
+        image = reader.read()
+        if not image.isNull():
+            image.setDevicePixelRatio(2.0)
+            self._images[key] = image
+
+    def _on_thumbnail(self, key: str, data: bytes):
+        if self.item(key) is None:
+            return
+        image = QImage.fromData(data)
+        if image.isNull():
+            return
+        image.setDevicePixelRatio(2.0)
+        self._images[key] = image
+        self._refresh()
+
+    def _name_font(self):
+        font = PyQt6.QtGui.QFont('Helvetica Neue')
+        font.setPixelSize(CIRCLE_TRAY_NAME_PX)
+        return font
+
+    def _name_lines(self, item) -> list:
+        key = circle_tray_item_key(item)
+        lines = self._names.get(key)
+        if lines is None:
+            lines, _cut = collapsed_launcher_label_lines(str(item.get('name', '') or ''), self._name_font(),
+                                                         int(CIRCLE_TRAY_TILE_W - 8), 2)
+            self._names[key] = lines
+        return lines
+
+    def theme_changed(self):
+        self._link_icons.clear()
+        self._hide_tag()
+        self._refresh()
+
+    # ── where everything goes ───────────────────────────────────────────────
+    def circle_rect(self) -> QRectF:
+        margin = COLLAPSED_WINDOW_MARGIN
+        pos = self._circle.pos()
+        return QRectF(pos.x() + margin, pos.y() + margin, COLLAPSED_BUTTON_SIZE, COLLAPSED_BUTTON_SIZE)
+
+    def _area(self) -> QRectF:
+        circle = self.circle_rect()
+        screen = (QGuiApplication.screenAt(circle.center().toPoint()) or self._circle.screen()
+                  or QGuiApplication.primaryScreen())
+        return QRectF(screen.availableGeometry())
+
+    def more_count(self) -> int:
+        """With more than the fan shows, its leftmost card stands for the older ones: "+N"."""
+        n = len(self.items)
+        return n - (CIRCLE_TRAY_FAN_MAX - 1) if n > CIRCLE_TRAY_FAN_MAX else 0
+
+    def _fan_slots(self) -> list:
+        keys = self.keys()
+        more = self.more_count()
+        if not more:
+            return [(key, i) for i, key in enumerate(keys)]
+        return [(key, 0) for key in keys[:more]] + [(key, 1 + i) for i, key in enumerate(keys[more:])]
+
+    def _hidden_keys(self) -> set:
+        more = self.more_count()
+        return set(self.keys()[:more]) if more else set()
+
+    def _update_targets(self, snap: bool = False):
+        """Where each card belongs in the fan and in the row now. A new card starts deep in the circle
+        (it rises out of it) unless `snap`; one that is gone is forgotten."""
+        circle, area = self.circle_rect(), self._area()
+        self._circle_at = circle.center()
+        count = min(len(self.items), CIRCLE_TRAY_FAN_MAX)
+        apart = CIRCLE_TRAY_MORE_APART if self.more_count() else 0.0
+        poses = circle_tray_fan_poses(count, circle, area, self._spread, apart)
+        self.hanging = bool(poses and poses[0][2])
+        targets = {}
+        for key, slot in self._fan_slots():
+            center, angle, _hanging = poses[slot]
+            targets[key] = (center.x(), center.y(), angle)
+        if self.more_count():
+            center, angle, _hanging = poses[0]
+            targets[self.MORE_KEY] = (center.x(), center.y(), angle)
+        self._fan_targets = targets
+        bounds = QRectF(circle)
+        for spread in ({self._spread, 1.0, CIRCLE_TRAY_DROP_SPREAD}):
+            for center, angle, _hanging in (poses if spread == self._spread else
+                                            circle_tray_fan_poses(count, circle, area, spread, apart)):
+                for p in circle_tray_card_corners(center, angle, CIRCLE_TRAY_CARD_W, CIRCLE_TRAY_CARD_H):
+                    bounds = bounds.united(QRectF(p.x(), p.y(), 0.01, 0.01))
+        self._fan_bounds = bounds
+        rects, self.row_below = circle_tray_row_rects(len(self.items), circle, area)
+        self._row_rects = {key: rect for key, rect in zip(self.keys(), rects)}
+        self._row_targets = {key: (rect.center().x(), rect.center().y()) for key, rect in self._row_rects.items()}
+        cx, cy = circle.center().x(), circle.center().y()
+        pivot_y = cy - CIRCLE_TRAY_FAN_PIVOT if self.hanging else cy + CIRCLE_TRAY_FAN_PIVOT
+        for key, (x, y, angle) in targets.items():
+            rising = key in self._rising or (key == self.MORE_KEY and key not in self._fan)
+            if key in self._fan and not (snap and not rising):
+                continue
+            if snap and not rising:
+                self._fan[key] = [x, y, angle, 0.0, 0.0, 0.0]
+                continue
+            dx, dy = x - cx, y - pivot_y
+            dist = math.hypot(dx, dy) or 1.0
+            back = min(CIRCLE_TRAY_RISE_FROM, dist) / dist
+            self._fan[key] = [x - dx * back, y - dy * back, angle, 0.0, 0.0, 0.0]
+        for key, (x, y) in self._row_targets.items():
+            if key not in self._row or snap:
+                start = (cx, cy) if (self.expanded and not snap and key not in self._row) else (x, y)
+                self._row[key] = [start[0], start[1], 0.0, 0.0]
+        for store, wanted in ((self._fan, targets), (self._row, self._row_targets), (self._veil, self._row_targets)):
+            for key in [k for k in store if k not in wanted]:
+                store.pop(key, None)
+
+    def _set_spread(self, spread: float):
+        if abs(spread - self._spread) < 1e-6:
+            return
+        self._spread = float(spread)
+        self._update_targets()
+        self._start_frame()
+
+    def _on_circle_moved(self):
+        """The circle was dragged / slid: its cards go with it at once (they are stuck in it)."""
+        circle = self.circle_rect()
+        center = circle.center()
+        if self._circle_at is not None:
+            dx, dy = center.x() - self._circle_at.x(), center.y() - self._circle_at.y()
+            if dx or dy:
+                for state in self._fan.values():
+                    state[0] += dx
+                    state[1] += dy
+                for state in self._row.values():
+                    state[0] += dx
+                    state[1] += dy
+        self._circle_at = center
+        if not self.items:
+            return
+        self._hide_tag()
+        self._update_targets()
+        self._start_frame()
+        self._refresh()
+
+    # ── the springs ─────────────────────────────────────────────────────────
+    def _start_progress(self, target: float, spring):
+        self._p_from = self.progress
+        self._p_to = float(target)
+        self._p_spring = spring
+        self._p_since = time.monotonic()
+        self._start_frame()
+
+    def _start_frame(self):
+        if not self._frame.isActive():
+            self._last_frame = time.monotonic()
+            self._frame.start()
+
+    @staticmethod
+    def _spring(state: list, target: tuple, count: int, spring, dt: float) -> bool:
+        zeta, omega = spring
+        moving = False
+        steps = max(1, int(math.ceil(dt / (1.0 / 120.0))))
+        h = dt / steps
+        for i in range(count):
+            x, v = state[i], state[count + i]
+            for _ in range(steps):
+                v += (omega * omega * (target[i] - x) - 2.0 * zeta * omega * v) * h
+                x += v * h
+            if abs(target[i] - x) > 0.05 or abs(v) > 0.5:
+                moving = True
+            state[i], state[count + i] = x, v
+        if not moving:
+            for i in range(count):
+                state[i], state[count + i] = target[i], 0.0
+        return moving
+
+    def _advance(self, dt: float) -> bool:
+        """One frame: the open / close spring, every card's place, the veils. True while anything moves."""
+        moving = False
+        if self._p_since is not None:
+            t = time.monotonic() - self._p_since
+            if t >= CIRCLE_TRAY_SPRING_DONE_S:
+                self.progress = self._p_to
+                self._p_since = None
+            else:
+                self.progress = self._p_from + (self._p_to - self._p_from) * spring_progress(t, *self._p_spring)
+                moving = True
+        for key, target in self._fan_targets.items():
+            state = self._fan.get(key)
+            if state is not None and self._spring(state, target, 3, CIRCLE_TRAY_CARD_SPRING, dt):
+                moving = True
+        for key, target in self._row_targets.items():
+            state = self._row.get(key)
+            if state is not None and self._spring(state, target, 2, CIRCLE_TRAY_ROW_SPRING, dt):
+                moving = True
+        ease = 1.0 - math.exp(-dt / 0.06) if dt > 0 else 1.0
+        for key in self._row_targets:
+            state = self._veil.setdefault(key, [0.0, 0.0])
+            for i, wanted in enumerate((1.0 if key == self.hovered else 0.0, 1.0 if key == self._pressed else 0.0)):
+                state[i] += (wanted - state[i]) * ease
+                if abs(wanted - state[i]) > 0.01:
+                    moving = True
+                else:
+                    state[i] = wanted
+        return moving
+
+    def _on_frame(self):
+        now = time.monotonic()
+        dt = min(1.0 / 30.0, max(0.0, now - (self._last_frame or now)))
+        self._last_frame = now
+        moving = self._advance(dt)
+        if not moving:
+            self._frame.stop()
+        self._refresh(settled=not moving)
+
+    def settled(self) -> bool:
+        return not self._frame.isActive()
+
+    # ── what is drawn ───────────────────────────────────────────────────────
+    def visuals(self) -> list:
+        """The cards this frame, back to front: their centre (global), angle, size, corner, icon size and
+        place, how much of the name shows, opacity, veils and lift."""
+        p = self.progress
+        q = max(0.0, min(1.0, p))
+
+        def mix(a, b):
+            return a + (b - a) * p
+
+        w, h = mix(CIRCLE_TRAY_CARD_W, CIRCLE_TRAY_TILE_W), mix(CIRCLE_TRAY_CARD_H, CIRCLE_TRAY_TILE_H)
+        fan_icon_y = CIRCLE_TRAY_CARD_H / 2.0 - CIRCLE_TRAY_CARD_ICON_TOP - CIRCLE_TRAY_CARD_ICON / 2.0
+        if not self.hanging:
+            fan_icon_y = -fan_icon_y
+        shared = dict(w=w, h=h, radius=mix(CIRCLE_TRAY_CARD_RADIUS, CIRCLE_TRAY_TILE_RADIUS),
+                      icon=mix(CIRCLE_TRAY_CARD_ICON, CIRCLE_TRAY_TILE_ICON),
+                      icon_y=mix(fan_icon_y, -CIRCLE_TRAY_TILE_H / 2.0 + CIRCLE_TRAY_TILE_ICON_TOP + CIRCLE_TRAY_TILE_ICON / 2.0),
+                      name=max(0.0, min(1.0, (p - 0.55) / 0.45)))
+        out = []
+        hidden = self._hidden_keys()
+        if hidden and q < 0.999 and self.items:
+            fan, row = self._fan.get(self.MORE_KEY), self._row.get(circle_tray_item_key(self.items[0]))
+            if fan is not None and row is not None:
+                out.append(dict(shared, key=self.MORE_KEY, item=None, x=fan[0] + (row[0] - fan[0]) * p,
+                                y=fan[1] + (row[1] - fan[1]) * p, angle=fan[2] * (1.0 - q), name=0.0,
+                                opacity=1.0 - min(1.0, q * 2.0), hover=0.0, pressed=0.0, lift=0.0,
+                                icon_x=(-CIRCLE_TRAY_CARD_W / 2.0 + CIRCLE_TRAY_CARD_ICON_SIDE + CIRCLE_TRAY_CARD_ICON / 2.0) * (1.0 - q)))
+        lifted = None
+        # in the fan a card with another in front of it shows its left part: its icon goes there
+        side_x = (-CIRCLE_TRAY_CARD_W / 2.0 + CIRCLE_TRAY_CARD_ICON_SIDE + CIRCLE_TRAY_CARD_ICON / 2.0) * (1.0 - q)
+        front = circle_tray_item_key(self.items[-1]) if self.items else None
+        for item in self.items:
+            key = circle_tray_item_key(item)
+            fan, row = self._fan.get(key), self._row.get(key)
+            if fan is None or row is None:
+                continue
+            opacity = min(1.0, q * 2.5) if key in hidden else 1.0
+            if opacity <= 0.003:
+                continue
+            hover, pressed = self._veil.get(key, (0.0, 0.0))
+            visual = dict(shared, key=key, item=item, x=fan[0] + (row[0] - fan[0]) * p, y=fan[1] + (row[1] - fan[1]) * p,
+                          angle=fan[2] * (1.0 - q), opacity=opacity, hover=hover, pressed=pressed, lift=hover * q,
+                          icon_x=0.0 if key == front else side_x)
+            if key == self.hovered and q > 0.5:
+                lifted = visual
+            else:
+                out.append(visual)
+        if lifted is not None:
+            out.append(lifted)   # the lifted tile on top
+        return out
+
+    @staticmethod
+    def visual_corners(visual: dict, pad: float = 0.0) -> list:
+        lift = visual.get('lift', 0.0)
+        scale = 1.0 + 0.04 * lift
+        return circle_tray_card_corners(QPointF(visual['x'], visual['y'] - 2.0 * lift), visual['angle'],
+                                        visual['w'] * scale + 2 * pad, visual['h'] * scale + 2 * pad)
+
+    def _current_visuals(self) -> list:
+        if self._visual_cache is None:
+            self._visual_cache = self.visuals()
+        return self._visual_cache
+
+    def _refresh(self, settled=None):
+        self._visual_cache = self.visuals()
+        view = self._view
+        if view is None or not view.isVisible():
+            return
+        if settled is None:
+            settled = self.settled()
+        visuals = self._visual_cache
+        needed = QRectF(self._fan_bounds)
+        for rect in self._row_rects.values():
+            needed = needed.united(rect)
+        for visual in visuals:
+            for p in self.visual_corners(visual):
+                needed = needed.united(QRectF(p.x(), p.y(), 0.01, 0.01))
+        needed = needed.adjusted(-CIRCLE_TRAY_PAD, -CIRCLE_TRAY_PAD, CIRCLE_TRAY_PAD, CIRCLE_TRAY_PAD).toAlignedRect()
+        current = view.geometry()
+        if settled:
+            if needed != current:
+                view.setGeometry(needed)
+        elif not current.contains(needed):
+            view.setGeometry(current.united(needed))
+        origin = view.geometry().topLeft()
+        region = QRegion()
+        for visual in visuals:
+            if visual['opacity'] < 0.05:
+                continue
+            corners = self.visual_corners(visual, CIRCLE_TRAY_HIT_PAD)
+            if settled:
+                polygon = PyQt6.QtGui.QPolygon([QPoint(int(round(p.x() - origin.x())), int(round(p.y() - origin.y())))
+                                                for p in corners])
+                region = region.united(QRegion(polygon))
+            else:
+                xs, ys = [p.x() for p in corners], [p.y() for p in corners]
+                region = region.united(QRegion(QRectF(min(xs) - origin.x(), min(ys) - origin.y(),
+                                                      max(xs) - min(xs), max(ys) - min(ys)).toAlignedRect()))
+        view.setMask(region if not region.isEmpty() else QRegion(0, 0, 1, 1))
+        bounds = region.boundingRect()
+        set_right_drag_pass_rect('tray', QRect(bounds.topLeft() + origin, bounds.size()) if not region.isEmpty() else None)
+        view.update()
+
+    def paint(self, painter: QPainter, view: QWidget):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        origin = QPointF(view.geometry().topLeft())
+        dark = is_dark_theme(app)
+        self._icon_budget = CIRCLE_TRAY_ICONS_PER_PAINT
+        for visual in self._current_visuals():
+            self.paint_card(painter, visual, origin, dark)
+        if self._icon_budget < 0:
+            QTimer.singleShot(0, view.update)   # more icons to read: the next frame
+
+    def paint_card(self, painter: QPainter, visual: dict, origin: QPointF, dark: bool):
+        """One card (style book 5.1.6): white (dark #2D2D2D), a 1 pt line, a soft shadow; the icon or
+        thumbnail, on a tile the name under it; the hover / press veil of glass buttons (4.1)."""
+        painter.save()
+        try:
+            painter.setOpacity(max(0.0, min(1.0, visual['opacity'])))
+            lift = visual.get('lift', 0.0)
+            painter.translate(visual['x'] - origin.x(), visual['y'] - origin.y() - 2.0 * lift)
+            painter.rotate(visual['angle'])
+            scale = 1.0 + 0.04 * lift
+            painter.scale(scale, scale)
+            w, h, radius = visual['w'], visual['h'], max(0.0, visual['radius'])
+            rect = QRectF(-w / 2.0, -h / 2.0, w, h)
+            painter.setPen(Qt.PenStyle.NoPen)
+            for grow, alpha in ((4.0, 7), (2.5, 9), (1.2, 13)):   # the soft shadow (≈ black 16 %, down 2)
+                painter.setBrush(QColor(0, 0, 0, alpha + (6 if dark else 0)))
+                painter.drawPath(smooth_round_rect_path(rect.adjusted(-grow, -grow + 2.0, grow, grow + 2.0), radius + grow))
+            path = smooth_round_rect_path(rect, radius)
+            painter.setBrush(QColor('#2D2D2D') if dark else QColor('#FFFFFF'))
+            painter.drawPath(path)
+            hover_veil = glass_hover_tint(None, False, True, dark)
+            press_veil = glass_hover_tint(None, True, True, dark)
+            alpha = max(visual.get('hover', 0.0) * hover_veil.alpha(), visual.get('pressed', 0.0) * press_veil.alpha())
+            if alpha >= 1.0:
+                painter.setBrush(QColor(press_veil.red(), press_veil.green(), press_veil.blue(), int(round(alpha))))
+                painter.drawPath(path)
+            painter.setPen(QPen(QColor('#4A4B4F') if dark else QColor('#ECECEC'), 1.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(smooth_round_rect_path(rect.adjusted(0.5, 0.5, -0.5, -0.5), max(0.0, radius - 0.5)))
+            icon, icon_y, icon_x = visual['icon'], visual['icon_y'], visual.get('icon_x', 0.0)
+            box = QRectF(icon_x - icon / 2.0, icon_y - icon / 2.0, icon, icon)
+            item = visual.get('item')
+            if item is None:
+                font = PyQt6.QtGui.QFont('Helvetica Neue')
+                font.setPixelSize(CIRCLE_TRAY_NAME_PX)
+                font.setBold(True)
+                painter.setFont(font)
+                painter.setPen(QColor('#8E8E93'))
+                text_box = QRectF(-w / 2.0 + CIRCLE_TRAY_CARD_ICON_SIDE, box.top(), w - 2 * CIRCLE_TRAY_CARD_ICON_SIDE, box.height())
+                painter.drawText(text_box, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft), f'+{self.more_count()}')
+                return
+            image = self._picture(item)
+            if image is not None and not image.isNull():
+                size = image.deviceIndependentSize() if hasattr(image, 'deviceIndependentSize') else QSize(image.width(), image.height())
+                painter.drawImage(circle_tray_fit_rect(size.width(), size.height(), box), image)
+            if visual['name'] > 0.01:
+                font = self._name_font()
+                painter.setFont(font)
+                color = QColor('#F2F2F7') if dark else QColor('#20242B')
+                color.setAlphaF(max(0.0, min(1.0, visual['name'])))
+                painter.setPen(color)
+                line_h = PyQt6.QtGui.QFontMetricsF(font).lineSpacing()
+                y = icon_y + icon / 2.0 + CIRCLE_TRAY_TILE_NAME_GAP
+                for line in self._name_lines(item):
+                    painter.drawText(QRectF(-w / 2.0 + 4.0, y, w - 8.0, line_h),
+                                     int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop), line)
+                    y += line_h
+        finally:
+            painter.restore()
+
+    # ── showing ─────────────────────────────────────────────────────────────
+    def _view_window(self) -> CircleTrayWindow:
+        if self._view is None:
+            self._view = CircleTrayWindow(self)
+        return self._view
+
+    def want_shown(self) -> bool:
+        """Out with the circle when it holds something: not under the grid, not while the main window goes
+        into / comes out of the circle, not while the circle is out of sight."""
+        if not self.items:
+            return False
+        main, circle = self._main, self._circle
+        try:
+            if not circle.isVisible() or not main._collapsed_button_shown():
+                return False
+            launcher = getattr(main, '_collapsed_launcher', None)
+            if launcher is not None and launcher.isVisible() and not launcher.drag_hidden:
+                return False
+            if main._circle_morph_running():
+                return False
+            drip_moving = bool(getattr(main, '_circle_drip_animating', lambda: False)())   # (the circle is under the drop)
+            if circle.windowOpacity() < 0.3 and not main._collapsed_body_active() and not drip_moving:
+                return False
+        except RuntimeError:
+            return False
+        return True
+
+    def shown(self) -> bool:
+        return self._shown
+
+    def _set_shown(self, want: bool):
+        if want == self._shown:
+            return
+        self._shown = want
+        anim = self._fade_anim
+        if anim is not None:
+            anim.stop()
+        self._fade_anim = None
+        if want:
+            view = self._view_window()
+            if not view.isVisible():
+                self._update_targets(snap=True)
+                view.setWindowOpacity(0.0)
+                view.present(self._circle)
+                self._refresh(settled=True)
+            else:
+                view.present(self._circle)
+            self._fade(view, 1.0)
+            return
+        self._hide_tag()
+        set_right_drag_pass_rect('tray', None)
+        view = self._view
+        if view is not None and view.isVisible():
+            self._fade(view, 0.0, done=lambda v=view, me=self: (v.hide() if not me._shown else None))
+
+    def _fade(self, view, to: float, done=None):
+        anim = QPropertyAnimation(view, b'windowOpacity', self)
+        anim.setDuration(CIRCLE_TRAY_FADE_MS)
+        anim.setStartValue(float(view.windowOpacity()))
+        anim.setEndValue(float(to))
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        if done is not None:
+            anim.finished.connect(done)
+        self._fade_anim = anim
+        anim.start()
+
+    # ── the pointer (read from its position: hover events do not come to a background app) ──
+    def hit(self, pos) -> str | None:
+        """The card under `pos` (global): an item's key, MORE_KEY ("+N"), or None (also on the circle,
+        which is the circle's own)."""
+        pos = QPointF(pos)
+        circle = self.circle_rect()
+        center = circle.center()
+        if (pos.x() - center.x()) ** 2 + (pos.y() - center.y()) ** 2 <= (circle.width() / 2.0) ** 2:
+            return None
+        if not self._shown:
+            return None
+        for visual in reversed(self._current_visuals()):
+            if visual['opacity'] < 0.5:
+                continue
+            polygon = PyQt6.QtGui.QPolygonF(self.visual_corners(visual))
+            if polygon.containsPoint(pos, Qt.FillRule.OddEvenFill):
+                return visual['key']
+        return None
+
+    def row_block(self) -> QRectF:
+        block = QRectF()
+        for rect in self._row_rects.values():
+            block = rect if block.isNull() else block.united(rect)
+        return block
+
+    def in_row_area(self, pos) -> bool:
+        """The row, the gap between it and the circle, the circle and the fan: the pointer anywhere here
+        keeps the row out."""
+        pos = QPointF(pos)
+        block = self.row_block()
+        if block.isNull():
+            return False
+        circle = self.circle_rect().adjusted(-4, -4, 4, 4)
+        if self.row_below:
+            bridge = QRectF(circle.left(), circle.bottom() - 4, circle.width(), max(0.0, block.top() - circle.bottom() + 8))
+        else:
+            bridge = QRectF(circle.left(), block.bottom() - 4, circle.width(), max(0.0, circle.top() - block.bottom() + 8))
+        return (block.adjusted(-CIRCLE_TRAY_GAP, -CIRCLE_TRAY_GAP, CIRCLE_TRAY_GAP, CIRCLE_TRAY_GAP).contains(pos)
+                or circle.contains(pos) or bridge.contains(pos) or self._fan_bounds.contains(pos))
+
+    def expand(self):
+        """Laid out in a row (style book 5.1.6: "鼠标放上去应该横向展开，用户可以选择是哪个文件")."""
+        if self.expanded or not self.items:
+            return
+        if self.prune_missing():
+            self._changed()
+            if not self.items:
+                return
+        self.expanded = True
+        self._hover_since = None
+        self._leave_since = None
+        self._start_progress(1.0, CIRCLE_TRAY_OPEN_SPRING)
+
+    def collapse(self, immediate: bool = False):
+        """Back into the fan."""
+        self._leave_since = None
+        self.hovered = None
+        self._hovered_since = None
+        self._hide_tag()
+        if not self.expanded and not immediate:
+            return
+        self.expanded = False
+        if immediate:
+            self.progress = 0.0
+            self._p_since = None
+            self._start_frame()
+        else:
+            self._start_progress(0.0, CIRCLE_TRAY_CLOSE_SPRING)
+
+    def _on_tick(self):
+        if not self.items:
+            self._set_shown(False)
+            self._tick.stop()
+            return
+        want = self.want_shown()
+        self._set_shown(want)
+        if not want:
+            self._hover_since = None
+            if self.expanded or self.progress > 0.0:
+                self.collapse(immediate=True)
+            self._tick.setInterval(self.IDLE_TICK_MS)
+            return
+        self._tick.setInterval(self.TICK_MS)
+        main = self._main
+        drag = getattr(main, '_collapsed_drag', None)
+        body = getattr(main, '_collapsed_body', None)
+        scan = getattr(main, '_circle_scan', None)
+        if (drag is not None and drag.pressed) or (body is not None and body.held and not self._swollen) \
+                or (scan is not None and scan.active()):
+            self._hover_since = None
+            if self.expanded:
+                self.collapse()   # the circle is being taken (or is a black hole just now): the row goes at once
+            return
+        if self.dragging_out or self.menu_open or self.drop_hover:
+            self._leave_since = None
+            return
+        pos = QPointF(QCursor.pos())
+        now = time.monotonic()
+        if not self.expanded:
+            if self.hit(pos) is not None:
+                if self._hover_since is None:
+                    self._hover_since = now
+                elif now - self._hover_since >= CIRCLE_TRAY_HOVER_S:
+                    self.expand()
+            else:
+                self._hover_since = None
+            return
+        if self.in_row_area(pos):
+            self._leave_since = None
+        elif self._leave_since is None:
+            self._leave_since = now
+        elif now - self._leave_since >= CIRCLE_TRAY_LEAVE_S:
+            self.collapse()
+            return
+        under = self.hit(pos) if self.progress > 0.9 else None
+        self._set_hovered(None if under == self.MORE_KEY else under, now)
+        self._show_tag_when_due(now)
+
+    def _set_hovered(self, key, now):
+        if key == self.hovered:
+            return
+        self.hovered = key
+        self._hovered_since = now if key else None
+        self._hide_tag()
+        self._start_frame()
+
+    # ── the name tag ────────────────────────────────────────────────────────
+    def _show_tag_when_due(self, now):
+        key = self.hovered
+        if (key is None or self._hovered_since is None or now - self._hovered_since < CIRCLE_TRAY_TAG_S
+                or self.progress < 0.98 or self._press is not None):
+            return
+        if self._tag_key == key and self._tag is not None and self._tag.isVisible():
+            return
+        item, rect = self.item(key), self._row_rects.get(key)
+        if item is None or rect is None:
+            return
+        text = circle_tray_tag_text(item)
+        tag = self._tag
+        if tag is None:
+            tag = self._tag = CircleTrayHintTag()
+        tag.set_content(text, '', is_dark_theme(app))
+        block, area = self.row_block(), self._area()
+        x = rect.center().x() - tag.width() / 2.0
+        y = block.bottom() + CIRCLE_TRAY_TAG_GAP if self.row_below else block.top() - CIRCLE_TRAY_TAG_GAP - tag.height()
+        margin = CIRCLE_TRAY_SCREEN_MARGIN
+        x = max(area.left() + margin, min(x, area.right() - margin - tag.width()))
+        y = max(area.top() + margin, min(y, area.bottom() - margin - tag.height()))
+        tag.move(int(round(x)), int(round(y)))
+        tag.present()
+        self._tag_key = key
+
+    def _hide_tag(self):
+        self._tag_key = None
+        tag = self._tag
+        if tag is not None and tag.isVisible():
+            tag.hide()
+
+    # ── clicks, drags, the menu (on the cards' window) ──────────────────────
+    def mouse_press(self, event):
+        event.accept()
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        key = self.hit(event.globalPosition())
+        self._press = (QPointF(event.globalPosition()), key) if key else None
+        self._pressed = key if key and key != self.MORE_KEY else None
+        self._hide_tag()
+        self._start_frame()
+
+    def mouse_move(self, event):
+        event.accept()
+        if self._press is None:
+            return
+        if not (event.buttons() & Qt.MouseButton.LeftButton):   # the release went missing
+            self._press = None
+            self._pressed = None
+            self._start_frame()
+            return
+        start, key = self._press
+        travelled = QPointF(event.globalPosition()) - start
+        if key != self.MORE_KEY and abs(travelled.x()) + abs(travelled.y()) >= CollapsedButtonDrag.THRESHOLD:
+            self._press = None
+            self._pressed = None
+            self._single_click.stop()
+            self._start_frame()
+            self.drag_out(key)
+
+    def mouse_release(self, event):
+        event.accept()
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        press = self._press
+        self._press = None
+        self._pressed = None
+        self._start_frame()
+        if self._after_double:
+            self._after_double = False   # (the release that ends a double click)
+            return
+        if press is None:
+            return
+        key = press[1]
+        if not self.expanded or self.progress < 0.5 or key == self.MORE_KEY:
+            self.expand()   # a click on the fan lays it out
+            return
+        self._click_key = key
+        self._single_click.start(int(QGuiApplication.styleHints().mouseDoubleClickInterval()))
+
+    def mouse_double_click(self, event):
+        event.accept()
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._single_click.stop()
+        self._click_key = None
+        self._after_double = True
+        self._press = None
+        self._pressed = None
+        key = self.hit(event.globalPosition())
+        if key and key != self.MORE_KEY:
+            self.open_item(key)
+
+    def _on_single_click(self):
+        key, self._click_key = self._click_key, None
+        item = self.item(key)
+        if item is None:
+            return
+        if item.get('kind') == 'url':
+            self.open_item(key)
+        else:
+            self.quick_look(key)
+
+    def open_item(self, key):
+        """Double click: the file opens in its app; a link in the default browser."""
+        item = self.item(key)
+        if item is None:
+            return
+        from PyQt6.QtGui import QDesktopServices
+        if item.get('kind') == 'url':
+            QDesktopServices.openUrl(QUrl(str(item.get('url', ''))))
+            return
+        path = str(item.get('path', ''))
+        if not os.path.exists(path):
+            self.remove(key)
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def quick_look(self, key):
+        """Click: Quick Look on this file, the tray's other files a press of an arrow key away."""
+        self.prune_missing()
+        files = [item for item in self.items if item.get('kind') == 'file']
+        index = next((i for i, item in enumerate(files) if circle_tray_item_key(item) == key), -1)
+        if index < 0:
+            self._changed()
+            return
+        previous = None
+        if AppKit is not None:
+            try:
+                previous = AppKit.NSWorkspace.sharedWorkspace().frontmostApplication()
+                if previous is not None and int(previous.processIdentifier()) == os.getpid():
+                    previous = None
+            except Exception:
+                previous = None
+        panel = circle_tray_quick_look([str(item.get('path', '')) for item in files], index)
+        if panel is not None and panel is not True:
+            self._preview_panel = panel
+            self._preview_previous = previous
+            self._preview_watch.start()
+
+    def _watch_preview(self):
+        """The preview closed: the app that was in front before it comes back (unless Broccoli's own
+        main window is out)."""
+        panel = self._preview_panel
+        try:
+            still = panel is not None and bool(panel.isVisible())
+        except Exception:
+            still = False
+        if still:
+            return
+        self._preview_watch.stop()
+        previous, self._preview_previous, self._preview_panel = self._preview_previous, None, None
+        try:
+            if previous is not None and not self._main.isVisible() and AppKit is not None \
+                    and AppKit.NSApplication.sharedApplication().isActive():
+                previous.activateWithOptions_(0)
+        except Exception:
+            pass
+
+    def show_in_finder(self, key):
+        item = self.item(key)
+        if item is None or item.get('kind') != 'file':
+            return
+        try:
+            subprocess.Popen(['open', '-R', str(item.get('path', ''))], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            logging.exception('Showing a tray file in the Finder failed.')
+
+    def copy_location(self, key):
+        item = self.item(key)
+        if item is not None:
+            QGuiApplication.clipboard().setText(str(item.get('url' if item.get('kind') == 'url' else 'path', '')))
+
+    def drag_pixmap(self, item) -> QPixmap:
+        """The tile as it is dragged into another app."""
+        dpr, pad = 2.0, 6.0
+        w, h = CIRCLE_TRAY_TILE_W + 2 * pad, CIRCLE_TRAY_TILE_H + 2 * pad
+        pixmap = QPixmap(int(w * dpr), int(h * dpr))
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        self._icon_budget = CIRCLE_TRAY_ICONS_PER_PAINT
+        visual = dict(key=circle_tray_item_key(item), item=item, x=w / 2.0, y=h / 2.0, angle=0.0,
+                      w=CIRCLE_TRAY_TILE_W, h=CIRCLE_TRAY_TILE_H, radius=CIRCLE_TRAY_TILE_RADIUS,
+                      icon=CIRCLE_TRAY_TILE_ICON,
+                      icon_y=-CIRCLE_TRAY_TILE_H / 2.0 + CIRCLE_TRAY_TILE_ICON_TOP + CIRCLE_TRAY_TILE_ICON / 2.0,
+                      name=1.0, opacity=1.0, hover=0.0, pressed=0.0, lift=0.0)
+        self.paint_card(painter, visual, QPointF(0, 0), is_dark_theme(app))
+        painter.end()
+        return pixmap
+
+    def drag_out(self, key):
+        """Into another app (style book 5.1.6): a file as a file (the Finder moves it within a disk and
+        copies it to another, as from the Finder), a link as its address. The card stays; a file moved
+        away goes from the tray; let go where nothing takes it, it flies back."""
+        item = self.item(key)
+        view = self._view
+        if item is None or view is None:
+            return
+        mime = PyQt6.QtCore.QMimeData()
+        if item.get('kind') == 'url':
+            address = str(item.get('url', ''))
+            mime.setUrls([QUrl(address)])
+            mime.setText(address)
+            actions = Qt.DropAction.CopyAction | Qt.DropAction.LinkAction
+        else:
+            path = str(item.get('path', ''))
+            if not os.path.exists(path):
+                self.remove(key)
+                return
+            mime.setUrls([QUrl.fromLocalFile(path)])
+            actions = Qt.DropAction.CopyAction | Qt.DropAction.MoveAction
+        drag = PyQt6.QtGui.QDrag(view)
+        drag.setMimeData(mime)
+        pixmap = self.drag_pixmap(item)
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(QPoint(int(pixmap.width() / pixmap.devicePixelRatio() / 2), int(pixmap.height() / pixmap.devicePixelRatio() / 2)))
+        self._hide_tag()
+        self.dragging_out = True
+        try:
+            drag.exec(actions, Qt.DropAction.CopyAction)
+        except Exception:
+            logging.exception('Dragging a tray card out failed.')
+        finally:
+            self.dragging_out = False
+        if item.get('kind') == 'file' and not os.path.exists(str(item.get('path', ''))):
+            self.remove(key)   # moved away (the Finder moves within a disk)
+
+    def context_menu(self, global_pos):
+        """Right click (style book 5.1.6): Quick Look / Open / Show in Finder / Copy Path (a link: Open /
+        Copy Link), then Remove / Remove All."""
+        key = self.hit(QPointF(global_pos))
+        if key is None:
+            return
+        self._single_click.stop()
+        item = self.item(key) if key != self.MORE_KEY else None
+        menu = style_broccoli_context_menu(QMenu(self._view))
+        if item is not None:
+            if item.get('kind') == 'url':
+                menu.addAction(_tr('Open')).setData('open')
+                menu.addAction(_tr('Copy Link')).setData('copy')
+            else:
+                menu.addAction(_tr('Quick Look')).setData('look')
+                menu.addAction(_tr('Open')).setData('open')
+                menu.addAction(_tr('Show in Finder')).setData('finder')
+                menu.addAction(_tr('Copy Path')).setData('copy')
+            menu.addSeparator()
+            menu.addAction(_tr('Remove')).setData('remove')
+        menu.addAction(_tr('Remove All')).setData('remove_all')
+        self.menu_open = True
+        self._hide_tag()
+        try:
+            chosen = menu.exec(QPoint(global_pos))
+        finally:
+            self.menu_open = False
+        what = chosen.data() if chosen is not None else None
+        if what == 'look':
+            self.quick_look(key)
+        elif what == 'open':
+            self.open_item(key)
+        elif what == 'finder':
+            self.show_in_finder(key)
+        elif what == 'copy':
+            self.copy_location(key)
+        elif what == 'remove':
+            self.remove(key)
+        elif what == 'remove_all':
+            self.remove_all()
+
+    # ── things dragged onto the circle or the cards ─────────────────────────
+    def _own_drag(self, event) -> bool:
+        source = event.source()
+        return source is not None and self._view is not None and source is self._view
+
+    @staticmethod
+    def _accept_copy(event):
+        if event.possibleActions() & Qt.DropAction.CopyAction:
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+        else:
+            event.acceptProposedAction()
+
+    def drag_enter(self, event):
+        if self._own_drag(event) or not circle_tray_mime_usable(event.mimeData()):
+            event.ignore()
+            return
+        self._accept_copy(event)
+        self._drop_leave.stop()
+        if not self.drop_hover:
+            self.drop_hover = True
+            self._hide_tag()
+            self._set_spread(CIRCLE_TRAY_DROP_SPREAD)
+            if time.monotonic() - self._unswell_at > 0.3:   # (not straight back after it settled)
+                self._swell(True)
+
+    def drag_move(self, event):
+        if self._own_drag(event) or not circle_tray_mime_usable(event.mimeData()):
+            event.ignore()
+            return
+        self._accept_copy(event)
+        self._drop_leave.stop()
+
+    def drag_leave(self):
+        self._drop_leave.start()
+
+    def _end_drop_hover(self):
+        self._drop_leave.stop()
+        if not self.drop_hover:
+            return
+        self.drop_hover = False
+        self._set_spread(1.0)
+        self._swell(False)
+
+    def drop(self, event):
+        if self._own_drag(event):
+            event.ignore()
+            self._end_drop_hover()
+            return
+        items, downloads = circle_tray_items_from_mime(event.mimeData())
+        self._accept_copy(event)
+        self._end_drop_hover()
+        if items:
+            self.add_items(items, downloads)
+
+    def _swell(self, on: bool):
+        """Something dragged over the circle: it swells as when it is held (style book 5.1.2 / 5.1.6);
+        let go, it settles — taken in."""
+        main = self._main
+        if on:
+            if (not self._swollen and main._collapsed_button_shown() and not main._collapsed_drag.pressed
+                    and not main._collapsed_body_active()):
+                self._swollen = True
+                middle = COLLAPSED_WINDOW_MARGIN + COLLAPSED_BUTTON_SIZE // 2
+                main._collapsed_body_press(self._circle.pos() + QPoint(middle, middle))
+        elif self._swollen:
+            self._swollen = False
+            self._unswell_at = time.monotonic()
+            main._collapsed_body_release()
+
+
+# ── the circle's input box: a drop of glass (style book 5.1.7, 2026-11-11) ──────────────────────────
+# Ryan (2026-11-09): "右键单击的时候，在小圆点下面显示出液态玻璃的这样一个可以发送消息的窗口……我希望它像那种
+# 滴水一样，就好像滴下一滴水滴，然后逐渐扩大变成一个输入框……这个一定要做出来，这个非常非常重要". A right
+# click on the circle: its bottom sags, a drop of the circle's glass falls, lands, flattens and
+# spreads into the box; closing plays it backwards (the drop is drawn back into the circle).
+CIRCLE_DRIP_INPUT_W = 380.0
+CIRCLE_DRIP_INPUT_H = 40.0                # one line (the bottom bar's height)
+CIRCLE_DRIP_INPUT_RADIUS = 20.0           # half the one-line height; kept when it grows
+CIRCLE_DRIP_INPUT_MAX_LINES = 5
+CIRCLE_DRIP_INPUT_PAD_X = 16.0
+CIRCLE_DRIP_FONT_PX = 13
+CIRCLE_DRIP_DOC_MARGIN = 4.0              # the text box's own inner margin
+CIRCLE_DRIP_EDIT_SLACK = 3                # the text box this much taller than its lines (else it can scroll a line)
+CIRCLE_DRIP_GAP = 30.0                    # the circle's bottom → the box's top: room for the drop to fall
+CIRCLE_DRIP_SCREEN_MARGIN = 8.0
+CIRCLE_DRIP_DROP = 18.0                   # the drop's diameter
+CIRCLE_DRIP_SPACING = 14.0                # glass this close merges: the neck between the circle and the drop
+CIRCLE_DRIP_SAG = 3.0                     # the circle's bottom sagging before the drop goes …
+CIRCLE_DRIP_BULGE = 3.0                   # … and the drop showing below it
+CIRCLE_DRIP_T_SAG = 0.12                  # the opening, in seconds: sag, fall, land, spread
+CIRCLE_DRIP_T_FALL = 0.18
+CIRCLE_DRIP_T_LAND = 0.08
+CIRCLE_DRIP_T_SPREAD = 0.42
+CIRCLE_DRIP_OPEN_S = CIRCLE_DRIP_T_SAG + CIRCLE_DRIP_T_FALL + CIRCLE_DRIP_T_LAND + CIRCLE_DRIP_T_SPREAD
+CIRCLE_DRIP_FALL_STRETCH = (0.12, 0.25)   # falling fast: this much narrower, this much longer
+CIRCLE_DRIP_LANDED = (34.0, 12.0)         # the drop flattened where it lands
+CIRCLE_DRIP_SPREAD_W = (0.68, 13.0)       # (damping, speed): the width a little past and back
+CIRCLE_DRIP_SPREAD_H = (0.8, 16.0)
+CIRCLE_DRIP_BOUNCE = (0.42, 30.0)         # the circle springing back once the drop has gone
+CIRCLE_DRIP_SETTLE_S = 0.08               # the spreading eased exactly onto the box over its last moment
+CIRCLE_DRIP_T_SHRINK = 0.20               # the closing: the box into a drop, the drop rising, taken in
+CIRCLE_DRIP_T_RISE = 0.17
+CIRCLE_DRIP_T_ABSORB = 0.16
+CIRCLE_DRIP_CLOSE_S = CIRCLE_DRIP_T_SHRINK + CIRCLE_DRIP_T_RISE + CIRCLE_DRIP_T_ABSORB
+CIRCLE_DRIP_ABSORB_SWELL = 0.05           # the circle swelling a little as it takes the drop in
+CIRCLE_DRIP_FADE_MS = 150                 # "reduce motion" / no glass: a plain fade
+CIRCLE_DRIP_FLOAT_MS = 320                # the circle rising to make room below it (at the screen's bottom)
+CIRCLE_DRIP_RETURN_MS = 260               # … and settling back
+CIRCLE_DRIP_GLASS_DELAY_MS = 30           # the stage's glass shows a frame later: then the circle steps away
+CIRCLE_DRIP_HANDOVER_MS = 80              # the drop and the box cross-fade (two glasses over each other look darker)
+# The box's glass is nearly clear: it takes on whatever is behind it on the screen. Its text, hint
+# and caret follow the GLASS as it looks right now, not Broccoli's theme (2026-11-11, Ryan over a
+# dark desktop in the light theme: "连 placeholder 都不显示，光标也没有" — dark text on dark glass).
+CIRCLE_DRIP_TEXT_DARK = '#20242B'
+CIRCLE_DRIP_TEXT_LIGHT = '#F2F2F7'
+CIRCLE_DRIP_LIGHT_TEXT_BELOW = 0.17       # the glass's brightness (0 black … 1 white): darker than this → light text
+CIRCLE_DRIP_DARK_TEXT_ABOVE = 0.24        # brighter than this → dark text; in between it stays as it is
+CIRCLE_DRIP_LOOK_MS = 500                 # while the box is open: look at the glass again this often
+CIRCLE_DRIP_LOOK_PATCH = (6, 14, 5, 12)   # x, y, w, h inside the box's left end (mirrored at the right): glass, never text
+CIRCLE_DRIP_MILKY = ((1.0, 0.72), (0.12, 0.72))   # the screen cannot be read: a milky body (white, strength), light / dark theme
+
+
+def circle_drip_input_rect(circle: QRectF, area: QRectF, height: float = CIRCLE_DRIP_INPUT_H) -> QRectF:
+    """The box under the circle (style book 5.1.7): CIRCLE_DRIP_GAP below it, centred on it, kept
+    CIRCLE_DRIP_SCREEN_MARGIN inside the screen."""
+    margin = CIRCLE_DRIP_SCREEN_MARGIN
+    left = circle.center().x() - CIRCLE_DRIP_INPUT_W / 2.0
+    left = max(area.left() + margin, min(left, area.right() - margin - CIRCLE_DRIP_INPUT_W))
+    return QRectF(round(left), round(circle.bottom() + CIRCLE_DRIP_GAP), CIRCLE_DRIP_INPUT_W, float(height))
+
+
+def circle_drip_float_top(circle: QRectF, area: QRectF):
+    """Where the circle's top must rise to for a one-line box to fit under it, or None when it fits."""
+    needed = circle.bottom() + CIRCLE_DRIP_GAP + CIRCLE_DRIP_INPUT_H + CIRCLE_DRIP_SCREEN_MARGIN
+    if needed <= area.bottom():
+        return None
+    return circle.top() - (needed - area.bottom())
+
+
+def _drip_smooth(u: float) -> float:
+    u = max(0.0, min(1.0, float(u)))
+    return u * u * (3.0 - 2.0 * u)
+
+
+def _circle_drip_landing(circle: QRectF, target: QRectF) -> tuple:
+    """Where the drop lands: right under the circle (within the box), on the box's middle line."""
+    d = CIRCLE_DRIP_DROP
+    x = max(target.left() + d, min(circle.center().x(), target.right() - d))
+    return x, target.center().y()
+
+
+def circle_drip_open_shapes(t: float, circle: QRectF, target: QRectF) -> tuple:
+    """The drop falling out of the circle at `t` seconds (style book 5.1.7): (the circle's stand-in,
+    the drop or None), global. ① sag: the circle's bottom sags, the drop grows at it; ② fall: the drop
+    falls faster and faster, a little longer than wide (the glass of the two merges while they are
+    close: a neck that thins and breaks), the circle springs back; ③ land: flattened; ④ spread: into
+    the box, the width a little past and back. Ends exactly on (circle, target)."""
+    t = max(0.0, float(t))
+    if t >= CIRCLE_DRIP_OPEN_S:
+        return QRectF(circle), QRectF(target)
+    d = CIRCLE_DRIP_DROP
+    cx = circle.center().x()
+    land_x, land_y = _circle_drip_landing(circle, target)
+    t_fall = CIRCLE_DRIP_T_SAG
+    t_land = t_fall + CIRCLE_DRIP_T_FALL
+    t_spread = t_land + CIRCLE_DRIP_T_LAND
+    if t < t_fall:
+        s = _drip_smooth(t / CIRCLE_DRIP_T_SAG)
+        ball = QRectF(circle.left(), circle.top(), circle.width(), circle.height() + CIRCLE_DRIP_SAG * s)
+        size = d * s
+        if size < 0.5:
+            return ball, None
+        bottom = ball.bottom() + CIRCLE_DRIP_BULGE * s
+        return ball, QRectF(cx - size / 2.0, bottom - size, size, size)
+    bounce = spring_progress(t - t_fall, *CIRCLE_DRIP_BOUNCE)
+    ball = QRectF(circle.left(), circle.top(), circle.width(), circle.height() + CIRCLE_DRIP_SAG * (1.0 - bounce))
+    narrower, longer = CIRCLE_DRIP_FALL_STRETCH
+    if t < t_land:
+        u = (t - t_fall) / CIRCLE_DRIP_T_FALL
+        e = u * u
+        start_y = circle.bottom() + CIRCLE_DRIP_SAG + CIRCLE_DRIP_BULGE - d / 2.0
+        y = start_y + (land_y - start_y) * e
+        x = cx + (land_x - cx) * e
+        w, h = d * (1.0 - narrower * e), d * (1.0 + longer * e)
+        return ball, QRectF(x - w / 2.0, y - h / 2.0, w, h)
+    if t < t_spread:
+        v = (t - t_land) / CIRCLE_DRIP_T_LAND
+        v = 1.0 - (1.0 - v) ** 2
+        w0, h0 = d * (1.0 - narrower), d * (1.0 + longer)
+        w1, h1 = CIRCLE_DRIP_LANDED
+        w, h = w0 + (w1 - w0) * v, h0 + (h1 - h0) * v
+        return ball, QRectF(land_x - w / 2.0, land_y - h / 2.0, w, h)
+    k = t - t_spread
+    grow_w = spring_progress(k, *CIRCLE_DRIP_SPREAD_W)
+    grow_h = spring_progress(k, *CIRCLE_DRIP_SPREAD_H)
+    w1, h1 = CIRCLE_DRIP_LANDED
+    left = (land_x - w1 / 2.0) + (target.left() - (land_x - w1 / 2.0)) * grow_w
+    right = (land_x + w1 / 2.0) + (target.right() - (land_x + w1 / 2.0)) * grow_w
+    h = h1 + (target.height() - h1) * grow_h
+    top = land_y - h / 2.0
+    # the springs are not quite still at the end: ease onto the box over the last moment (no jump)
+    settle = _drip_smooth((k - (CIRCLE_DRIP_T_SPREAD - CIRCLE_DRIP_SETTLE_S)) / CIRCLE_DRIP_SETTLE_S)
+    if settle > 0.0:
+        left += (target.left() - left) * settle
+        right += (target.right() - right) * settle
+        top += (target.top() - top) * settle
+        h += (target.height() - h) * settle
+    return ball, QRectF(left, top, max(1.0, right - left), max(1.0, h))
+
+
+def circle_drip_close_shapes(t: float, circle: QRectF, target: QRectF) -> tuple:
+    """The box going back into the circle at `t` seconds (style book 5.1.7): it shrinks into a drop,
+    the drop is drawn up faster and faster into the circle's bottom, the circle swells a little as it
+    takes it in. Starts exactly on (circle, target); ends on (circle, None)."""
+    t = max(0.0, float(t))
+    if t >= CIRCLE_DRIP_CLOSE_S:
+        return QRectF(circle), None
+    d = CIRCLE_DRIP_DROP
+    cx, cy = circle.center().x(), circle.center().y()
+    land_x, land_y = _circle_drip_landing(circle, target)
+    t_rise = CIRCLE_DRIP_T_SHRINK
+    t_absorb = t_rise + CIRCLE_DRIP_T_RISE
+    inside_y = circle.bottom() - d / 2.0 + 2.0
+    if t < t_rise:
+        e = _drip_smooth(t / CIRCLE_DRIP_T_SHRINK)
+        left = target.left() + ((land_x - d / 2.0) - target.left()) * e
+        right = target.right() + ((land_x + d / 2.0) - target.right()) * e
+        h = target.height() + (d - target.height()) * e
+        return QRectF(circle), QRectF(left, land_y - h / 2.0, max(1.0, right - left), max(1.0, h))
+    if t < t_absorb:
+        u = (t - t_rise) / CIRCLE_DRIP_T_RISE
+        e = u * u
+        y = land_y + (inside_y - land_y) * e
+        x = land_x + (cx - land_x) * e
+        w, h = d * (1.0 - 0.1 * e), d * (1.0 + 0.2 * e)
+        return QRectF(circle), QRectF(x - w / 2.0, y - h / 2.0, w, h)
+    u = min(1.0, (t - t_absorb) / CIRCLE_DRIP_T_ABSORB)
+    grow = circle.width() * CIRCLE_DRIP_ABSORB_SWELL * math.sin(math.pi * u)
+    ball = QRectF(circle).adjusted(-grow / 2.0, -grow / 2.0, grow / 2.0, grow / 2.0)
+    size = d * (1.0 - _drip_smooth(u))
+    if size < 0.5:
+        return ball, None
+    y = inside_y + (cy - inside_y) * _drip_smooth(u)
+    return ball, QRectF(cx - size / 2.0, y - size / 2.0, size, size)
+
+
+class CircleDripStage(QWidget):
+    """The water drop (style book 5.1.7): a window over the circle and the box that never takes the
+    mouse, holding the system's glass container (NSGlassEffectContainerView) with two glass views — a
+    stand-in for the circle and the drop, both the circle's own look. Glass this close together merges,
+    so the drop pulls away from the circle with a neck that thins and breaks, like water. Each frame
+    only moves and reshapes them (style book 4.3 rule 8); the circle's icon is drawn on top by Qt."""
+    PAD = 40.0
+
+    def __init__(self):
+        super().__init__(None)   # never a child of the main window (winId poison)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint
+                            | Qt.WindowType.WindowDoesNotAcceptFocus | Qt.WindowType.WindowTransparentForInput)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        if hasattr(Qt.WidgetAttribute, 'WA_MacAlwaysShowToolWindow'):
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._container = self._ball = self._drop = None
+        self._face = None
+        self._dark = False
+        self._native_ready = False
+        self.ball_rect = QRectF()
+        self.drop_rect = None
+
+    def glass_ready(self) -> bool:
+        return self._ball is not None
+
+    def cover(self, rect: QRectF):
+        """Big enough for the circle, the box and their overshoot."""
+        self.setGeometry(QRectF(rect).adjusted(-self.PAD, -self.PAD, self.PAD, self.PAD).toAlignedRect())
+
+    def present(self, face, dark: bool):
+        self._face = face
+        self.set_dark(dark)
+        if not self.isVisible():
+            self.show()
+        window = _broccoli_own_ns_window(self) if AppKit is not None and objc is not None else None
+        if window is not None and not self._native_ready:
+            self._native_ready = True
+            configure_nonactivating_ns_window(window)
+            try:
+                window.setIgnoresMouseEvents_(True)   # (the call above lets the mouse in again)
+                window.setHasShadow_(False)
+            except Exception:
+                pass
+            _want_active_glass(window, self)   # bright, not the inactive grey: never the front window
+        self._ensure_glass()
+        if window is not None:
+            try:
+                window.orderFrontRegardless()
+            except Exception:
+                pass
+
+    def _ensure_glass(self):
+        if self._ball is not None or not liquid_glass_available() or objc is None or BroccoliGlassContainerView is None:
+            return
+        try:
+            container_class = objc.lookUpClass('NSGlassEffectContainerView')
+        except Exception:
+            return
+        layer = _window_glass_layer(self)
+        if layer is None:
+            return
+        try:
+            bounds = layer.view.bounds()
+            sizable = int(getattr(AppKit, 'NSViewWidthSizable', 2)) | int(getattr(AppKit, 'NSViewHeightSizable', 16))
+            container = container_class.alloc().initWithFrame_(bounds)
+            container.setSpacing_(CIRCLE_DRIP_SPACING)
+            container.setAutoresizingMask_(sizable)
+            content = BroccoliGlassContainerView.alloc().initWithFrame_(bounds)   # top-left origin, no mouse
+            content.setAutoresizingMask_(sizable)
+            container.setContentView_(content)
+            layer.view.addSubview_(container)
+            ball = _new_glass_view(AppKit.NSMakeRect(0, 0, COLLAPSED_BUTTON_SIZE, COLLAPSED_BUTTON_SIZE),
+                                   COLLAPSED_BUTTON_SIZE / 2.0, dark=self._dark)
+            _set_glass_look(ball, GLASS_LOOK_CONTROL_CENTER)   # the circle's own look (5.1.2)
+            drop = _new_glass_view(AppKit.NSMakeRect(0, 0, CIRCLE_DRIP_DROP, CIRCLE_DRIP_DROP), CIRCLE_DRIP_DROP / 2.0,
+                                   dark=self._dark)
+            _set_glass_look(drop, GLASS_LOOK_CONTROL_CENTER)
+            drop.setHidden_(True)
+            content.addSubview_(ball)
+            content.addSubview_(drop)
+            self._container, self._ball, self._drop = container, ball, drop
+        except Exception:
+            logging.exception('The glass drop of the circle\'s input could not be made; the box fades instead.')
+            self._container = self._ball = self._drop = None
+
+    def set_dark(self, dark: bool):
+        self._dark = bool(dark)
+        appearance = _ns_appearance(self._dark) if AppKit is not None else None
+        if appearance is not None:
+            for view in (self._ball, self._drop):
+                if view is not None:
+                    view.setAppearance_(appearance)
+
+    def show_shapes(self, ball: QRectF, drop):
+        """The circle's stand-in and the drop where they are now (global)."""
+        self.ball_rect = QRectF(ball)
+        self.drop_rect = QRectF(drop) if drop is not None else None
+        if self._ball is not None:
+            origin = QPointF(self.geometry().topLeft())
+            try:
+                import Quartz
+                Quartz.CATransaction.begin()
+                Quartz.CATransaction.setDisableActions_(True)
+                try:
+                    for view, rect in ((self._ball, self.ball_rect), (self._drop, self.drop_rect)):
+                        if rect is None:
+                            if not view.isHidden():
+                                view.setHidden_(True)
+                            continue
+                        local = rect.translated(-origin.x(), -origin.y())
+                        view.setFrame_(AppKit.NSMakeRect(local.x(), local.y(), local.width(), local.height()))
+                        view.setCornerRadius_(max(0.0, min(local.width(), local.height()) / 2.0 - 0.01))
+                        if view.isHidden():
+                            view.setHidden_(False)
+                finally:
+                    Quartz.CATransaction.commit()
+            except Exception:
+                logging.exception('Moving the glass drop failed.')
+        self.update()
+
+    def paintEvent(self, event):
+        face = self._face
+        if face is None or face.isNull() or self.ball_rect.isEmpty():
+            return
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            ratio = max(1.0, face.devicePixelRatio())
+            w, h = face.width() / ratio, face.height() / ratio
+            center = self.ball_rect.center() - QPointF(self.geometry().topLeft())
+            painter.drawImage(QRectF(center.x() - w / 2.0, center.y() - h / 2.0, w, h), face)
+        finally:
+            painter.end()
+
+
+def ns_window_prevents_activation(window):
+    """Does the system itself hold this window as "never activates its app"? (True / False; None = it
+    could not be read.) Only such a window gets the keyboard while its app stays in the background."""
+    try:
+        import ctypes
+        graphics = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+        graphics.CGSMainConnectionID.restype = ctypes.c_int
+        tags = (ctypes.c_uint32 * 2)()
+        if graphics.CGSGetWindowTags(graphics.CGSMainConnectionID(), ctypes.c_uint32(int(window.windowNumber())), tags, 32) != 0:
+            return None
+        return bool(tags[0] & (1 << 16))
+    except Exception:
+        return None
+
+
+def make_ns_window_truly_nonactivating(window):
+    """The non-activating style given to a window after it was made does not reach the system (measured
+    2026-11-11: its "never activates" mark stays off — the window thinks it is key, the keys still go
+    to the app in front). Set the mark itself. The system takes it a moment later, not at once:
+    ask `ns_window_prevents_activation` afterwards, not right here."""
+    try:
+        if window.respondsToSelector_('_setPreventsActivation:'):
+            window._setPreventsActivation_(True)
+    except Exception:
+        logging.exception('Marking a window as never activating failed.')
+
+
+def srgb_brightness(red: float, green: float, blue: float) -> float:
+    """How bright a colour is to the eye, 0 (black) … 1 (white); red / green / blue 0 … 1."""
+    def linear(value):
+        value = max(0.0, min(1.0, float(value)))
+        return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+    return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+
+
+def circle_drip_text_light(brightness: float, light_now: bool) -> bool:
+    """Light text on the box? From how bright its glass looks; between the two marks it stays as it
+    is (no flicker over a middle grey)."""
+    if brightness < CIRCLE_DRIP_LIGHT_TEXT_BELOW:
+        return True
+    if brightness > CIRCLE_DRIP_DARK_TEXT_ABOVE:
+        return False
+    return bool(light_now)
+
+
+def screen_reading_allowed() -> bool:
+    """May Broccoli read what other apps show on the screen (Screen Recording)? Never asks for it."""
+    try:
+        import Quartz
+        check = getattr(Quartz, 'CGPreflightScreenCaptureAccess', None)
+        return bool(check()) if check is not None else False
+    except Exception:
+        return False
+
+
+def screen_brightness_under(widget, patches):
+    """How bright the screen is at these small rectangles of a top-level widget (widget coordinates),
+    the widget itself and everything under it included; None when it cannot be read."""
+    if objc is None or AppKit is None:
+        return None
+    window = _broccoli_own_ns_window(widget)
+    if window is None:
+        return None
+    try:
+        import Quartz
+        origin = widget.geometry().topLeft()
+        options = Quartz.kCGWindowListOptionOnScreenBelowWindow | Quartz.kCGWindowListOptionIncludingWindow
+        space = AppKit.NSColorSpace.sRGBColorSpace()
+        total, count = 0.0, 0
+        for x, y, w, h in patches:
+            image = Quartz.CGWindowListCreateImage(Quartz.CGRectMake(origin.x() + x, origin.y() + y, w, h), options,
+                                                   int(window.windowNumber()), Quartz.kCGWindowImageNominalResolution)
+            if image is None:
+                continue
+            bitmap = AppKit.NSBitmapImageRep.alloc().initWithCGImage_(image)
+            for px in range(int(bitmap.pixelsWide())):
+                for py in range(0, int(bitmap.pixelsHigh()), 2):
+                    colour = bitmap.colorAtX_y_(px, py)
+                    colour = colour.colorUsingColorSpace_(space) if colour is not None else None
+                    if colour is None:
+                        continue
+                    total += srgb_brightness(colour.redComponent(), colour.greenComponent(), colour.blueComponent())
+                    count += 1
+        return total / count if count else None
+    except Exception:
+        logging.exception('Reading the screen under the circle\'s input box failed.')
+        return None
+
+
+CIRCLE_DRIP_CLIP_W = 34                   # the paperclip mark at the box's left: "these go with the question"
+CIRCLE_DRIP_CLIP_GAP = 2
+CIRCLE_DRIP_CLIP_OFF = 0.35               # switched off: this faint
+
+
+def circle_tray_question_parts(items, sent_keys=()) -> tuple:
+    """What the tray adds to a question (style book 5.1.9): (files to attach, lines of text to put
+    under the question, the keys of what goes along). Files that are there go as attachments; a
+    folder and a link go as a line (a folder cannot be attached; a link is read by the Agent itself);
+    what already went with this conversation (`sent_keys`) is left out."""
+    sent = set(sent_keys or ())
+    paths, lines, keys = [], [], []
+    for item in normalize_circle_tray_items(items):
+        key = circle_tray_item_key(item)
+        if key in sent:
+            continue
+        if item.get('kind') == 'url':
+            lines.append(str(item.get('url', '')))
+        else:
+            path = str(item.get('path', ''))
+            if os.path.isdir(path):
+                lines.append(path)
+            elif os.path.isfile(path):
+                paths.append(path)
+            else:
+                continue
+            scan = item.get('scan')
+            if isinstance(scan, dict):
+                # a scanned window (5.1.13): its picture above, a line saying what it is and where
+                # it lives, and what could be read of it as a text file
+                where = str(scan.get('url', '') or scan.get('doc', '') or '')
+                lines.append(circle_scan_card_name(scan.get('app', ''), scan.get('title', '')) + (': ' + where if where else ''))
+                text_path = str(scan.get('text', '') or '')
+                if text_path and os.path.isfile(text_path):
+                    paths.append(text_path)
+        keys.append(key)
+    return paths, lines, keys
+
+
+def circle_question_with_lines(prompt: str, lines: list) -> str:
+    """The question with the tray's links / folders (and, for a question put in line, its files) under it."""
+    lines = [str(line) for line in (lines or []) if str(line).strip()]
+    return str(prompt) if not lines else str(prompt).rstrip() + '\n\n' + '\n'.join(lines)
+
+
+class CircleDripClip(QWidget):
+    """The paperclip and a number at the left of the circle's input box (style book 5.1.9): this many
+    things from the tray go with the question. A click switches it off for this once (faint) and on
+    again. In the text's colour; no glass (it is a mark inside the box, not a button of its own)."""
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._count = 0
+        self._on = True
+        self._colour = QColor(CIRCLE_DRIP_TEXT_DARK)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFixedWidth(CIRCLE_DRIP_CLIP_W)
+        self.hide()
+        self._tell()
+
+    def count(self) -> int:
+        return self._count
+
+    def is_on(self) -> bool:
+        return self._on
+
+    def set_state(self, count: int, on: bool):
+        count, on = max(0, int(count)), bool(on)
+        if (count, on) == (self._count, self._on):
+            return
+        self._count, self._on = count, on
+        self.setFixedWidth(CIRCLE_DRIP_CLIP_W + 7 * (len(str(min(count, 99))) - 1 + (1 if count > 99 else 0)))   # room for its digits
+        self.setVisible(count > 0)
+        self._tell()
+        self.update()
+
+    def set_colour(self, colour):
+        self._colour = QColor(colour)
+        self.update()
+
+    def _tell(self):
+        text = (_tr('The files in the tray go with the question. Click: not this time.') if self._on
+                else _tr('The files in the tray are not sent this time. Click: send them.'))
+        self.setToolTip(text)
+        self.setAccessibleName(text)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._count > 0:
+            self._on = not self._on
+            self._tell()
+            self.update()
+            self.toggled.emit(self._on)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def paintEvent(self, event):
+        if self._count <= 0:
+            return
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setOpacity(1.0 if self._on else CIRCLE_DRIP_CLIP_OFF)
+            pen = QPen(self._colour, 1.4)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            cy = self.height() / 2.0
+            clip = QPainterPath()   # a paperclip leaning to the right: two nested loops
+            clip.moveTo(9.5, cy - 2.5)
+            clip.lineTo(5.6, cy + 2.2)
+            clip.cubicTo(3.6, cy + 4.6, 7.0, cy + 7.4, 9.0, cy + 5.0)
+            clip.lineTo(14.0, cy - 1.2)
+            clip.cubicTo(17.0, cy - 4.8, 12.0, cy - 8.8, 9.0, cy - 5.2)
+            clip.lineTo(4.4, cy + 0.4)
+            painter.save()
+            painter.translate(1.0, 0.5)
+            painter.drawPath(clip)
+            painter.restore()
+            font = PyQt6.QtGui.QFont('Helvetica Neue')
+            font.setPixelSize(12)
+            painter.setFont(font)
+            painter.drawText(QRectF(19.0, 0.0, self.width() - 19.0, float(self.height())),
+                             int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                             str(self._count) if self._count < 100 else '99+')
+        finally:
+            painter.end()
+
+
+class CircleDripEdit(QPlainTextEdit):
+    """The box's text (style book 5.1.7): Return sends, Shift + Return is a new line, Esc closes. (While
+    an input method is choosing, its Return comes as composed text, not as a key press here.)"""
+    submitted = pyqtSignal()
+    cancelled = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self.cancelled.emit()
+            return
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+            self.submitted.emit()
+            return
+        super().keyPressEvent(event)
+
+
+class CircleDripInput(QWidget):
+    """The circle's input box (style book 5.1.7): a capsule of the circle's glass under it, 380 wide,
+    40 a line, growing down to 5 lines. Takes the keyboard without bringing Broccoli forward (a
+    non-activating panel made key, like Spotlight): the app in front stays in front."""
+    submitted = pyqtSignal(str)
+    cancelled = pyqtSignal()
+    resized = pyqtSignal()
+    take_keyboard = True   # (on-screen checks turn it off: they must never take Ryan's keyboard)
+
+    def __init__(self):
+        super().__init__(None)   # never a child of the main window (winId poison)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        if hasattr(Qt.WidgetAttribute, 'WA_MacAlwaysShowToolWindow'):
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+        self._dark = False
+        self._text_light = False     # light text: the glass looks dark right now (or the dark theme, unread)
+        self._native_ready = False
+        self._look_timer = QTimer(self)
+        self._look_timer.setInterval(CIRCLE_DRIP_LOOK_MS)
+        self._look_timer.timeout.connect(self.look_at_glass)
+        self._max_height = CIRCLE_DRIP_INPUT_H * CIRCLE_DRIP_INPUT_MAX_LINES
+        self.edit = CircleDripEdit(self)
+        self.edit.setFrameShape(QFrame.Shape.NoFrame)
+        self.edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)   # (only past 5 lines: _fit)
+        self.edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        font = PyQt6.QtGui.QFont('Helvetica Neue')
+        font.setPixelSize(CIRCLE_DRIP_FONT_PX)
+        self.edit.setFont(font)
+        self.edit.document().setDocumentMargin(CIRCLE_DRIP_DOC_MARGIN)
+        self.edit.setPlaceholderText(_tr('Ask Broccoli…'))
+        self.edit.setAccessibleName(_tr('Ask Broccoli…'))
+        self.edit.textChanged.connect(self._fit)
+        # … and again once the text box has counted its lines anew: deleting a selection that spans
+        # lines tells "the text changed" BEFORE the lines are recounted, so the box kept its height
+        # (Ryan 2026-11-12: two lines typed, both deleted, "它并不会变回一行").
+        self.edit.document().documentLayout().documentSizeChanged.connect(lambda _size: self._fit())
+        self.edit.textChanged.connect(lambda: QTimer.singleShot(0, self._fit_later))
+        self.edit.submitted.connect(lambda: self.submitted.emit(self.edit.toPlainText()))
+        self.clip = CircleDripClip(self)   # the tray's things go with the question (style book 5.1.9)
+        self.edit.cancelled.connect(self.cancelled.emit)
+        self.resize(int(CIRCLE_DRIP_INPUT_W), int(CIRCLE_DRIP_INPUT_H))
+        self.set_dark(False)
+        self._prepare_native()   # early: the system needs a moment to take the "never activates" mark
+
+    def connect_input_method(self):
+        """The input method must be listening to THIS box. The system switches a text field's input
+        context on when its window becomes key the usual way; this window is made key by hand while
+        Broccoli stays in the background, so it is switched on by hand too (2026-11-11, Ryan: English
+        and digits went in, Chinese did not — plain letters arrived, the input method was never asked)."""
+        if AppKit is None or objc is None or not self.isVisible():
+            return
+        try:
+            context = objc.objc_object(c_void_p=int(self.winId())).inputContext()
+            if context is not None and AppKit.NSTextInputContext.currentInputContext() != context:
+                context.activate()
+        except Exception:
+            logging.exception('Switching the input method on for the circle\'s input box failed.')
+
+    def _prepare_native(self):
+        """The box's window, told to the system as one that never brings Broccoli forward."""
+        window = _broccoli_own_ns_window(self) if AppKit is not None and objc is not None else None
+        if window is not None:
+            configure_nonactivating_ns_window(window)
+            make_ns_window_truly_nonactivating(window)
+        return window
+
+    def line_height(self) -> float:
+        # whole points: the text box lays every line out on whole points (16 for this font, whose
+        # line spacing is 15.5). Growing by 15.5 a line left the box a little too low for its lines,
+        # so the text could always scroll by one line — and did when the cursor went to a new last
+        # line: the first line slid out of sight (Ryan 2026-11-12: "换行的话，会隐藏挤压一行").
+        return float(math.ceil(PyQt6.QtGui.QFontMetricsF(self.edit.font()).lineSpacing()))
+
+    def _inner_top(self) -> float:
+        """One line sits in the middle of the one-line box."""
+        return max(0.0, (CIRCLE_DRIP_INPUT_H - (self.line_height() + 2.0 * CIRCLE_DRIP_DOC_MARGIN)) / 2.0)
+
+    def text_lines(self) -> int:
+        return max(1, int(round(self.edit.document().documentLayout().documentSize().height())))   # (plain text: lines)
+
+    def wanted_height(self) -> float:
+        """40 for a line, a line's height more for each further one, at most 5 lines."""
+        lines = min(CIRCLE_DRIP_INPUT_MAX_LINES, self.text_lines())
+        return CIRCLE_DRIP_INPUT_H + (lines - 1) * self.line_height()
+
+    def set_max_height(self, height: float):
+        self._max_height = max(CIRCLE_DRIP_INPUT_H, float(height))
+        self._fit()
+
+    def _fit(self):
+        wanted = self.wanted_height()
+        height = int(round(min(wanted, self._max_height)))
+        overflow = self.text_lines() > CIRCLE_DRIP_INPUT_MAX_LINES or wanted > self._max_height + 0.5
+        policy = Qt.ScrollBarPolicy.ScrollBarAsNeeded if overflow else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        if self.edit.verticalScrollBarPolicy() != policy:
+            self.edit.setVerticalScrollBarPolicy(policy)   # a scroll bar only when it no longer fits
+        if height != self.height():
+            self.resize(int(CIRCLE_DRIP_INPUT_W), height)   # the top stays: it grows down
+            self.resized.emit()
+        if not overflow:
+            # Everything fits, so nothing may be scrolled away. (The text box scrolls to its cursor
+            # BEFORE it is made taller: a new line pushed the first line out of the still-low box,
+            # then the box grew with the first line still hidden and a gap below — Ryan 2026-11-12:
+            # "换行的话，会隐藏挤压一行，然后变高".)
+            self._unscroll()
+            QTimer.singleShot(0, self._unscroll)
+
+    def _fit_later(self):
+        try:
+            self._fit()
+        except RuntimeError:
+            pass
+
+    def _unscroll(self):
+        try:
+            if self.edit.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff:
+                self.edit.verticalScrollBar().setValue(0)
+        except RuntimeError:
+            pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._lay_out()
+        if self.isVisible():
+            set_right_drag_pass_rect('input', self.geometry())
+
+    def _lay_out(self):
+        """The text; with the paperclip mark out, the mark at the left and the text after it."""
+        top = self._inner_top()
+        side = CIRCLE_DRIP_INPUT_PAD_X - CIRCLE_DRIP_DOC_MARGIN
+        left = side
+        if self.clip.count() > 0:
+            self.clip.setGeometry(int(round(side)), 0, self.clip.width(), int(CIRCLE_DRIP_INPUT_H))   # (level with the first line)
+            left = side + self.clip.width() + CIRCLE_DRIP_CLIP_GAP - CIRCLE_DRIP_DOC_MARGIN
+        # (3 points more than its lines need, downwards: exactly fitting, the text box still counts
+        # its last line as not wholly in sight and offers to scroll)
+        self.edit.setGeometry(int(round(left)), int(math.floor(top)), int(round(self.width() - side - left)),
+                              int(math.ceil(self.height() - 2 * math.floor(top))) + CIRCLE_DRIP_EDIT_SLACK)
+
+    def set_clip(self, count: int, on: bool):
+        """How many of the tray's things go with the question (0 = no mark), and whether they do."""
+        before = self.clip.width() if self.clip.count() > 0 else 0
+        self.clip.set_state(count, on)
+        if (self.clip.width() if self.clip.count() > 0 else 0) != before:
+            self._lay_out()
+            self._fit()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if self.isVisible():
+            set_right_drag_pass_rect('input', self.geometry())
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._look_timer.stop()
+        set_right_drag_pass_rect('input', None)
+
+    def _apply_text_colour(self):
+        """Text and caret in this colour, the hint the same colour at half strength (a style sheet's
+        colour does that by itself; the palette's hint colour is not used then)."""
+        text = CIRCLE_DRIP_TEXT_LIGHT if self._text_light else CIRCLE_DRIP_TEXT_DARK
+        # padding / margin / radius 0 spelled out: Broccoli's app-wide style gives every QPlainTextEdit
+        # "padding: 10px 12px" — in this 24-point-high line that left 4 points for the text, so the
+        # hint, the caret and everything typed were cut away (2026-11-11, Ryan: "连 placeholder 都不显示").
+        sheet = ('QPlainTextEdit { background: transparent; border: none; border-radius: 0px; padding: 0px; '
+                 f'margin: 0px; color: {text}; }}')
+        self.clip.set_colour(text)
+        if self.edit.styleSheet() != sheet:
+            self.edit.setStyleSheet(sheet)
+
+    def text_light(self) -> bool:
+        return self._text_light
+
+    def set_glass_brightness(self, brightness):
+        """How bright the box's glass looks right now (0 … 1): the text takes the colour that reads on it."""
+        if brightness is None:
+            return
+        light = circle_drip_text_light(float(brightness), self._text_light)
+        if light != self._text_light:
+            self._text_light = light
+            self._apply_text_colour()
+
+    def _look_patches(self) -> list:
+        x, y, w, h = CIRCLE_DRIP_LOOK_PATCH
+        return [(x, y, w, h), (self.width() - x - w, y, w, h)]
+
+    def look_at_glass(self):
+        """Look at the two ends of the box on the screen (glass only, no text there) and choose the
+        text colour. Without Screen Recording the glass gets a milky body instead and the text
+        follows the theme (style book 5.1.7)."""
+        glass = getattr(self, '_broccoli_window_glass', None)
+        if glass is None or not self.isVisible():
+            return
+        readable = screen_reading_allowed()
+        try:
+            if readable:
+                glass.setTintColor_(None)
+            else:
+                white, strength = CIRCLE_DRIP_MILKY[1 if self._dark else 0]
+                glass.setTintColor_(AppKit.NSColor.colorWithCalibratedWhite_alpha_(white, strength))
+        except Exception:
+            logging.exception('Setting the body of the circle\'s input box failed.')
+        if not readable:
+            if self._text_light != self._dark:
+                self._text_light = self._dark
+                self._apply_text_colour()
+            return
+        self.set_glass_brightness(screen_brightness_under(self, self._look_patches()))
+
+    def set_dark(self, dark: bool):
+        self._dark = bool(dark)
+        if not self.isVisible():
+            self._text_light = self._dark   # until the glass has been looked at
+        self._apply_text_colour()
+        glass = getattr(self, '_broccoli_window_glass', None)
+        appearance = _ns_appearance(self._dark) if (glass is not None and AppKit is not None) else None
+        if appearance is not None:
+            glass.setAppearance_(appearance)
+        self.update()
+
+    def glass_active(self) -> bool:
+        return bool(getattr(self, '_liquid_glass_active', False))
+
+    def present(self):
+        """Out, the circle's glass under it, typing goes into it (Broccoli stays in the background)."""
+        if not self.isVisible():
+            self.show()
+        window = _broccoli_own_ns_window(self) if AppKit is not None and objc is not None else None
+        if window is not None and not self._native_ready:
+            self._native_ready = True
+            self._prepare_native()   # (again once shown: showing may have put the style back)
+        if getattr(self, '_broccoli_window_glass', None) is None and liquid_glass_available():
+            if apply_window_liquid_glass(self, CIRCLE_DRIP_INPUT_RADIUS, 0.0, dark=self._dark, menu_look=True):
+                try:
+                    _set_glass_look(self._broccoli_window_glass, GLASS_LOOK_CONTROL_CENTER)   # the circle's water
+                except Exception:
+                    logging.exception('The circle\'s look for its input box failed.')
+        if window is not None:
+            try:
+                # Qt's own view must be the window's first responder: Qt only takes the keyboard
+                # (focus window, key presses, the input method) through it. Qt does that itself only
+                # when it shows a window activating it — this one is shown without (2026-11-11, Ryan:
+                # "无法输入任何文字": the window was key, its first responder the window itself).
+                view = objc.objc_object(c_void_p=int(self.winId()))
+                if window.firstResponder() != view:
+                    window.makeFirstResponder_(view)
+                if self.take_keyboard:
+                    window.makeKeyAndOrderFront_(None)   # key, not active: a non-activating panel
+                else:
+                    window.orderFrontRegardless()
+            except Exception:
+                logging.exception('Giving the circle\'s input box the keyboard failed.')
+        self.edit.setFocus(Qt.FocusReason.OtherFocusReason)
+        set_right_drag_pass_rect('input', self.geometry())
+        if self.take_keyboard and window is not None:
+            self.connect_input_method()
+            QTimer.singleShot(100, self._ensure_keyboard)
+            QTimer.singleShot(120, self.connect_input_method)   # (once more after the keyboard check)
+        self.look_at_glass()                           # the text colour that reads on the glass, before it is seen
+        QTimer.singleShot(150, self.look_at_glass)     # … and once the drop has handed over
+        self._look_timer.start()
+
+    def has_keyboard(self) -> bool:
+        """Typing really goes into this box: Qt has it as its focus window, AND the system sends
+        Broccoli the keys — Broccoli is in front, or the system holds the box as a window that takes
+        the keyboard in the background. (Qt alone is not enough: the window can believe it is key
+        while the keys go to the app in front — Ryan 2026-11-11, "还是不能打字".)"""
+        handle = self.windowHandle()
+        if handle is None or QGuiApplication.focusWindow() is not handle:
+            return False
+        if AppKit is None or objc is None:
+            return True
+        try:
+            if AppKit.NSApplication.sharedApplication().isActive():
+                return True
+            window = _broccoli_own_ns_window(self)
+            return window is not None and bool(window.isKeyWindow()) and ns_window_prevents_activation(window) is True
+        except Exception:
+            return False
+
+    def _ensure_keyboard(self):
+        """Still no keyboard a moment after it opened (style book 5.1.7): bring Broccoli forward rather than
+        leave a box nothing can be typed into — losing "the app in front stays in front" this once."""
+        if not self.isVisible() or self.has_keyboard():
+            return
+        logging.warning('The circle\'s input box did not get the keyboard without activating; Broccoli comes forward.')
+        try:
+            if AppKit is not None:
+                AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        except Exception:
+            pass
+        self.activateWindow()
+        try:
+            window = _broccoli_own_ns_window(self) if AppKit is not None and objc is not None else None
+            if window is not None:
+                window.makeKeyAndOrderFront_(None)
+        except Exception:
+            pass
+        self.edit.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+
+    def paintEvent(self, event):
+        if self.glass_active():
+            return
+        painter = QPainter(self)   # no system glass: the same capsule, painted (style book 1.5)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor('#4A4B4F') if self._dark else QColor('#ECECEC'), 1.0))
+            painter.setBrush(QColor('#2D2D2D') if self._dark else QColor('#FFFFFF'))
+            radius = CIRCLE_DRIP_INPUT_RADIUS - 0.5
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+        finally:
+            painter.end()
+
+
+# ── the circle's answer card (style book 5.1.8) ──────────────────────────────────────────────────
+# A question sent from the circle's input box is a new Agent conversation; its answer drips UP out of
+# the circle into a glass card over it, streamed, scrolling inside the card. Same glass as the circle
+# and the box; the text follows the glass as it looks (5.1.7 "字的颜色").
+CIRCLE_ANSWER_W = CIRCLE_DRIP_INPUT_W
+CIRCLE_ANSWER_MIN_H = CIRCLE_DRIP_INPUT_H     # one line: the same capsule as the box
+CIRCLE_ANSWER_MAX_H = 320.0
+CIRCLE_ANSWER_RADIUS = CIRCLE_DRIP_INPUT_RADIUS
+CIRCLE_ANSWER_GAP = CIRCLE_DRIP_GAP           # the card's bottom → the circle's top
+CIRCLE_ANSWER_BOX_GAP = 10.0                  # under the input box, when there is no room over the circle
+CIRCLE_ANSWER_PAD_X = CIRCLE_DRIP_INPUT_PAD_X
+CIRCLE_ANSWER_PAD_Y = 12.0
+CIRCLE_ANSWER_BUTTON = 28                     # a round button (the disc you see: 22)
+CIRCLE_ANSWER_BUTTONS_ROOM = (82, 24)         # kept free of text at the top right: the three buttons
+CIRCLE_ANSWER_POLL_MS = 150
+CIRCLE_ANSWER_STATUS_LINES = 3
+CIRCLE_ANSWER_FOLD_MS = 200                   # a tall card shrinking back to one line before it drips into the circle
+
+
+def circle_answer_card_rect(circle: QRectF, area: QRectF, height: float, box=None) -> tuple:
+    """The answer card (style book 5.1.8): over the circle, CIRCLE_ANSWER_GAP above it, growing upward,
+    centred on it, kept inside the screen. No room over the circle for even one line: under the
+    circle instead (under the input box when that is open). Returns (rectangle, it is above)."""
+    margin = CIRCLE_DRIP_SCREEN_MARGIN
+    left = circle.center().x() - CIRCLE_ANSWER_W / 2.0
+    left = round(max(area.left() + margin, min(left, area.right() - margin - CIRCLE_ANSWER_W)))
+    wanted = max(CIRCLE_ANSWER_MIN_H, min(CIRCLE_ANSWER_MAX_H, float(height)))
+    room = circle.top() - CIRCLE_ANSWER_GAP - (area.top() + margin)
+    if room >= CIRCLE_ANSWER_MIN_H:
+        tall = round(min(wanted, room))
+        return QRectF(left, round(circle.top() - CIRCLE_ANSWER_GAP) - tall, CIRCLE_ANSWER_W, tall), True
+    top = circle.bottom() + CIRCLE_ANSWER_GAP
+    if box is not None and not QRectF(box).isEmpty():
+        top = QRectF(box).bottom() + CIRCLE_ANSWER_BOX_GAP
+    tall = round(max(CIRCLE_ANSWER_MIN_H, min(wanted, area.bottom() - margin - top)))
+    return QRectF(left, round(top), CIRCLE_ANSWER_W, tall), False
+
+
+def _mirror_rect_about_y(rect: QRectF, y: float) -> QRectF:
+    return QRectF(rect.left(), 2.0 * y - rect.bottom(), rect.width(), rect.height())
+
+
+def circle_answer_shapes(t: float, circle: QRectF, target: QRectF, closing: bool = False) -> tuple:
+    """The answer's drop at `t` seconds: the input box's drop (5.1.7) turned upside down when the card
+    is over the circle — the circle's TOP bulges, the drop rises, lands, spreads into the card."""
+    shapes = circle_drip_close_shapes if closing else circle_drip_open_shapes
+    if target.center().y() >= circle.center().y():
+        return shapes(t, circle, target)
+    middle = circle.center().y()
+    ball, drop = shapes(t, circle, _mirror_rect_about_y(target, middle))
+    return _mirror_rect_about_y(ball, middle), (None if drop is None else _mirror_rect_about_y(drop, middle))
+
+
+def circle_answer_status_text(text: str) -> str:
+    """What the card shows while there is no answer yet: the last few lines of what the run is doing."""
+    lines = [line.strip() for line in str(text or '').splitlines() if line.strip()]
+    return '\n'.join(lines[-CIRCLE_ANSWER_STATUS_LINES:])
+
+
+class CircleAnswerButton(TranslationGlassButton):
+    """A round button on the answer card (style book 5.1: a glass disc, 22): ✕, "open in the main
+    window", or "ask a follow-up" (a speech bubble)."""
+
+    def __init__(self, kind: str, parent=None):
+        super().__init__('', 11, parent)
+        self._kind = kind
+        self.setFixedSize(CIRCLE_ANSWER_BUTTON, CIRCLE_ANSWER_BUTTON)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setToolTip({'open': _tr('Open in main window'), 'ask': _tr('Ask a follow-up')}.get(kind) or _tr('Close'))
+        self.setAccessibleName(self.toolTip())
+
+    def set_light(self, light: bool):
+        self._text_color = QColor(CIRCLE_DRIP_TEXT_LIGHT if light else CIRCLE_DRIP_TEXT_DARK)
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = QRectF(self.rect()).adjusted(3, 3, -3, -3)
+            self._paint_surface(painter, rect)
+            pen = QPen(self._text_color, 1.5)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            c, half = rect.center(), 3.6
+            if self._kind == 'close':
+                painter.drawLine(QPointF(c.x() - half, c.y() - half), QPointF(c.x() + half, c.y() + half))
+                painter.drawLine(QPointF(c.x() - half, c.y() + half), QPointF(c.x() + half, c.y() - half))
+            elif self._kind == 'ask':   # a speech bubble with its tail at the bottom left
+                bubble = QPainterPath()
+                bubble.addRoundedRect(QRectF(c.x() - 4.6, c.y() - 4.4, 9.2, 6.8), 2.4, 2.4)
+                painter.drawPath(bubble)
+                painter.drawLine(QPointF(c.x() - 2.6, c.y() + 2.4), QPointF(c.x() - 3.4, c.y() + 4.6))
+                painter.drawLine(QPointF(c.x() - 3.4, c.y() + 4.6), QPointF(c.x() - 0.4, c.y() + 2.4))
+            else:   # an arrow up and to the right
+                painter.drawLine(QPointF(c.x() - half, c.y() + half), QPointF(c.x() + half, c.y() - half))
+                painter.drawLine(QPointF(c.x() - 0.6, c.y() - half), QPointF(c.x() + half, c.y() - half))
+                painter.drawLine(QPointF(c.x() + half, c.y() - half), QPointF(c.x() + half, c.y() + 0.6))
+        finally:
+            painter.end()
+
+
+class CircleAnswerCard(QWidget):
+    """The answer card's window (style book 5.1.8): never takes the keyboard; scrolls with the wheel;
+    links open in the browser. `set_content()` gives it the status lines or the answer (Markdown)."""
+    open_requested = pyqtSignal()
+    close_requested = pyqtSignal()
+    ask_requested = pyqtSignal()
+    wanted_changed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__(None)   # never a child of the main window (winId poison)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint
+                            | Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        if hasattr(Qt.WidgetAttribute, 'WA_MacAlwaysShowToolWindow'):
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._dark = False
+        self._text_light = False
+        self._native_ready = False
+        self._text = ''
+        self._status = True
+        self._wanted = CIRCLE_ANSWER_MIN_H
+        self.view = QTextBrowser(self)
+        self.view.setFrameShape(QFrame.Shape.NoFrame)
+        self.view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.view.setOpenLinks(False)
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)   # (only when it is taller than the card)
+        self.view.document().setDocumentMargin(0)
+        self.view.anchorClicked.connect(self._open_link)
+        self.view.setAccessibleName(_tr('Answer'))
+        # 2026-11-12 (Ryan: "输出框里的内容它如果复制的话复制不上"): the card never takes the keyboard, so
+        # ⌘C went to the app in front. A right click offers Copy / Copy All; ⌘C with the pointer on
+        # the card copies what is selected (heard by the key listener, see copy_if_pointed).
+        self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.view.customContextMenuRequested.connect(self._show_copy_menu)
+        self.view.selectionChanged.connect(self._note_selection)
+        self.ask_button = CircleAnswerButton('ask', self)
+        self.open_button = CircleAnswerButton('open', self)
+        self.close_button = CircleAnswerButton('close', self)
+        self.ask_button.clicked.connect(self.ask_requested.emit)
+        self.open_button.clicked.connect(self.open_requested.emit)
+        self.close_button.clicked.connect(self.close_requested.emit)
+        self._look_timer = QTimer(self)
+        self._look_timer.setInterval(CIRCLE_DRIP_LOOK_MS)
+        self._look_timer.timeout.connect(self.look_at_glass)
+        self.resize(int(CIRCLE_ANSWER_W), int(CIRCLE_ANSWER_MIN_H))
+        self._apply_colours()
+
+    # ── content ─────────────────────────────────────────────────────────────
+    @staticmethod
+    def _open_link(url):
+        try:
+            from PyQt6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(url)
+        except Exception:
+            logging.exception('Opening a link from the circle\'s answer card failed.')
+
+    def text(self) -> str:
+        return self._text
+
+    # ── copying ─────────────────────────────────────────────────────────────
+    def selected_text(self) -> str:
+        return self.view.textCursor().selectedText().replace('\u2029', '\n').replace('\u2028', '\n').replace('\ufffc', '').strip('\n')
+
+    def _note_selection(self):
+        CIRCLE_ANSWER_SELECTION['on'] = bool(self.isVisible() and self.selected_text())
+
+    def copy_selection(self) -> bool:
+        text = self.selected_text()
+        if not text:
+            return False
+        QGuiApplication.clipboard().setText(text)
+        return True
+
+    def copy_all(self) -> bool:
+        text = str(self._text or '').strip() or self.view.toPlainText().strip()
+        if not text:
+            return False
+        QGuiApplication.clipboard().setText(text)
+        return True
+
+    def copy_if_pointed(self):
+        """⌘C was pressed somewhere: with something selected here and the pointer on the card, that
+        is what is copied — a moment later, so it is what stays on the clipboard if the app in
+        front copied something of its own at the same key press."""
+        if not self.isVisible() or not self.selected_text() or not self.geometry().contains(QCursor.pos()):
+            return False
+        QTimer.singleShot(80, self.copy_selection)
+        return True
+
+    def _show_copy_menu(self, pos):
+        menu = style_broccoli_context_menu(QMenu(self))
+        copy_action = menu.addAction(_tr('Copy'))
+        copy_action.setEnabled(bool(self.selected_text()))
+        all_action = menu.addAction(_tr('Copy All'))
+        all_action.setEnabled(bool(str(self._text or '').strip()) and not self._status)
+        chosen = menu.exec(self.view.viewport().mapToGlobal(pos))
+        if chosen == copy_action:
+            self.copy_selection()
+        elif chosen == all_action:
+            self.copy_all()
+
+    def set_folded(self, folded: bool):
+        """Folded: only the glass, no text and no buttons — while it shrinks back to one line on its
+        way into the circle."""
+        for part in (self.view, self.ask_button, self.open_button, self.close_button):
+            part.setVisible(not folded)
+
+    def is_status(self) -> bool:
+        return self._status
+
+    def set_content(self, text: str, status: bool = False):
+        """The run's status lines (status=True: plain, a little fainter) or the answer (Markdown)."""
+        text = str(text or '')
+        if text == self._text and bool(status) == self._status:
+            return
+        self._text, self._status = text, bool(status)
+        self._render()
+
+    def _render(self):
+        bar = self.view.verticalScrollBar()
+        at_end = bar.maximum() > 0 and bar.value() > 0 and bar.value() >= bar.maximum() - 4   # scrolled to its end by hand
+        colour = CIRCLE_DRIP_TEXT_LIGHT if self._text_light else CIRCLE_DRIP_TEXT_DARK
+        link = '#8AB4FF' if self._text_light else '#0A5FD8'
+        shade = 'rgba(255,255,255,0.14)' if self._text_light else 'rgba(0,0,0,0.07)'
+        self.view.document().setDefaultStyleSheet(
+            f'body {{ color: {colour}; }} a {{ color: {link}; }} '
+            f'pre, code {{ background-color: {shade}; font-family: Menlo, monospace; font-size: 12px; }} '
+            'p { margin-top: 0px; margin-bottom: 7px; } h1 { font-size: 16px; } h2 { font-size: 15px; } '
+            'h3, h4 { font-size: 13px; } ul, ol { margin-top: 0px; margin-bottom: 7px; margin-left: -22px; } '
+            f'.status {{ color: {colour}; }}')
+        room_w, room_h = CIRCLE_ANSWER_BUTTONS_ROOM
+        spacer = (f'<table style="float: right;" width="{room_w}" cellspacing="0" cellpadding="0">'
+                  f'<tr><td height="{room_h}"></td></tr></table>')
+        if self._status:
+            import html as _html
+            body = '<div class="status">' + '<br>'.join(_html.escape(line) for line in self._text.splitlines()) + '</div>'
+        else:
+            try:
+                body = render_markdown_fragment(self._text)
+            except Exception:
+                import html as _html
+                body = '<p>' + _html.escape(self._text).replace('\n', '<br>') + '</p>'
+        self.view.setHtml(spacer + body)
+        # (the last paragraph's own bottom margin is not part of the card's padding)
+        self._measure(7.0 if (not self._status and body.rstrip().endswith('</p>')) else 0.0)
+        if at_end and not self._status:
+            bar.setValue(bar.maximum())   # (it follows the answer only while it is being read at its end)
+
+    def _measure(self, trailing: float = 0.0):
+        document = self.view.document()
+        document.setTextWidth(max(1.0, CIRCLE_ANSWER_W - 2.0 * CIRCLE_ANSWER_PAD_X))
+        wanted = max(CIRCLE_ANSWER_MIN_H, min(CIRCLE_ANSWER_MAX_H, math.ceil(document.size().height() - trailing + 2.0 * CIRCLE_ANSWER_PAD_Y)))
+        if abs(wanted - self._wanted) >= 1.0:
+            self._wanted = float(wanted)
+            self.wanted_changed.emit()
+        self._fit_scroll_bar()
+
+    def wanted_height(self) -> float:
+        """One line 40; as tall as the text needs; at most CIRCLE_ANSWER_MAX_H (then it scrolls)."""
+        return self._wanted
+
+    def _fit_scroll_bar(self):
+        needed = self.view.document().size().height() > self.view.viewport().height() + 1.0
+        policy = Qt.ScrollBarPolicy.ScrollBarAsNeeded if needed else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        if self.view.verticalScrollBarPolicy() != policy:
+            self.view.setVerticalScrollBarPolicy(policy)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        pad_x, pad_y = int(CIRCLE_ANSWER_PAD_X), int(CIRCLE_ANSWER_PAD_Y)
+        self.view.setGeometry(pad_x, pad_y, self.width() - 2 * pad_x, max(1, self.height() - 2 * pad_y))
+        size = CIRCLE_ANSWER_BUTTON
+        self.close_button.move(self.width() - 9 - size, 6)
+        self.open_button.move(self.width() - 9 - 2 * size + 2, 6)
+        self.ask_button.move(self.width() - 9 - 3 * size + 4, 6)
+        self.ask_button.raise_()
+        self.open_button.raise_()
+        self.close_button.raise_()
+        self._fit_scroll_bar()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._look_timer.stop()
+        CIRCLE_ANSWER_SELECTION['on'] = False
+
+    # ── colours: the text follows the glass as it looks (5.1.7) ───────────────
+    def _apply_colours(self):
+        colour = CIRCLE_DRIP_TEXT_LIGHT if self._text_light else CIRCLE_DRIP_TEXT_DARK
+        # padding / margin spelled out: the app-wide style pads every text box (see CircleDripInput)
+        sheet = ('QTextBrowser { background: transparent; border: none; border-radius: 0px; padding: 0px; '
+                 f'margin: 0px; color: {colour}; font-size: 13px; }}')
+        if self.view.styleSheet() != sheet:
+            self.view.setStyleSheet(sheet)
+            keep_scroll_bar_knob(self.view, self._text_light)
+            self.ask_button.set_light(self._text_light)
+            self.open_button.set_light(self._text_light)
+            self.close_button.set_light(self._text_light)
+            self._render()
+
+    def text_light(self) -> bool:
+        return self._text_light
+
+    def set_glass_brightness(self, brightness):
+        if brightness is None:
+            return
+        light = circle_drip_text_light(float(brightness), self._text_light)
+        if light != self._text_light:
+            self._text_light = light
+            self._apply_colours()
+
+    def _look_patches(self) -> list:
+        x, y, w, h = CIRCLE_DRIP_LOOK_PATCH
+        return [(x, y, w, h), (self.width() - x - w, self.height() - y - h, w, h)]
+
+    def look_at_glass(self):
+        glass = getattr(self, '_broccoli_window_glass', None)
+        if glass is None or not self.isVisible():
+            return
+        readable = screen_reading_allowed()
+        try:
+            if readable:
+                glass.setTintColor_(None)
+            else:
+                white, strength = CIRCLE_DRIP_MILKY[1 if self._dark else 0]
+                glass.setTintColor_(AppKit.NSColor.colorWithCalibratedWhite_alpha_(white, strength))
+        except Exception:
+            logging.exception('Setting the body of the circle\'s answer card failed.')
+        if not readable:
+            if self._text_light != self._dark:
+                self._text_light = self._dark
+                self._apply_colours()
+            return
+        self.set_glass_brightness(screen_brightness_under(self, self._look_patches()))
+
+    def set_dark(self, dark: bool):
+        self._dark = bool(dark)
+        if not self.isVisible():
+            self._text_light = self._dark
+        self._apply_colours()
+        glass = getattr(self, '_broccoli_window_glass', None)
+        appearance = _ns_appearance(self._dark) if (glass is not None and AppKit is not None) else None
+        if appearance is not None:
+            glass.setAppearance_(appearance)
+        self.update()
+
+    def glass_active(self) -> bool:
+        return bool(getattr(self, '_liquid_glass_active', False))
+
+    def present(self):
+        if not self.isVisible():
+            self.show()
+        window = _broccoli_own_ns_window(self) if AppKit is not None and objc is not None else None
+        if window is not None and not self._native_ready:
+            self._native_ready = True
+            configure_nonactivating_ns_window(window)
+            make_ns_window_truly_nonactivating(window)   # a click on it never brings Broccoli forward
+        if getattr(self, '_broccoli_window_glass', None) is None and liquid_glass_available():
+            if apply_window_liquid_glass(self, CIRCLE_ANSWER_RADIUS, 0.0, dark=self._dark, menu_look=True):
+                try:
+                    _set_glass_look(self._broccoli_window_glass, GLASS_LOOK_CONTROL_CENTER)   # the circle's water
+                except Exception:
+                    logging.exception('The circle\'s look for its answer card failed.')
+        if window is not None:
+            try:
+                window.orderFrontRegardless()
+            except Exception:
+                pass
+        self.look_at_glass()
+        QTimer.singleShot(150, self.look_at_glass)
+        self._look_timer.start()
+
+    def paintEvent(self, event):
+        if self.glass_active():
+            return
+        painter = QPainter(self)   # no system glass: the same shape, painted (style book 1.5)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor('#4A4B4F') if self._dark else QColor('#ECECEC'), 1.0))
+            painter.setBrush(QColor('#2D2D2D') if self._dark else QColor('#FFFFFF'))
+            radius = CIRCLE_ANSWER_RADIUS - 0.5
+            painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+        finally:
+            painter.end()
+
+
+class CircleAnswer(QObject):
+    """The circle's answer (style book 5.1.8): follows one Agent conversation started from the circle's
+    input box and shows its run in the card — the status lines, then the streamed answer, then what
+    was saved. `window` = the main window, `circle` = the circle's window. States: closed → waiting
+    (for the input box to be back in the circle) → rising → open → sinking."""
+    FRAME_MS = 16
+
+    def __init__(self, window, circle):
+        super().__init__(window)
+        self._main = window
+        self._circle = circle
+        self.state = 'closed'
+        self.path = ''
+        self.question = ''
+        self._run = None
+        self._final_shown = False
+        self._note = ''
+        self.sent_keys = set()      # the tray's things that already went with this conversation (5.1.9)
+        self._card = None
+        self._stage = None
+        self._target = QRectF()
+        self._above = True
+        self._mode = 'open'
+        self._t0 = None
+        self._fade_anim = None
+        self._poll = QTimer(self)
+        self._poll.setInterval(CIRCLE_ANSWER_POLL_MS)
+        self._poll.timeout.connect(self._tick)
+        self._frames = QTimer(self)
+        self._frames.setTimerType(Qt.TimerType.PreciseTimer)
+        self._frames.setInterval(self.FRAME_MS)
+        self._frames.timeout.connect(self._on_frame)
+        try:
+            circle.moved.connect(self._place)
+        except Exception:
+            pass
+
+    # ── state ───────────────────────────────────────────────────────────────
+    def active(self) -> bool:
+        return self.state != 'closed'
+
+    def animating(self) -> bool:
+        return self.state in ('rising', 'sinking')
+
+    def card(self) -> CircleAnswerCard:
+        if self._card is None:
+            card = self._card = CircleAnswerCard()
+            card.open_requested.connect(self._open_in_main)
+            card.close_requested.connect(lambda: self.close())
+            card.ask_requested.connect(self._ask_follow_up)
+            card.wanted_changed.connect(self._place)
+        return self._card
+
+    def card_rect(self):
+        """Where the card is on the screen while it is out (for dialogs that go beside it), else None."""
+        card = self._card
+        if card is None or self.state != 'open' or not card.isVisible():
+            return None
+        return QRect(card.geometry())
+
+    def circle_rect(self) -> QRectF:
+        margin = COLLAPSED_WINDOW_MARGIN
+        pos = self._circle.pos()
+        return QRectF(pos.x() + margin, pos.y() + margin, COLLAPSED_BUTTON_SIZE, COLLAPSED_BUTTON_SIZE)
+
+    def _area(self) -> QRectF:
+        circle = self.circle_rect()
+        screen = (QGuiApplication.screenAt(circle.center().toPoint()) or self._circle.screen()
+                  or QGuiApplication.primaryScreen())
+        return QRectF(screen.availableGeometry())
+
+    def _box_rect(self):
+        drip = getattr(self._main, '_circle_drip', None)
+        box = getattr(drip, '_input', None) if drip is not None else None
+        try:
+            if box is not None and box.isVisible() and drip.state in ('open', 'opening'):
+                return QRectF(box.geometry())
+        except RuntimeError:
+            pass
+        return None
+
+    def _wanted_rect(self, height=None) -> tuple:
+        card = self.card()
+        return circle_answer_card_rect(self.circle_rect(), self._area(),
+                                       card.wanted_height() if height is None else height, self._box_rect())
+
+    def _place(self, *_args):
+        if self.state != 'open' or self._card is None:
+            return
+        rect, self._above = self._wanted_rect()
+        rect = rect.toAlignedRect()
+        if rect != self._card.geometry():
+            self._card.setGeometry(rect)
+
+    def _set_circle_seen(self, seen: bool):
+        try:
+            if seen:
+                launcher = getattr(self._main, '_collapsed_launcher', None)
+                if not self._main._collapsed_body_active() and not (launcher is not None and launcher.isVisible()):
+                    self._circle.setWindowOpacity(1.0)
+            else:
+                self._circle.setWindowOpacity(COLLAPSED_UNDER_BODY_OPACITY)
+        except RuntimeError:
+            pass
+
+    def _drop_wanted(self) -> bool:
+        drip = getattr(self._main, '_circle_drip', None)
+        try:
+            return bool(drip is not None and drip._drop_wanted())
+        except Exception:
+            return False
+
+    # ── what it shows ───────────────────────────────────────────────────────
+    def follow(self, path: str, run, question: str, failed: bool = False):
+        """A question was sent for this conversation: show its run (or that it could not start)."""
+        self.path = str(path or '')
+        self.question = str(question or '')
+        self._run = run if isinstance(run, dict) else None
+        self._final_shown = False
+        self._note = ''
+        card = self.card()
+        card.set_dark(is_dark_theme(app))
+        if failed:
+            self._final_shown = True
+            card.set_content(_tr('The question could not be sent. Check the Agent settings.'), status=True)
+        else:
+            card.set_content(_tr('Thinking…'), status=True)
+        self._poll.start()
+        if self.state == 'closed':
+            self.state = 'waiting'
+        elif self.state == 'open':
+            self._place()
+        self._tick()
+
+    def note_queued(self):
+        """A further question was put in line behind the running answer."""
+        self._note = _tr('Queued: asked after this answer.')
+
+    def _status_text(self, run: dict) -> str:
+        try:
+            text = self._main._agent_run_preview_text(run)
+        except Exception:
+            text = ''
+        return circle_answer_status_text(text) or _tr('Thinking…')
+
+    def _final_text(self) -> str:
+        try:
+            record = load_conversation_record(self.path, include_retrieval=False) or {}
+            messages = record.get('messages') or []
+            for message in reversed(messages):
+                if isinstance(message, dict) and message.get('role') == 'assistant':
+                    return strip_structured_outputs_from_display_text(str(message.get('content', '') or '')).strip()
+                if isinstance(message, dict) and message.get('role') == 'user':
+                    break
+        except Exception:
+            logging.exception('Reading the saved answer for the circle\'s card failed.')
+        return ''
+
+    def _tick(self):
+        if self.state == 'closed':
+            self._poll.stop()
+            return
+        if self.state == 'waiting':
+            self._maybe_rise()
+        card = self._card
+        if card is None:
+            return
+        run = self._run
+        live = isinstance(run, dict) and str(run.get('status', '') or '') in ('running', 'stopping') \
+            and not run.get('_unified_finalized')
+        if live:
+            answer = strip_structured_outputs_from_display_text(str(run.get('answer', '') or '')).strip()
+            if answer:
+                card.set_content(answer, status=False)
+            else:
+                text = self._status_text(run)
+                card.set_content((text + '\n' + self._note) if self._note else text, status=True)
+        else:
+            try:
+                newer = self._main._agent_run_for_path(self.path) if self.path else None
+            except Exception:
+                newer = None
+            if isinstance(newer, dict) and newer is not run:   # a question that was in line has started
+                self._run, self._final_shown, self._note = newer, False, ''
+                return
+            if not self._final_shown:
+                self._final_shown = True
+                last = strip_structured_outputs_from_display_text(str((run or {}).get('answer', '') or '')).strip()
+                card.set_content(self._final_text() or last or _tr('No answer.'), status=False)
+                self._run = None
+        if self.state == 'open':
+            self._place()
+
+    # ── coming out ──────────────────────────────────────────────────────────
+    def _maybe_rise(self):
+        main = self._main
+        if not main._collapsed_button_shown():
+            self.close(immediate=True)
+            return
+        drip = getattr(main, '_circle_drip', None)
+        if (drip is not None and drip.active()) or main._collapsed_slide_running():
+            return   # the input box is still out or on its way back into the circle: one drop at a time
+        self._rise()
+
+    def _rise(self):
+        card = self.card()
+        circle = self.circle_rect()
+        rect, self._above = self._wanted_rect(CIRCLE_ANSWER_MIN_H)   # it comes out as one line, then grows
+        self._target = QRectF(rect)
+        card.setGeometry(rect.toAlignedRect())
+        if not self._drop_wanted():
+            self._show_card_faded()
+            return
+        stage = self._stage_window()
+        stage.cover(circle.united(self._target))
+        try:
+            face = render_glass_foreground(self._circle.button)
+        except Exception:
+            face = None
+        stage.setWindowOpacity(1.0)
+        stage.present(face, is_dark_theme(app))
+        if not stage.glass_ready():
+            stage.hide()
+            self._show_card_faded()
+            return
+        self.state = 'rising'
+        stage.show_shapes(circle, None)
+        QTimer.singleShot(CIRCLE_DRIP_GLASS_DELAY_MS, lambda: self._run_frames('open'))
+
+    def _stage_window(self) -> CircleDripStage:
+        if self._stage is None:
+            self._stage = CircleDripStage()
+        return self._stage
+
+    def _show_card_faded(self):
+        card = self.card()
+        card.setWindowOpacity(0.0)
+        card.present()
+        self.state = 'open'
+        self._place()
+        self._fade(card, 1.0)
+
+    def _run_frames(self, mode: str):
+        if self.state != ('rising' if mode == 'open' else 'sinking'):
+            return
+        if mode == 'close' and self._card is not None:
+            self._card.hide()
+        self._set_circle_seen(False)
+        self._mode = mode
+        self._t0 = time.monotonic()
+        self._frames.start()
+        self._on_frame()
+
+    def _on_frame(self):
+        if self._t0 is None or self._stage is None:
+            self._frames.stop()
+            return
+        t = time.monotonic() - self._t0
+        circle = self.circle_rect()
+        closing = self._mode != 'open'
+        self._stage.show_shapes(*circle_answer_shapes(t, circle, self._target, closing=closing))
+        if t >= (CIRCLE_DRIP_CLOSE_S if closing else CIRCLE_DRIP_OPEN_S):
+            self._frames.stop()
+            if closing:
+                self._finish_close()
+            else:
+                self._finish_rise()
+
+    def _finish_rise(self):
+        card = self.card()
+        card.setGeometry(self._target.toAlignedRect())
+        card.setWindowOpacity(0.0)
+        card.present()
+        self.state = 'open'
+        self._set_circle_seen(True)
+        stage = self._stage
+
+        def done(me=self, stage_=stage):
+            if me.state in ('rising', 'sinking'):
+                return
+            if me._card is not None and me.state == 'open':
+                me._card.setWindowOpacity(1.0)
+            if stage_ is not None:
+                stage_.hide()
+                stage_.setWindowOpacity(1.0)
+            me._place()
+
+        self._crossfade([(card, 0.0, 1.0)] + ([(stage, 1.0, 0.0)] if stage is not None else []),
+                        CIRCLE_DRIP_HANDOVER_MS, done)
+
+    # ── going away ──────────────────────────────────────────────────────────
+    def close(self, immediate: bool = False):
+        """The card goes back into the circle. The conversation stays in the history; a run still going
+        goes on (its answer is there when it is opened)."""
+        if self.state == 'closed':
+            return
+        card = self._card
+        if immediate or self.state == 'waiting' or card is None or not card.isVisible():
+            self._finish_close(immediate=True)
+            return
+        if self.state == 'sinking':
+            return
+        if self.state == 'rising':
+            self._finish_close(immediate=True)
+            return
+        self.state = 'sinking'
+        if not self._drop_wanted() or not self._main._collapsed_button_shown():
+            self._fade(card, 0.0, done=self._finish_close)
+            return
+        start = QRectF(card.geometry())
+        if start.height() <= CIRCLE_ANSWER_MIN_H + 1.0:
+            self._sink(card)
+            return
+        # taller than a line: its text goes, the glass shrinks to the one-line capsule next to the
+        # circle (the edge towards the circle stays), then that drips back — the way it came (5.1.8)
+        card.set_folded(True)
+        end = QRectF(start.left(), start.bottom() - CIRCLE_ANSWER_MIN_H if self._above else start.top(),
+                     start.width(), CIRCLE_ANSWER_MIN_H)
+        self._stop_fade()
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(CIRCLE_ANSWER_FOLD_MS)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+        def step(value, card_=card, a=start, b=end):
+            v = float(value)
+            try:
+                card_.setGeometry(QRectF(a.left(), a.top() + (b.top() - a.top()) * v, a.width(),
+                                         a.height() + (b.height() - a.height()) * v).toAlignedRect())
+            except RuntimeError:
+                pass
+
+        def folded(me=self, card_=card):
+            if me.state == 'sinking':
+                me._sink(card_)
+
+        anim.valueChanged.connect(step)
+        anim.finished.connect(folded)
+        self._fade_anim = anim
+        anim.start()
+
+    def _sink(self, card):
+        """The one-line capsule drips back into the circle."""
+        self._target = QRectF(card.geometry())
+        stage = self._stage_window()
+        circle = self.circle_rect()
+        stage.cover(circle.united(self._target))
+        stage.setWindowOpacity(0.0)
+        try:
+            face = render_glass_foreground(self._circle.button)
+        except Exception:
+            face = None
+        stage.present(face, is_dark_theme(app))
+        if not stage.glass_ready():
+            stage.hide()
+            stage.setWindowOpacity(1.0)
+            self._fade(card, 0.0, done=self._finish_close)
+            return
+        stage.show_shapes(circle, self._target)
+
+        def handover(me=self, stage_=stage, card_=card):
+            if me.state != 'sinking':
+                return
+            me._crossfade([(stage_, 0.0, 1.0), (card_, 1.0, 0.0)], CIRCLE_DRIP_HANDOVER_MS, lambda: me._run_frames('close'))
+
+        QTimer.singleShot(CIRCLE_DRIP_GLASS_DELAY_MS, handover)
+
+    def _finish_close(self, immediate: bool = False):
+        self._frames.stop()
+        self._poll.stop()
+        self._stop_fade()
+        self._t0 = None
+        self.state = 'closed'
+        self.path = ''
+        self._run = None
+        self._note = ''
+        self.sent_keys = set()
+        drip = getattr(self._main, '_circle_drip', None)
+        if drip is not None:
+            drip.refresh_clip()
+        for window in (self._card, self._stage):
+            if window is not None:
+                try:
+                    window.hide()
+                    window.setWindowOpacity(1.0)
+                except RuntimeError:
+                    pass
+        if self._card is not None:
+            self._card.set_folded(False)
+        self._set_circle_seen(True)
+
+    def _ask_follow_up(self):
+        """The card's speech-bubble button: the input box drips out under the circle (5.1.7); what is
+        sent from it goes on in this card's conversation."""
+        main = self._main
+        drip = getattr(main, '_circle_drip', None)
+        if drip is None or not main._collapsed_button_shown() or drip.state != 'closed':
+            return
+        main._collapsed_hover_since = None
+        main._collapsed_hover_need_leave = True
+        drip.open()
+
+    def _open_in_main(self):
+        path = self.path
+        self.close()
+        if not path:
+            return
+
+        def go(me=self, path_=path, waited=[0]):
+            if me.state != 'closed' and waited[0] < 60:   # the card is still on its way into the circle
+                waited[0] += 1
+                QTimer.singleShot(30, go)
+                return
+            try:
+                me._main._open_circle_conversation_in_main(path_)
+            except Exception:
+                logging.exception('Opening the circle\'s conversation in the main window failed.')
+
+        go()
+
+    def theme_changed(self):
+        dark = is_dark_theme(app)
+        if self._card is not None:
+            self._card.set_dark(dark)
+        if self._stage is not None:
+            self._stage.set_dark(dark)
+
+    # ── fading ──────────────────────────────────────────────────────────────
+    def _stop_fade(self):
+        anim = self._fade_anim
+        if anim is not None:
+            anim.stop()
+        self._fade_anim = None
+
+    def _fade(self, widget, to: float, done=None):
+        self._stop_fade()
+        anim = QPropertyAnimation(widget, b'windowOpacity', self)
+        anim.setDuration(CIRCLE_DRIP_FADE_MS)
+        anim.setStartValue(float(widget.windowOpacity()))
+        anim.setEndValue(float(to))
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        if done is not None:
+            anim.finished.connect(done)
+        self._fade_anim = anim
+        anim.start()
+
+    def _crossfade(self, pairs, ms: int, done=None):
+        self._stop_fade()
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(max(1, int(ms)))
+
+        def step(value, pairs_=list(pairs)):
+            value = float(value)
+            for widget, start, end in pairs_:
+                try:
+                    widget.setWindowOpacity(start + (end - start) * value)
+                except RuntimeError:
+                    pass
+
+        anim.valueChanged.connect(step)
+        if done is not None:
+            anim.finished.connect(done)
+        self._fade_anim = anim
+        anim.start()
+
+
+# ── the circle's scan and its black hole (style book 5.1.13) ───────────────────────────────────
+# Holding the right button on the circle and moving off turns the circle into a black hole that
+# follows the pointer. A window the pointer enters, a file it passes in Finder or on the desktop:
+# a copy of its picture is pulled, twisted and swallowed, and stands in the tray as a card.
+CIRCLE_SCAN_HOLE = 84.0                  # the hole's diameter (the circle's: COLLAPSED_BUTTON_SIZE)
+CIRCLE_SCAN_HOLE_WINDOW = 220            # its window: room for the streaks, the swell, the icon
+CIRCLE_SCAN_OPEN_S = 0.25
+CIRCLE_SCAN_CLOSE_S = 0.30
+CIRCLE_SCAN_OPEN_SPRING = (0.62, 24.0)   # the diameter a little past 84 and back
+CIRCLE_SCAN_LIFT_S = 0.08                # a window's picture resting on the window before it goes
+CIRCLE_SCAN_SWALLOW_S = 0.5              # a window, lift included
+CIRCLE_SCAN_FILE_S = 0.3                 # a file's icon
+CIRCLE_SCAN_FADE_FROM = 0.8              # the last part of the way it fades
+CIRCLE_SCAN_MESH = 10                    # the picture is cut into this many cells each way
+CIRCLE_SCAN_TWIST = 2.4                  # radians a point has turned around the hole when it arrives
+CIRCLE_SCAN_LEAD = 0.6                   # how much later the far end of a picture starts than the near end
+CIRCLE_SCAN_MAX_WINDOWS = 6
+CIRCLE_SCAN_MIN_WINDOW = (150, 120)      # smaller things are no windows to take
+CIRCLE_SCAN_SHOT_WAIT_S = 3.0            # a window's picture that has not come by then is given up
+CIRCLE_SCAN_MAX_FILES = 20
+CIRCLE_SCAN_TEXT_MAX = 20000             # characters of a window's text kept
+CIRCLE_SCAN_SHOT_MAX = 1600              # a kept screenshot's longer side, in pixels
+CIRCLE_SCAN_TICK_MS = 16
+CIRCLE_SCAN_PULSE_S = 0.25               # the swell after something was swallowed
+CIRCLE_SCAN_PULSE = 0.06
+CIRCLE_SCAN_SPIN = 0.35                  # turns per second at rest
+CIRCLE_SCAN_SPIN_FAST = 3.0              # … times that while the pointer moves fast
+CIRCLE_SCAN_MARK_RADIUS = 10.0           # the thin line around a window that was taken
+CIRCLE_SCAN_MARK_FADE_S = 0.3
+CIRCLE_SCAN_CORE = (4, 4, 10)
+CIRCLE_SCAN_RING = (255, 236, 200)
+CIRCLE_SCAN_STREAK = (255, 220, 170)
+CIRCLE_SCAN_STREAKS = 26
+CIRCLE_SCAN_FILE_ICON = 64.0
+CIRCLE_SCAN_READ_S = 2.0                 # at most this long reading one window's text
+CIRCLE_SCAN_KEEP_SENT_MS = 120000        # a sent scan's files stay this long (the run is still reading them)
+
+
+def circle_scan_pull(distance: float, reach: float, t: float, plain: bool = False) -> float:
+    """How far (0 … 1) a point this far from the hole has gone at progress `t`: the near end of a
+    picture goes first, the far end (`reach` away) last, everything has arrived at t = 1. `plain`
+    ("reduce motion"): all of it together."""
+    t = max(0.0, min(1.0, float(t)))
+    eased = t * t * (3.0 - 2.0 * t)
+    if plain:
+        return eased
+    lead = CIRCLE_SCAN_LEAD * min(1.0, float(distance) / max(1.0, float(reach)))
+    return max(0.0, min(1.0, eased * (1.0 + CIRCLE_SCAN_LEAD) - lead))
+
+
+def circle_scan_warp_point(point: QPointF, hole: QPointF, reach: float, t: float, plain: bool = False) -> QPointF:
+    """Where a point of a picture is while the hole swallows it: pulled towards the hole and turned
+    around it, more the further it has gone."""
+    dx, dy = point.x() - hole.x(), point.y() - hole.y()
+    distance = math.hypot(dx, dy)
+    if distance < 0.001:
+        return QPointF(hole)
+    gone = circle_scan_pull(distance, reach, t, plain)
+    left = distance * (1.0 - gone) ** 1.5
+    angle = math.atan2(dy, dx) + (0.0 if plain else CIRCLE_SCAN_TWIST * gone * gone)
+    return QPointF(hole.x() + left * math.cos(angle), hole.y() + left * math.sin(angle))
+
+
+def circle_scan_mesh(rect: QRectF, hole: QPointF, t: float, cells: int = CIRCLE_SCAN_MESH, plain: bool = False) -> list:
+    """The corners of the picture's cells, row by row, at progress `t` ((cells + 1)² points)."""
+    reach = max(math.hypot(corner.x() - hole.x(), corner.y() - hole.y())
+                for corner in (rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight()))
+    return [[circle_scan_warp_point(QPointF(rect.left() + rect.width() * column / cells, rect.top() + rect.height() * row / cells),
+                                    hole, reach, t, plain)
+             for column in range(cells + 1)] for row in range(cells + 1)]
+
+
+def circle_scan_copy_opacity(t: float) -> float:
+    if t <= CIRCLE_SCAN_FADE_FROM:
+        return 1.0
+    return max(0.0, 1.0 - (t - CIRCLE_SCAN_FADE_FROM) / (1.0 - CIRCLE_SCAN_FADE_FROM))
+
+
+def circle_scan_triangle_transform(source: tuple, target: tuple):
+    """The plain (affine) transform that lays a triangle of the picture onto where its three corners
+    are now, or None when the triangle has no area. Never a perspective one: a cell squeezed flat
+    or folded over near the hole would be thrown across the whole screen by that."""
+    (x0, y0), (x1, y1), (x2, y2) = source
+    (u0, v0), (u1, v1), (u2, v2) = target
+    det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
+    if abs(det) < 1e-9:
+        return None
+    m11 = ((u1 - u0) * (y2 - y0) - (u2 - u0) * (y1 - y0)) / det
+    m21 = ((u2 - u0) * (x1 - x0) - (u1 - u0) * (x2 - x0)) / det
+    m12 = ((v1 - v0) * (y2 - y0) - (v2 - v0) * (y1 - y0)) / det
+    m22 = ((v2 - v0) * (x1 - x0) - (v1 - v0) * (x2 - x0)) / det
+    return QTransform(m11, m12, m21, m22, u0 - m11 * x0 - m21 * y0, v0 - m12 * x0 - m22 * y0)
+
+
+def paint_circle_scan_copy(painter: QPainter, image: QImage, rect: QRectF, hole: QPointF, t: float, plain: bool = False):
+    """A picture on its way into the hole: cut into cells, each cell as two triangles laid onto
+    where their corners are now."""
+    if image.isNull() or t >= 1.0:
+        return
+    cells = CIRCLE_SCAN_MESH
+    mesh = circle_scan_mesh(rect, hole, t, cells, plain)
+    width, height = float(image.width()), float(image.height())
+    cell_w, cell_h = width / cells, height / cells
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    painter.setOpacity(painter.opacity() * circle_scan_copy_opacity(t))
+    base = painter.transform()
+    for row in range(cells):
+        for column in range(cells):
+            left, top = cell_w * column, cell_h * row
+            corners = ((left, top), (left + cell_w, top), (left + cell_w, top + cell_h), (left, top + cell_h))
+            now = (mesh[row][column], mesh[row][column + 1], mesh[row + 1][column + 1], mesh[row + 1][column])
+            piece = QRectF(left, top, cell_w, cell_h).adjusted(-0.5, -0.5, 0.5, 0.5).intersected(QRectF(0, 0, width, height))
+            for a, b, c in ((0, 1, 2), (0, 2, 3)):
+                source = (corners[a], corners[b], corners[c])
+                target = tuple((now[i].x(), now[i].y()) for i in (a, b, c))
+                area = abs((target[1][0] - target[0][0]) * (target[2][1] - target[0][1])
+                           - (target[2][0] - target[0][0]) * (target[1][1] - target[0][1])) / 2.0
+                if area < 0.05:
+                    continue   # squeezed to nothing
+                transform = circle_scan_triangle_transform(source, target)
+                if transform is None:
+                    continue
+                # the triangle a little bigger than it is (about its middle): no hairlines between neighbours
+                mx, my = sum(p[0] for p in source) / 3.0, sum(p[1] for p in source) / 3.0
+                shape = QPainterPath()
+                shape.addPolygon(QPolygonF([QPointF(mx + (px - mx) * 1.04, my + (py - my) * 1.04) for px, py in source]))
+                shape.closeSubpath()
+                painter.setTransform(transform * base)
+                painter.setClipPath(shape)
+                painter.drawImage(piece, image, piece)
+    painter.restore()
+
+
+def paint_circle_hole(painter: QPainter, center: QPointF, diameter: float, glow: float, spin: float, pulse: float = 0.0):
+    """The circle as a black hole (drawn, not glass): a near-black core, a thin warm ring at its
+    edge, turning streaks of light around it. `glow` 0 … 1 = how much of it is there; `spin` in
+    turns; `pulse` 0 … 1 = the swell after a swallow."""
+    glow = max(0.0, min(1.0, float(glow)))
+    if glow <= 0.0:
+        return
+    core = diameter / 2.0 * (1.0 + CIRCLE_SCAN_PULSE * pulse)
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    red, green, blue = CIRCLE_SCAN_STREAK
+    for index in range(CIRCLE_SCAN_STREAKS):
+        depth = ((index * 7) % 10) / 10.0                    # 0 = right at the ring, 1 = the outermost
+        radius = core * (1.12 + 0.50 * depth)
+        speed = 1.0 + 1.6 * (1.0 - depth)                    # the inner ones turn faster
+        start = (index * 360.0 / CIRCLE_SCAN_STREAKS * 3.0 + spin * 360.0 * speed) % 360.0
+        span = 16.0 + 26.0 * (((index * 5) % 7) / 7.0)
+        alpha = int((70 + 150 * (1.0 - depth)) * glow * (0.85 + 0.15 * pulse))
+        pen = QPen(QColor(red, green, blue, max(0, min(255, alpha))), 1.2 + 1.3 * (1.0 - depth))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawArc(QRectF(center.x() - radius, center.y() - radius, 2 * radius, 2 * radius),
+                        int(-start * 16), int(-span * 16))
+    shade = QRadialGradient(center, core)
+    red, green, blue = CIRCLE_SCAN_CORE
+    shade.setColorAt(0.0, QColor(red, green, blue, int(255 * min(1.0, glow * 1.3))))
+    shade.setColorAt(0.9, QColor(red, green, blue, int(255 * min(1.0, glow * 1.3))))
+    shade.setColorAt(1.0, QColor(red, green, blue, int(225 * min(1.0, glow * 1.3))))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(shade)
+    painter.drawEllipse(center, core, core)
+    red, green, blue = CIRCLE_SCAN_RING
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(QPen(QColor(red, green, blue, int(255 * glow * (0.75 + 0.25 * pulse))), 1.6))
+    painter.drawEllipse(center, core + 1.0, core + 1.0)
+    painter.restore()
+
+
+# ── what is on the screen (read-only) ──
+def circle_scan_window_list(own_pid: int | None = None) -> list:
+    """The ordinary windows on the screen now, the front one first: {'id', 'pid', 'app', 'title',
+    'rect' (QRect, global)}. Broccoli's own are left out. [] when it cannot be asked."""
+    try:
+        import Quartz
+        listed = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements, Quartz.kCGNullWindowID)
+    except Exception:
+        return []
+    own_pid = os.getpid() if own_pid is None else int(own_pid)
+    screens = []
+    try:
+        _error, displays, _count = Quartz.CGGetActiveDisplayList(16, None, None)
+        for display in displays or []:
+            frame = Quartz.CGDisplayBounds(display)
+            screens.append(QRect(int(frame.origin.x), int(frame.origin.y), int(frame.size.width), int(frame.size.height)))
+    except Exception:
+        screens = []
+    regular = {}   # pid -> an ordinary app (in the Dock), not a helper that only draws over the screen
+    windows = []
+    for info in listed or []:
+        try:
+            pid = int(info.get('kCGWindowOwnerPID', 0))
+            if int(info.get('kCGWindowLayer', 1)) != 0 or pid == own_pid:
+                continue
+            if float(info.get('kCGWindowAlpha', 1.0)) <= 0.01:
+                continue
+            bounds = info.get('kCGWindowBounds') or {}
+            rect = QRect(int(bounds.get('X', 0)), int(bounds.get('Y', 0)), int(bounds.get('Width', 0)), int(bounds.get('Height', 0)))
+            if rect.width() < CIRCLE_SCAN_MIN_WINDOW[0] or rect.height() < CIRCLE_SCAN_MIN_WINDOW[1]:
+                continue   # (Stage Manager's little pictures of windows at the screen's edge are windows too)
+            if pid not in regular:
+                try:
+                    running = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+                    regular[pid] = running is not None and int(running.activationPolicy()) == 0
+                except Exception:
+                    regular[pid] = True
+            if not regular[pid] and (any(rect.contains(screen) for screen in screens)
+                                     or not str(info.get('kCGWindowName', '') or '').strip()):
+                # a helper app (not in the Dock) with a sheet as big as a whole screen, or with a
+                # window that has no name (Stage Manager's own frames): not something to take — and
+                # it would be "the window under the pointer" in front of the real ones
+                continue
+            windows.append({'id': int(info.get('kCGWindowNumber', 0)), 'pid': int(info.get('kCGWindowOwnerPID', 0)),
+                            'app': str(info.get('kCGWindowOwnerName', '') or ''), 'title': str(info.get('kCGWindowName', '') or ''),
+                            'rect': rect})
+        except Exception:
+            continue
+    return windows
+
+
+def circle_scan_window_at(windows: list, point: QPoint):
+    """The window the pointer is in: the front-most one whose frame holds the point."""
+    for window in windows or []:
+        if window['rect'].contains(QPoint(point)):
+            return window
+    return None
+
+
+def circle_scan_capture_window(window_id: int):
+    """One window's picture as it is now (also where other windows cover it), or None — no Screen
+    Recording permission (never asked for here), or the window is gone."""
+    try:
+        import Quartz
+        if not Quartz.CGPreflightScreenCaptureAccess():
+            return None
+        shot = Quartz.CGWindowListCreateImage(Quartz.CGRectNull, Quartz.kCGWindowListOptionIncludingWindow, int(window_id),
+                                              Quartz.kCGWindowImageBoundsIgnoreFraming | Quartz.kCGWindowImageBestResolution)
+        if shot is None or Quartz.CGImageGetWidth(shot) < 8:
+            return None
+        bitmap = AppKit.NSBitmapImageRep.alloc().initWithCGImage_(shot)
+        png = bitmap.representationUsingType_properties_(AppKit.NSBitmapImageFileTypePNG, {})
+        image = QImage.fromData(bytes(png))
+        return None if image.isNull() else image
+    except Exception:
+        logging.exception('Taking a window\'s picture for the circle\'s scan failed.')
+        return None
+
+
+def _circle_scan_ax():
+    try:
+        import ApplicationServices
+        return ApplicationServices if ApplicationServices.AXIsProcessTrusted() else None
+    except Exception:
+        return None
+
+
+def _circle_scan_ax_value(ax, element, name):
+    try:
+        error, value = ax.AXUIElementCopyAttributeValue(element, name, None)
+    except Exception:
+        return None
+    return value if error == 0 else None
+
+
+def _circle_scan_ax_path(value) -> str:
+    """A file's path out of what the accessibility interface hands back (a file URL, as text or as an object)."""
+    text = str(value.absoluteString() if hasattr(value, 'absoluteString') else value or '')
+    if text.startswith('file://'):
+        return QUrl(text).toLocalFile().rstrip('/') or '/'
+    return text if text.startswith('/') else ''
+
+
+def _circle_scan_collect_text(ax, element, parts: list, state: dict, depth: int = 0):
+    """Walk a window's parts collecting what one can read: text areas and fields (never a password
+    field), static text, a web page's address. Stops at the character, part and time limits."""
+    if depth > 40 or state['nodes'] <= 0 or state['chars'] >= CIRCLE_SCAN_TEXT_MAX or time.monotonic() > state['deadline']:
+        return
+    state['nodes'] -= 1
+    role = str(_circle_scan_ax_value(ax, element, 'AXRole') or '')
+    subrole = str(_circle_scan_ax_value(ax, element, 'AXSubrole') or '')
+    if subrole == 'AXSecureTextField' or role == 'AXSecureTextField':
+        return
+    if role == 'AXWebArea' and not state.get('url'):
+        address = _circle_scan_ax_value(ax, element, 'AXURL')
+        if address is not None:
+            state['url'] = str(address.absoluteString() if hasattr(address, 'absoluteString') else address)
+    if role in ('AXTextArea', 'AXTextField', 'AXStaticText', 'AXHeading'):
+        value = _circle_scan_ax_value(ax, element, 'AXValue')
+        if not isinstance(value, str) or not value.strip():
+            value = _circle_scan_ax_value(ax, element, 'AXTitle') if role in ('AXStaticText', 'AXHeading') else None
+        if isinstance(value, str) and value.strip():
+            text = value.strip()[:CIRCLE_SCAN_TEXT_MAX - state['chars']]
+            if text and (not parts or parts[-1] != text):
+                parts.append(text)
+                state['chars'] += len(text)
+            if role == 'AXTextArea':
+                state['rich'] = True
+        if role in ('AXTextArea', 'AXTextField'):
+            return   # (its children repeat its text)
+    children = _circle_scan_ax_value(ax, element, 'AXChildren') or []
+    for child in list(children)[:400]:
+        _circle_scan_collect_text(ax, child, parts, state, depth + 1)
+
+
+def circle_scan_read_window(pid: int, rect: QRect, title: str = '', seconds: float = CIRCLE_SCAN_READ_S) -> dict:
+    """What a window of another app holds, read through the accessibility interface (read-only,
+    off the main thread): {'doc': the open file's path, 'url': the page's address, 'text': what it
+    says}. An app built with web technology hands nothing over until it is told an assistive tool
+    is there: that switch is turned on for the reading and put back as it was. {} when nothing can
+    be asked."""
+    ax = _circle_scan_ax()
+    if ax is None:
+        return {}
+    found = {'doc': '', 'url': '', 'text': ''}
+    try:
+        app_element = ax.AXUIElementCreateApplication(int(pid))
+        ax.AXUIElementSetMessagingTimeout(app_element, 0.6)
+        windows = list(_circle_scan_ax_value(ax, app_element, 'AXWindows') or [])
+        chosen = None
+        for candidate in windows:   # the one at this place on the screen, else the one with this title
+            position = _circle_scan_ax_value(ax, candidate, 'AXPosition')
+            try:
+                ok, point = ax.AXValueGetValue(position, ax.kAXValueCGPointType, None) if position is not None else (False, None)
+            except Exception:
+                ok, point = False, None
+            if ok and abs(point.x - rect.x()) <= 2 and abs(point.y - rect.y()) <= 2:
+                chosen = candidate
+                break
+        if chosen is None:
+            for candidate in windows:
+                if title and str(_circle_scan_ax_value(ax, candidate, 'AXTitle') or '') == title:
+                    chosen = candidate
+                    break
+        if chosen is None:
+            chosen = _circle_scan_ax_value(ax, app_element, 'AXFocusedWindow') or (windows[0] if windows else None)
+        if chosen is None:
+            return found
+        found['doc'] = _circle_scan_ax_path(_circle_scan_ax_value(ax, chosen, 'AXDocument'))
+
+        def read_once():
+            parts, state = [], {'nodes': 4000, 'chars': 0, 'deadline': time.monotonic() + float(seconds), 'url': ''}
+            _circle_scan_collect_text(ax, chosen, parts, state)
+            return '\n'.join(parts), state
+
+        text, state = read_once()
+        if len(text) < 200 and not state.get('rich'):
+            # little to read: perhaps an app that waits to be told an assistive tool is there
+            switched = []
+            for name in ('AXManualAccessibility', 'AXEnhancedUserInterface'):
+                before = _circle_scan_ax_value(ax, app_element, name)
+                if before:
+                    continue
+                try:
+                    if ax.AXUIElementSetAttributeValue(app_element, name, True) == 0:
+                        switched.append((name, bool(before)))
+                except Exception:
+                    pass
+            if switched:
+                try:
+                    time.sleep(0.35)   # the app builds what it hands over
+                    again, state_again = read_once()
+                    if len(again) > len(text):
+                        text, state = again, state_again
+                finally:
+                    for name, before in switched:
+                        try:
+                            ax.AXUIElementSetAttributeValue(app_element, name, before)
+                        except Exception:
+                            pass
+        found['url'] = str(state.get('url') or '')
+        found['text'] = text[:CIRCLE_SCAN_TEXT_MAX]
+    except Exception:
+        logging.exception('Reading a window for the circle\'s scan failed.')
+    return found
+
+
+def circle_scan_recognize_text(image_path: str) -> str:
+    """The words in a picture, recognised on this Mac by the system (off the main thread); '' when
+    that is not possible."""
+    try:
+        import Vision
+        url = AppKit.NSURL.fileURLWithPath_(str(image_path))
+        if not os.path.isfile(str(image_path)):
+            return ''
+        handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(url, None)
+        request = Vision.VNRecognizeTextRequest.alloc().init()
+        request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+        request.setUsesLanguageCorrection_(True)
+        try:
+            # the languages this Mac is set to come first (left to itself it reads Chinese and
+            # Japanese as Latin letters), then whatever else it detects
+            wanted = [str(code) for code in (AppKit.NSLocale.preferredLanguages() or [])][:4]
+            supported, _error = request.supportedRecognitionLanguagesAndReturnError_(None)
+            supported = [str(code) for code in (supported or [])]
+            chosen = []
+            for code in wanted + ['en-US']:
+                match = next((have for have in supported if have == code or have.split('-')[0] == code.split('-')[0]
+                              and (code.split('-')[1:2] == have.split('-')[1:2] or len(code.split('-')) == 1)), None) \
+                    or next((have for have in supported if have.split('-')[0] == code.split('-')[0]), None)
+                if match and match not in chosen:
+                    chosen.append(match)
+            if chosen:
+                request.setRecognitionLanguages_(chosen)
+            request.setAutomaticallyDetectsLanguage_(True)
+        except Exception:
+            pass
+        ok, _error = handler.performRequests_error_([request], None)
+        if not ok:
+            return ''
+        lines = []
+        for observation in request.results() or []:
+            best = observation.topCandidates_(1)
+            if best and len(best):
+                lines.append(str(best[0].string()))
+        return '\n'.join(lines)[:CIRCLE_SCAN_TEXT_MAX]
+    except Exception:
+        logging.exception('Recognising the text of a scanned window failed.')
+        return ''
+
+
+_CIRCLE_SCAN_FINDER = {'pid': 0}
+
+
+def circle_scan_finder_pid() -> int:
+    """The process that shows files as icons and rows — Finder, also the desktop's icons (0 = not running)."""
+    try:
+        pid = int(_CIRCLE_SCAN_FINDER['pid'] or 0)
+        if pid and AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid) is not None:
+            return pid
+        running = AppKit.NSRunningApplication.runningApplicationsWithBundleIdentifier_('com.apple.finder')
+        _CIRCLE_SCAN_FINDER['pid'] = int(running[0].processIdentifier()) if running and len(running) else 0
+    except Exception:
+        _CIRCLE_SCAN_FINDER['pid'] = 0
+    return int(_CIRCLE_SCAN_FINDER['pid'] or 0)
+
+
+def _circle_scan_file_of(ax, element, depth: int = 2) -> str:
+    """The file this part of Finder stands for: its own address, or (a row of a list) that of the
+    name or icon inside it."""
+    path = _circle_scan_ax_path(_circle_scan_ax_value(ax, element, 'AXURL'))
+    if path or depth <= 0:
+        return path
+    if str(_circle_scan_ax_value(ax, element, 'AXRole') or '') in ('AXRow', 'AXCell'):
+        for child in list(_circle_scan_ax_value(ax, element, 'AXChildren') or [])[:12]:
+            path = _circle_scan_file_of(ax, child, depth - 1)
+            if path:
+                return path
+    return ''
+
+
+def circle_scan_file_at(x: float, y: float):
+    """The file whose icon or row is at this place of the screen (a Finder window, the desktop): (its
+    path, its frame as QRect or None), or None. FINDER is asked what it has there — asking "what
+    is on top at this point" answers with Broccoli's own black hole, which is under the pointer
+    all through a scan (2026-11-12: no file was ever found). Read-only, off the main thread."""
+    ax = _circle_scan_ax()
+    pid = circle_scan_finder_pid() if ax is not None else 0
+    if not pid:
+        return None
+    try:
+        finder = ax.AXUIElementCreateApplication(pid)
+        ax.AXUIElementSetMessagingTimeout(finder, 0.3)
+        error, element = ax.AXUIElementCopyElementAtPosition(finder, float(x), float(y), None)
+        if error != 0 or element is None:
+            return None
+        for _step in range(6):   # the icon's picture or name → the item that stands for the file
+            path = _circle_scan_file_of(ax, element)
+            if path and os.path.exists(path):
+                frame = None
+                position, size = _circle_scan_ax_value(ax, element, 'AXPosition'), _circle_scan_ax_value(ax, element, 'AXSize')
+                try:
+                    ok_p, point = ax.AXValueGetValue(position, ax.kAXValueCGPointType, None)
+                    ok_s, extent = ax.AXValueGetValue(size, ax.kAXValueCGSizeType, None)
+                    if ok_p and ok_s:
+                        frame = QRect(int(point.x), int(point.y), int(extent.width), int(extent.height))
+                except Exception:
+                    frame = None
+                return path, frame
+            if str(_circle_scan_ax_value(ax, element, 'AXRole') or '') in ('AXWindow', 'AXScrollArea', 'AXApplication'):
+                return None   # (the window's empty part: no file here)
+            element = _circle_scan_ax_value(ax, element, 'AXParent')
+            if element is None:
+                return None
+    except Exception:
+        logging.exception('Asking which file is under the pointer failed.')
+    return None
+
+
+def circle_scan_fit_shot(image: QImage) -> QImage:
+    """A screenshot as it is kept and sent: its longer side at most CIRCLE_SCAN_SHOT_MAX pixels."""
+    if max(image.width(), image.height()) <= CIRCLE_SCAN_SHOT_MAX:
+        return image
+    return image.scaled(CIRCLE_SCAN_SHOT_MAX, CIRCLE_SCAN_SHOT_MAX, Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation)
+
+
+def circle_scan_card_name(app_name: str, title: str) -> str:
+    app_name, title = ' '.join(str(app_name or '').split()), ' '.join(str(title or '').split())
+    return (f'{app_name} — {title}' if app_name and title else (app_name or title or _tr('Window')))[:80]
+
+
+class CircleScanSignals(QObject):
+    file_found = pyqtSignal(str, object)   # a file under the pointer: its path, its frame (QRect or None)
+    window_shot = pyqtSignal(int, object, object)   # a window's picture is there: its id, its card, the flying picture
+    window_read = pyqtSignal(str, dict)    # a scanned window's card (its key): what was read of it
+
+
+class CircleHoleWindow(QWidget):
+    """The black hole's own little window: over everything of Broccoli, never takes the mouse or
+    the keyboard. The scan tells it what to show."""
+
+    def __init__(self):
+        super().__init__(None)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint
+                            | Qt.WindowType.WindowDoesNotAcceptFocus | Qt.WindowType.WindowTransparentForInput)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        if hasattr(Qt.WidgetAttribute, 'WA_MacAlwaysShowToolWindow'):
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setFixedSize(CIRCLE_SCAN_HOLE_WINDOW, CIRCLE_SCAN_HOLE_WINDOW)
+        self.diameter = float(COLLAPSED_BUTTON_SIZE)
+        self.glow = 0.0
+        self.spin = 0.0
+        self.pulse = 0.0
+        self.icon = None        # the circle's own icon, going down the hole as it opens
+        self.icon_left = 1.0    # 1 = as on the circle, 0 = gone
+        self._native = False
+
+    def present(self, center: QPoint, above=None):
+        half = CIRCLE_SCAN_HOLE_WINDOW // 2
+        self.move(QPoint(center) - QPoint(half, half))
+        if not self.isVisible():
+            self.show()
+        window = _broccoli_own_ns_window(self) if AppKit is not None and objc is not None else None
+        if window is None:
+            return
+        try:
+            if not self._native:
+                self._native = True
+                configure_nonactivating_ns_window(window)
+                window.setIgnoresMouseEvents_(True)
+                window.setHasShadow_(False)
+            over = _broccoli_own_ns_window(above) if above is not None else None
+            if over is not None:
+                window.setLevel_(int(over.level()) + 1)
+            window.orderFrontRegardless()
+        except Exception:
+            logging.exception('Showing the circle\'s black hole failed.')
+
+    def set_center(self, center: QPoint):
+        half = CIRCLE_SCAN_HOLE_WINDOW // 2
+        self.move(QPoint(center) - QPoint(half, half))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            center = QPointF(self.width() / 2.0, self.height() / 2.0)
+            paint_circle_hole(painter, center, self.diameter, self.glow, self.spin, self.pulse)
+            if self.icon is not None and self.icon_left > 0.0:
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                painter.setOpacity(self.icon_left)
+                side = 34.0 * (0.35 + 0.65 * self.icon_left)
+                painter.drawPixmap(QRectF(center.x() - side / 2, center.y() - side / 2, side, side), self.icon,
+                                   QRectF(self.icon.rect()))
+        finally:
+            painter.end()
+
+
+class CircleScanStage(QWidget):
+    """One screen's see-through sheet for the scan: the pictures on their way into the hole and the
+    thin lines around the windows that were taken. Never takes the mouse or the keyboard."""
+
+    def __init__(self):
+        super().__init__(None)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint
+                            | Qt.WindowType.WindowDoesNotAcceptFocus | Qt.WindowType.WindowTransparentForInput)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        if hasattr(Qt.WidgetAttribute, 'WA_MacAlwaysShowToolWindow'):
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.copies = []     # {'image', 'rect' (QRectF, global), 't', 'plain'}
+        self.marks = []      # {'rect' (QRectF, global), 'alpha' 0 … 1}
+        self.hole = QPointF()
+        self.accent = QColor(10, 132, 255)
+        self._native = False
+
+    def present(self, geometry: QRect, below=None):
+        if self.geometry() != geometry:
+            self.setGeometry(geometry)
+        if not self.isVisible():
+            self.show()
+        window = _broccoli_own_ns_window(self) if AppKit is not None and objc is not None else None
+        if window is None:
+            return
+        try:
+            if not self._native:
+                self._native = True
+                configure_nonactivating_ns_window(window)
+                window.setIgnoresMouseEvents_(True)
+                window.setHasShadow_(False)
+            under = _broccoli_own_ns_window(below) if below is not None else None
+            if under is not None:
+                window.setLevel_(max(0, int(under.level()) - 2))
+            window.orderFrontRegardless()
+        except Exception:
+            logging.exception('Showing the stage of the circle\'s scan failed.')
+
+    def copy_area(self, copy: dict) -> QRect:
+        """What a copy can touch on this sheet (widget coordinates): from where it lies to the hole."""
+        area = QRectF(copy['rect']).united(QRectF(self.hole.x() - 60, self.hole.y() - 60, 120, 120))
+        return area.adjusted(-40, -40, 40, 40).translated(-self.x(), -self.y()).toAlignedRect()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.translate(-self.x(), -self.y())   # draw in the screen's coordinates
+            for mark in self.marks:
+                if mark['alpha'] <= 0.0:
+                    continue
+                color = QColor(self.accent)
+                color.setAlphaF(max(0.0, min(1.0, mark['alpha'])))
+                painter.setPen(QPen(color, 2.0))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(QRectF(mark['rect']).adjusted(1, 1, -1, -1), CIRCLE_SCAN_MARK_RADIUS, CIRCLE_SCAN_MARK_RADIUS)
+            for copy in self.copies:
+                paint_circle_scan_copy(painter, copy['image'], copy['rect'], self.hole, copy['t'], copy['plain'])
+        finally:
+            painter.end()
+
+
+class CircleScan(QObject):
+    """The scan (style book 5.1.13): from the right button dragged off the circle to the circle
+    back in its place. It moves the circle's window with the pointer (so the tray's cards follow),
+    shows the black hole over it, lets the stage draw what is swallowed, puts a card into the tray
+    for each thing, and afterwards has the windows' text read in the background."""
+
+    def __init__(self, main, circle, cursor_pos=None, clock=None):
+        super().__init__(main)
+        self._main = main
+        self._circle = circle
+        self._cursor_pos = cursor_pos or (lambda: QCursor.pos())
+        self._clock = clock or time.monotonic
+        self.state = 'idle'            # idle / open / closing
+        self.cancelled = False
+        self.home = QPoint()
+        self.glow = 0.0
+        self.spin = 0.0
+        self.windows = []
+        self.taken = set()             # window ids
+        self.files = set()             # paths
+        self.added = []                # the cards this scan put into the tray (their keys)
+        self.pending = []              # what is on its way into the hole: {'item', 'copy' or None, 'start', 'seconds', 'read'}
+        self.to_read = []              # (key, pid, rect, title, shot path) for the background reading
+        self._since = 0.0
+        self._last = 0.0
+        self._last_pointer = QPoint()
+        self._pulse_at = None
+        self._released = 0
+        self._marks_since = None
+        self._file_busy = False
+        self._file_asked = QPoint(-9999, -9999)
+        self._hole = None
+        self._stage = None
+        self.signals = CircleScanSignals(self)
+        self.signals.file_found.connect(self._on_file_found)
+        self.signals.window_shot.connect(self._on_window_shot)
+        self.signals.window_read.connect(self._on_window_read)
+        # what can be replaced in a test (nothing real is asked then)
+        self.window_source = circle_scan_window_list
+        self.capture = circle_scan_capture_window
+        self.file_at = circle_scan_file_at
+        self.finder_pid = circle_scan_finder_pid
+        self.read_window = circle_scan_read_window
+        self.recognize = circle_scan_recognize_text
+        self.buttons_down = mouse_button_held_anywhere
+        self.reduced = CircleDrip.motion_reduced
+        self._timer = QTimer(self)
+        self._timer.setInterval(CIRCLE_SCAN_TICK_MS)
+        self._timer.timeout.connect(self.tick)
+
+    # ── state ──
+    def active(self) -> bool:
+        return self.state != 'idle'
+
+    def hole_window(self) -> CircleHoleWindow:
+        if self._hole is None:
+            self._hole = CircleHoleWindow()
+        return self._hole
+
+    def stage(self) -> CircleScanStage:
+        if self._stage is None:
+            self._stage = CircleScanStage()
+        return self._stage
+
+    def center(self) -> QPoint:
+        middle = COLLAPSED_WINDOW_MARGIN + COLLAPSED_BUTTON_SIZE // 2
+        return self._circle.pos() + QPoint(middle, middle)
+
+    # ── start ──
+    def begin(self) -> bool:
+        main = self._main
+        if self.state != 'idle' or not main._collapsed_button_shown() or main._collapsed_drag.pressed:
+            return False
+        main._close_collapsed_launcher()
+        for name in ('_circle_drip', '_circle_answer'):
+            part = getattr(main, name, None)
+            if part is not None and part.active():
+                part.close(immediate=True)
+        main._stop_collapsed_slide()
+        main._stop_collapsed_body()
+        main._collapsed_hover_since = None
+        main._collapsed_hover_need_leave = True
+        self.state = 'open'
+        self.cancelled = False
+        self.home = QPoint(self._circle.pos())
+        self.windows = list(self.window_source() or [])
+        self.taken, self.files, self.added, self.pending, self.to_read = set(), set(), [], [], []
+        now = self._clock()
+        self._since = self._last = now
+        self._last_pointer = QPoint(self._cursor_pos())
+        self._pulse_at = None
+        self._released = 0
+        self._marks_since = None
+        self._file_busy = False
+        self._file_asked = QPoint(-9999, -9999)
+        self.glow = 0.0
+        hole = self.hole_window()
+        hole.icon = main._collapsed_icon_pixmap(34)
+        hole.icon_left = 1.0
+        hole.present(self.center(), above=self._circle)
+        stage = self.stage()
+        stage.copies, stage.marks = [], []
+        stage.accent = QColor(QApplication.palette().color(QPalette.ColorRole.Highlight))
+        screen = QGuiApplication.screenAt(self.center()) or self._circle.screen() or QGuiApplication.primaryScreen()
+        stage.present(screen.geometry(), below=self._circle)
+        self._timer.start()
+        self.tick()
+        return True
+
+    # ── every frame ──
+    def tick(self):
+        now = self._clock()
+        dt = max(0.0, min(0.1, now - self._last))
+        self._last = now
+        main, hole, stage = self._main, self.hole_window(), self.stage()
+        plain = bool(self.reduced())
+        if self.state == 'open':
+            if not main._collapsed_button_shown():
+                self.finish(cancelled=True)
+                return
+            pointer = QPoint(self._cursor_pos())
+            elapsed = now - self._since
+            self.glow = min(1.0, elapsed / CIRCLE_SCAN_OPEN_S)
+            grown = spring_progress(elapsed, *CIRCLE_SCAN_OPEN_SPRING) if elapsed < 1.0 else 1.0
+            hole.diameter = COLLAPSED_BUTTON_SIZE + (CIRCLE_SCAN_HOLE - COLLAPSED_BUTTON_SIZE) * grown
+            hole.icon_left = max(0.0, 1.0 - self.glow / 0.6)
+            middle = COLLAPSED_WINDOW_MARGIN + COLLAPSED_BUTTON_SIZE // 2
+            self._circle.move(main._clamp_collapsed_button_pos(pointer - QPoint(middle, middle), pointer))
+            speed = (pointer - self._last_pointer).manhattanLength() / dt if dt > 0 else 0.0
+            self._last_pointer = pointer
+            if not plain:
+                self.spin += dt * CIRCLE_SCAN_SPIN * (1.0 + (CIRCLE_SCAN_SPIN_FAST - 1.0) * min(1.0, speed / 1200.0))
+            self._look_under(pointer, now, plain)
+            # the release that never reached the circle (it is only read): the button up for two frames
+            self._released = 0 if self.buttons_down() else self._released + 1
+            if self._released >= 2 and elapsed > 0.15:
+                self.finish()
+        elif self.state == 'closing':
+            left = max(0.0, 1.0 - (now - self._since) / CIRCLE_SCAN_CLOSE_S)
+            self.glow = left
+            hole.diameter = COLLAPSED_BUTTON_SIZE + (CIRCLE_SCAN_HOLE - COLLAPSED_BUTTON_SIZE) * left
+            hole.icon_left = max(0.0, 1.0 - left / 0.6)
+            if not plain:
+                self.spin += dt * CIRCLE_SCAN_SPIN * left
+        center = self.center()
+        hole.glow, hole.spin = self.glow, self.spin
+        hole.pulse = 0.0
+        if self._pulse_at is not None:
+            gone = (now - self._pulse_at) / CIRCLE_SCAN_PULSE_S
+            hole.pulse = max(0.0, 1.0 - gone)
+            if gone >= 1.0:
+                self._pulse_at = None
+        hole.set_center(center)
+        hole.update()
+        self._circle.setWindowOpacity(max(COLLAPSED_UNDER_BODY_OPACITY, 1.0 - self.glow * 2.0))
+        # what is on its way in
+        dirty = QRect()
+        for copy in stage.copies:
+            dirty = dirty.united(stage.copy_area(copy))
+        stage.hole = QPointF(center)
+        for entry in list(self.pending):
+            if entry['start'] is None:   # its picture is still being taken
+                if now - entry.get('asked', now) > CIRCLE_SCAN_SHOT_WAIT_S:
+                    self.pending.remove(entry)
+                continue
+            t = (now - entry['start']) / entry['seconds']
+            copy = entry['copy']
+            if copy is not None:
+                lift = CIRCLE_SCAN_LIFT_S / entry['seconds'] if entry['lift'] else 0.0
+                copy['t'] = 0.0 if t <= lift else min(1.0, (t - lift) / max(0.001, 1.0 - lift))
+                copy['plain'] = plain
+            if t >= 1.0:
+                self.pending.remove(entry)
+                if copy is not None and copy in stage.copies:
+                    stage.copies.remove(copy)
+                self._swallowed(entry, now)
+        for copy in stage.copies:
+            dirty = dirty.united(stage.copy_area(copy))
+        if self._marks_since is not None:   # the scan is over: the lines around the windows fade
+            alpha = max(0.0, 1.0 - (now - self._marks_since) / CIRCLE_SCAN_MARK_FADE_S)
+            for mark in stage.marks:
+                mark['alpha'] = alpha
+                dirty = dirty.united(QRectF(mark['rect']).translated(-stage.x(), -stage.y()).toAlignedRect())
+        if not dirty.isEmpty():
+            stage.update(dirty)
+        if self.state == 'closing' and self.glow <= 0.0 and not self.pending and not main._collapsed_slide_running() \
+                and (self._marks_since is None or now - self._marks_since >= CIRCLE_SCAN_MARK_FADE_S):
+            self._closed()
+
+    def _look_under(self, pointer: QPoint, now: float, plain: bool):
+        window = circle_scan_window_at(self.windows, pointer)
+        finder = self.finder_pid()
+        if window is None or (finder and int(window.get('pid', 0) or 0) == finder):
+            # the desktop or a Finder window: which file is here is asked in the background, one
+            # question at a time, when the pointer has moved on. (A Finder window itself is taken
+            # too, below: its picture and the folder it shows.)
+            if (not self._file_busy and len(self.files) < CIRCLE_SCAN_MAX_FILES
+                    and (pointer - self._file_asked).manhattanLength() >= 6):
+                self._file_busy = True
+                self._file_asked = QPoint(pointer)
+                threading.Thread(target=self._ask_file, args=(pointer.x(), pointer.y()), daemon=True,
+                                 name='circle-scan-file').start()
+        if window is None or window['id'] in self.taken or len(self.taken) >= CIRCLE_SCAN_MAX_WINDOWS:
+            return
+        self.taken.add(window['id'])
+        self._take_window(window, now, plain)
+
+    def _take_window(self, window: dict, now: float, plain: bool):
+        """The pointer entered this window: the line around it at once; its picture is taken and
+        kept in the background (a big window takes a tenth of a second or two — the hole must not
+        stop following the pointer for that), then flies."""
+        stage = self.stage()
+        rect = QRectF(window['rect'])
+        stage.marks.append({'rect': rect, 'alpha': 1.0})
+        stage.update(rect.translated(-stage.x(), -stage.y()).toAlignedRect())
+        self.pending.append({'item': None, 'copy': None, 'start': None, 'asked': now, 'seconds': CIRCLE_SCAN_SWALLOW_S,
+                             'lift': True, 'window': int(window['id']), 'rect': rect, 'plain': plain,
+                             'read': (int(window.get('pid', 0) or 0), QRect(window['rect']), str(window.get('title', '') or ''))})
+        threading.Thread(target=self._shoot_window, args=(dict(window),), daemon=True, name='circle-scan-shot').start()
+
+    def _shoot_window(self, window: dict):
+        item, flying = None, None
+        try:
+            name = circle_scan_card_name(window.get('app', ''), window.get('title', ''))
+            image = self.capture(window['id'])
+            if image is not None and not image.isNull():
+                item = _circle_tray_save_image(circle_scan_fit_shot(image), name)
+                # the picture that flies: at the window's size in points (it only gets smaller from here)
+                rect = window['rect']
+                flying = image.scaled(max(1, int(rect.width())), max(1, int(rect.height())), Qt.AspectRatioMode.IgnoreAspectRatio,
+                                      Qt.TransformationMode.SmoothTransformation)
+            else:
+                item = _circle_tray_save_text(name)   # no picture can be taken: a note with the window's name
+            if item is not None:
+                item['name'] = name + ('.png' if flying is not None else '.txt')
+                item['scan'] = {'app': str(window.get('app', '') or ''), 'title': str(window.get('title', '') or ''),
+                                'doc': '', 'url': '', 'text': ''}
+        except Exception:
+            logging.exception('Taking a window for the circle\'s scan failed.')
+        try:
+            self.signals.window_shot.emit(int(window['id']), item, flying)
+        except RuntimeError:
+            pass
+
+    def _on_window_shot(self, window_id: int, item, flying):
+        entry = next((e for e in self.pending if e.get('window') == window_id and e['start'] is None), None)
+        if entry is None or item is None or self.cancelled or self.state == 'idle':
+            if entry is not None:
+                self.pending.remove(entry)
+            if item is not None:
+                circle_tray_discard_own(item)
+            return
+        entry['item'] = item
+        entry['start'] = self._clock()
+        if flying is not None:
+            entry['copy'] = {'image': flying, 'rect': entry['rect'], 't': 0.0, 'plain': entry['plain']}
+            self.stage().copies.append(entry['copy'])
+
+    def _ask_file(self, x: int, y: int):
+        found = None
+        try:
+            found = self.file_at(x, y)
+        except Exception:
+            logging.exception('Asking which file is under the pointer failed.')
+        try:
+            self.signals.file_found.emit(str(found[0]) if found else '', found[1] if found else None)
+        except RuntimeError:
+            pass
+
+    def _on_file_found(self, path: str, frame):
+        self._file_busy = False
+        if self.state != 'open' or not path or path in self.files or len(self.files) >= CIRCLE_SCAN_MAX_FILES:
+            return
+        self.files.add(path)
+        item = {'kind': 'file', 'path': path, 'name': os.path.basename(path) or path, 'own': False}
+        copy = None
+        if isinstance(frame, QRect) and not frame.isEmpty():
+            side = CIRCLE_SCAN_FILE_ICON
+            icon = circle_tray_file_icon(path, int(side))
+            if icon is not None and not icon.isNull():
+                middle = QPointF(frame.center())
+                copy = {'image': icon, 'rect': QRectF(middle.x() - side / 2, middle.y() - side / 2, side, side), 't': 0.0,
+                        'plain': bool(self.reduced())}
+                self.stage().copies.append(copy)
+        self.pending.append({'item': item, 'copy': copy, 'start': self._clock(), 'seconds': CIRCLE_SCAN_FILE_S, 'lift': False,
+                             'read': None})
+
+    def _swallowed(self, entry: dict, now: float):
+        """It has gone in: the hole swells, its card rises in the tray."""
+        self._pulse_at = now
+        tray = getattr(self._main, '_circle_tray', None)
+        if tray is None or self.cancelled:
+            circle_tray_discard_own(entry['item'])
+            return
+        key = circle_tray_item_key(entry['item'])
+        tray.add_items([entry['item']])
+        if tray.item(key) is None:
+            return
+        self.added.append(key)
+        if entry.get('read') is not None:
+            pid, rect, title = entry['read']
+            self.to_read.append((key, pid, rect, title, str(entry['item'].get('path', '') or '')))
+
+    # ── end ──
+    def finish(self, cancelled: bool = False):
+        """The right button came up (or Esc: `cancelled` — what this scan took goes out of the tray
+        again): the hole turns back into the circle while the circle slides home."""
+        if self.state != 'open':
+            return
+        self.state = 'closing'
+        self.cancelled = bool(cancelled)
+        self._since = self._clock()
+        self._marks_since = self._since
+        main = self._main
+        if main._collapsed_button_shown():
+            main._slide_collapsed_button(self.home, ms=int(CIRCLE_SCAN_CLOSE_S * 1000))
+        else:
+            self._circle.move(self.home)
+        if self.cancelled:
+            tray = getattr(main, '_circle_tray', None)
+            for key in self.added:
+                if tray is not None:
+                    tray.remove(key)
+            self.added, self.to_read = [], []
+
+    def cancel(self):
+        self.finish(cancelled=True)
+
+    def _closed(self):
+        self._timer.stop()
+        self.state = 'idle'
+        main = self._main
+        self._circle.move(self.home)
+        if main._collapsed_button_shown() and not main._circle_fade_running():
+            self._circle.setWindowOpacity(1.0)
+        if self._hole is not None:
+            self._hole.hide()
+        if self._stage is not None:
+            self._stage.copies, self._stage.marks = [], []
+            self._stage.hide()
+        main._collapsed_hover_since = None
+        main._collapsed_hover_need_leave = main._pointer_over_collapsed_button()
+        if self.cancelled or not self.added:
+            return
+        jobs, self.to_read = list(self.to_read), []
+        if jobs:
+            threading.Thread(target=self._read_windows, args=(jobs,), daemon=True, name='circle-scan-read').start()
+        drip = getattr(main, '_circle_drip', None)
+        if drip is not None and not drip.active() and main._collapsed_button_shown():
+            drip.toggle()   # scanned to ask about it: the input box drips out (5.1.7)
+
+    def _read_windows(self, jobs: list):
+        """In the background: each scanned window's file path / address / text; the words of its
+        picture when it hands over no text. The text is kept as a file next to the picture."""
+        for key, pid, rect, title, shot in jobs:
+            found = {}
+            try:
+                found = dict(self.read_window(pid, rect, title) or {})
+                text = str(found.get('text', '') or '').strip()
+                if len(text) < 40 and shot.lower().endswith('.png') and os.path.isfile(shot):
+                    recognised = str(self.recognize(shot) or '').strip()
+                    if len(recognised) > len(text):
+                        text = recognised
+                found['text'] = ''
+                if text and os.path.isfile(shot):
+                    text_path = os.path.splitext(shot)[0] + '.txt'
+                    with open(text_path, 'w', encoding='utf-8') as handle:
+                        handle.write(text[:CIRCLE_SCAN_TEXT_MAX])
+                    found['text'] = text_path
+            except Exception:
+                logging.exception('Reading a scanned window failed.')
+            try:
+                self.signals.window_read.emit(key, found)
+            except RuntimeError:
+                return
+
+    def _on_window_read(self, key: str, found: dict):
+        tray = getattr(self._main, '_circle_tray', None)
+        item = tray.item(key) if tray is not None else None
+        if item is None or not isinstance(item.get('scan'), dict):
+            return
+        for name in ('doc', 'url', 'text'):
+            value = str((found or {}).get(name, '') or '')
+            if value:
+                item['scan'][name] = value
+        tray._save()
+
+
+class CircleDrip(QObject):
+    """The circle's input box and its water drop (style book 5.1.7). A right click on the circle opens
+    it (at the screen's bottom the circle rises first to make room); Esc, a right click again, the
+    circle going away close it — what was typed stays for next time; Return sends (`submitted`; for
+    now the drop just goes back into the circle — step 2 hands it to the Agent). `window` = the main
+    window, `circle` = the circle's window. States: closed → (floating →) opening → open → closing."""
+    submitted = pyqtSignal(str)
+    FRAME_MS = 16
+
+    def __init__(self, window, circle):
+        super().__init__(window)
+        self._main = window
+        self._circle = circle
+        self.state = 'closed'
+        self.draft = ''
+        self.target = QRectF()
+        self._stage = None
+        self._input = None
+        self._float_from = None      # where the circle was before it rose to make room
+        self._close_after_open = False
+        self._open_after_close = False
+        self.attach = True          # the tray's things go with the question (switched back on each time it opens)
+        self._mode = 'open'
+        self._t0 = None
+        self._fade_anim = None
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.setInterval(self.FRAME_MS)
+        self._timer.timeout.connect(self._on_frame)
+
+    # ── state ───────────────────────────────────────────────────────────────
+    def active(self) -> bool:
+        return self.state != 'closed'
+
+    def animating(self) -> bool:
+        return self.state in ('floating', 'opening', 'closing')
+
+    def input_window(self) -> CircleDripInput:
+        if self._input is None:
+            box = self._input = CircleDripInput()
+            box.submitted.connect(self._on_submitted)
+            box.cancelled.connect(lambda: self.close())
+            box.clip.toggled.connect(self._on_clip_toggled)
+        return self._input
+
+    def stage_window(self) -> CircleDripStage:
+        if self._stage is None:
+            self._stage = CircleDripStage()
+        return self._stage
+
+    def _on_clip_toggled(self, on: bool):
+        self.attach = bool(on)
+
+    def refresh_clip(self):
+        """The paperclip mark (style book 5.1.9): how many of the tray's things would go with a question
+        sent now (the main window knows: none twice into the same conversation)."""
+        if self._input is None:
+            return
+        try:
+            count = int(self._main._circle_question_attach_count())
+        except Exception:
+            count = 0
+        self._input.set_clip(count, self.attach)
+
+    def circle_rect(self) -> QRectF:
+        margin = COLLAPSED_WINDOW_MARGIN
+        pos = self._circle.pos()
+        return QRectF(pos.x() + margin, pos.y() + margin, COLLAPSED_BUTTON_SIZE, COLLAPSED_BUTTON_SIZE)
+
+    def _area(self) -> QRectF:
+        circle = self.circle_rect()
+        screen = (QGuiApplication.screenAt(circle.center().toPoint()) or self._circle.screen()
+                  or QGuiApplication.primaryScreen())
+        return QRectF(screen.availableGeometry())
+
+    @staticmethod
+    def motion_reduced() -> bool:
+        if AppKit is None:
+            return False
+        try:
+            return bool(AppKit.NSWorkspace.sharedWorkspace().accessibilityDisplayShouldReduceMotion())
+        except Exception:
+            return False
+
+    def _drop_wanted(self) -> bool:
+        """The drop needs the system's glass container (and motion): otherwise the box just fades."""
+        if not liquid_glass_available() or self.motion_reduced() or objc is None or BroccoliGlassContainerView is None:
+            return False
+        try:
+            objc.lookUpClass('NSGlassEffectContainerView')
+        except Exception:
+            return False
+        return True
+
+    def _face(self):
+        try:
+            return render_glass_foreground(self._circle.button)
+        except Exception:
+            return None
+
+    def _set_circle_seen(self, seen: bool):
+        """The real circle steps out of sight under the drop's stand-in (not 0: a click still reaches it)."""
+        try:
+            if seen:
+                launcher = getattr(self._main, '_collapsed_launcher', None)
+                if not self._main._collapsed_body_active() and not (launcher is not None and launcher.isVisible()):
+                    self._circle.setWindowOpacity(1.0)
+            else:
+                self._circle.setWindowOpacity(COLLAPSED_UNDER_BODY_OPACITY)
+        except RuntimeError:
+            pass
+
+    # ── opening ─────────────────────────────────────────────────────────────
+    def toggle(self):
+        if self.state == 'closed':
+            self.open()
+        elif self.state in ('open', 'opening', 'floating'):
+            self.close()
+        elif self.state == 'closing':
+            self._open_after_close = True   # asked for again while it goes back in: out again right after
+
+    def open(self):
+        if self.state != 'closed' or not self._main._collapsed_button_shown():
+            return
+        circle, area = self.circle_rect(), self._area()
+        top = circle_drip_float_top(circle, area)
+        if top is not None:   # at the screen's bottom: the circle rises first (style book 5.1.7)
+            self.state = 'floating'
+            self._float_from = QPoint(self._circle.pos())
+            risen = QPoint(self._circle.pos().x(), int(round(self._circle.pos().y() + (top - circle.top()))))
+            self._main._slide_collapsed_button(risen, done=self._begin_open, ms=CIRCLE_DRIP_FLOAT_MS,
+                                               easing=QEasingCurve.Type.OutBack)
+            return
+        self._float_from = None
+        self.state = 'opening'
+        self._begin_open()
+
+    def _begin_open(self):
+        if self.state not in ('floating', 'opening'):
+            return
+        if not self._main._collapsed_button_shown():
+            self._finish_close(immediate=True)
+            return
+        self.state = 'opening'
+        dark = is_dark_theme(app)
+        circle, area = self.circle_rect(), self._area()
+        box = self.input_window()
+        box.set_dark(dark)
+        self.attach = True       # (each time it opens: the tray's things go along unless switched off again)
+        self.refresh_clip()
+        if box.edit.toPlainText() != self.draft:
+            box.edit.setPlainText(self.draft)
+        box.edit.moveCursor(PyQt6.QtGui.QTextCursor.MoveOperation.End)
+        room = area.bottom() - CIRCLE_DRIP_SCREEN_MARGIN - (circle.bottom() + CIRCLE_DRIP_GAP)
+        box.set_max_height(room)
+        self.target = circle_drip_input_rect(circle, area, min(box.wanted_height(), max(CIRCLE_DRIP_INPUT_H, room)))
+        box.setGeometry(self.target.toAlignedRect())
+        if not self._drop_wanted():
+            box.setWindowOpacity(0.0)
+            box.present()
+            self.state = 'open'
+            self._fade(box, 1.0)
+            return
+        stage = self.stage_window()
+        stage.cover(circle.united(self.target))
+        stage.present(self._face(), dark)
+        if not stage.glass_ready():   # (the glass could not be made: fade)
+            stage.hide()
+            box.setWindowOpacity(0.0)
+            box.present()
+            self.state = 'open'
+            self._fade(box, 1.0)
+            return
+        stage.show_shapes(circle, None)
+        QTimer.singleShot(CIRCLE_DRIP_GLASS_DELAY_MS, lambda: self._run('open'))
+
+    def _run(self, mode: str):
+        if self.state != ('opening' if mode == 'open' else 'closing'):
+            return
+        if mode == 'close' and self._input is not None:
+            self._input.hide()   # the stage shows the same capsule now
+        self._set_circle_seen(False)
+        self._mode = mode
+        self._t0 = time.monotonic()
+        self._timer.start()
+        self._on_frame()
+
+    def _on_frame(self):
+        if self._t0 is None or self._stage is None:
+            self._timer.stop()
+            return
+        t = time.monotonic() - self._t0
+        circle = self.circle_rect()
+        if self._mode == 'open':
+            ball, drop = circle_drip_open_shapes(t, circle, self.target)
+            self._stage.show_shapes(ball, drop)
+            if t >= CIRCLE_DRIP_OPEN_S:
+                self._timer.stop()
+                self._finish_open()
+        else:
+            ball, drop = circle_drip_close_shapes(t, circle, self.target)
+            self._stage.show_shapes(ball, drop)
+            if t >= CIRCLE_DRIP_CLOSE_S:
+                self._timer.stop()
+                self._finish_close()
+
+    def _finish_open(self):
+        """The drop has become the box: the real box comes in exactly there, then the stage goes."""
+        box = self.input_window()
+        box.setGeometry(self.target.toAlignedRect())
+        box.setWindowOpacity(0.0)
+        box.present()
+        self.state = 'open'
+        # the drop and the box are the same shape now: cross-fade (two glasses over each other look darker).
+        # The real circle comes back at once under its identical stand-in (two half-faded icons looked pale).
+        self._set_circle_seen(True)
+        pairs = [(box, 0.0, 1.0)]
+        if self._stage is not None:
+            pairs.append((self._stage, 1.0, 0.0))
+        self._crossfade(pairs, CIRCLE_DRIP_HANDOVER_MS, done=self._stage_away)
+
+    def _stage_away(self):
+        if self.state in ('opening', 'closing'):
+            return   # (it moved on meanwhile: the stage is in use)
+        self._set_circle_seen(True)
+        if self._input is not None:
+            self._input.setWindowOpacity(1.0)
+        if self._stage is not None:
+            self._stage.hide()
+            self._stage.setWindowOpacity(1.0)
+        if self._close_after_open:
+            self._close_after_open = False
+            QTimer.singleShot(10, self.close)
+
+    # ── closing ─────────────────────────────────────────────────────────────
+    def close(self, sent: bool = False, immediate: bool = False):
+        """Back into the circle. What was typed stays (unless it was sent)."""
+        if self.state == 'closed':
+            return
+        if self._input is not None and not sent:
+            self.draft = self._input.edit.toPlainText()
+        if immediate:
+            self._finish_close(immediate=True)
+            return
+        if self.state == 'floating':
+            self._main._stop_collapsed_slide()
+            self._finish_close()
+            return
+        if self.state == 'opening':
+            self._close_after_open = True   # (it closes as soon as it is the box)
+            return
+        if self.state == 'closing':
+            return
+        self.state = 'closing'
+        box = self._input
+        if box is None or not box.isVisible():
+            self._finish_close()
+            return
+        self.target = QRectF(box.geometry())   # (it may have grown)
+        if not self._drop_wanted() or not self._main._collapsed_button_shown():
+            self._fade(box, 0.0, done=self._finish_close)
+            return
+        stage = self.stage_window()
+        circle = self.circle_rect()
+        stage.cover(circle.united(self.target))
+        stage.setWindowOpacity(0.0)
+        stage.present(self._face(), is_dark_theme(app))
+        if not stage.glass_ready():
+            stage.hide()
+            stage.setWindowOpacity(1.0)
+            self._fade(box, 0.0, done=self._finish_close)
+            return
+        stage.show_shapes(circle, self.target)
+
+        def handover(me=self, stage_=stage, box_=box):
+            if me.state != 'closing':
+                return
+            # the real circle steps away only once its stand-in is whole (in _run)
+            me._crossfade([(stage_, 0.0, 1.0), (box_, 1.0, 0.0)], CIRCLE_DRIP_HANDOVER_MS, done=lambda: me._run('close'))
+
+        QTimer.singleShot(CIRCLE_DRIP_GLASS_DELAY_MS, handover)
+
+    def _finish_close(self, immediate: bool = False):
+        self._timer.stop()
+        self._t0 = None
+        self._stop_fade()
+        self._close_after_open = False
+        if self._input is not None:
+            self._input.hide()
+            self._input.setWindowOpacity(1.0)
+        if self._stage is not None:
+            self._stage.hide()
+            self._stage.setWindowOpacity(1.0)
+        self.state = 'closed'
+        self._set_circle_seen(True)
+        again, self._open_after_close = self._open_after_close, False
+        if again and not immediate:
+            QTimer.singleShot(0, self.open)
+            return   # (the circle stays risen: the box comes straight out again)
+        back, self._float_from = self._float_from, None
+        try:
+            if back is not None and self._main._collapsed_button_shown():
+                if immediate:
+                    self._main._stop_collapsed_slide()
+                    self._circle.move(back)
+                else:
+                    self._main._slide_collapsed_button(back, ms=CIRCLE_DRIP_RETURN_MS)
+        except RuntimeError:
+            pass
+
+    def _on_submitted(self, text: str):
+        text = str(text or '')
+        if not text.strip():
+            return
+        self.draft = ''
+        if self._input is not None:
+            self._input.edit.clear()
+        self.close(sent=True)       # first: who hears `submitted` sees the box already on its way back
+        self.submitted.emit(text)
+
+    # ── fading (reduce motion / no glass) ───────────────────────────────────
+    def _stop_fade(self):
+        anim = self._fade_anim
+        if anim is not None:
+            anim.stop()
+        self._fade_anim = None
+
+    def _fade(self, widget, to: float, done=None):
+        self._stop_fade()
+        anim = QPropertyAnimation(widget, b'windowOpacity', self)
+        anim.setDuration(CIRCLE_DRIP_FADE_MS)
+        anim.setStartValue(float(widget.windowOpacity()))
+        anim.setEndValue(float(to))
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        if done is not None:
+            anim.finished.connect(done)
+        self._fade_anim = anim
+        anim.start()
+
+    def _crossfade(self, pairs, ms: int, done=None):
+        """Several windows' opacities moving together: [(window, from, to)]."""
+        self._stop_fade()
+        anim = QVariantAnimation(self)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(max(1, int(ms)))
+
+        def step(value, pairs_=list(pairs)):
+            value = float(value)
+            for widget, start, end in pairs_:
+                try:
+                    widget.setWindowOpacity(start + (end - start) * value)
+                except RuntimeError:
+                    pass
+
+        anim.valueChanged.connect(step)
+        if done is not None:
+            anim.finished.connect(done)
+        self._fade_anim = anim
+        step(0.0)
+        anim.start()
+
+    def theme_changed(self):
+        dark = is_dark_theme(app)
+        if self._input is not None:
+            self._input.set_dark(dark)
+        if self._stage is not None:
+            self._stage.set_dark(dark)
+
+
 class BranchGraphWidget(QWidget):
     """The question branches as a map (style book 5.7.3): left to right, one column per level, the
     top-level questions down the left; glass capsules joined by curves. Same clicks as the list."""
@@ -79814,6 +87720,23 @@ class CoordinatorPool:
                     return dict(entry)
         return None
 
+    def task_changes(self, conversation_path='', run_id='') -> list:
+        """What a conversation's AI work created or changed (oldest first): the recorded changes of
+        that conversation or that run, written by a task (not by the user, not by other programs)."""
+        conversation_path, run_id = str(conversation_path or '').strip(), str(run_id or '').strip()
+        if not conversation_path and not run_id:
+            return []
+        with self._lock:
+            items = list(self._changes)
+        out = []
+        for entry in items:
+            if entry.get('origin') not in WRITE_GATE_TASK_ORIGINS or entry.get('action') not in ('create', 'modify'):
+                continue
+            if (conversation_path and conversation_path in (entry.get('conversation_path'), entry.get('owner'))) or (
+                    run_id and entry.get('run_id') == run_id):
+                out.append(dict(entry))
+        return out
+
     # ── tasks: one per conversation ──
     def upsert_task(self, conversation_path, **fields) -> dict:
         key = str(conversation_path or '').strip()
@@ -80364,6 +88287,93 @@ class WriteGate:
             self._notify(entry)
         return True, None, used
 
+    # ── the editor's writes of Word / Excel / PowerPoint files (EditorStore._write_office) ──
+    def write_office_file(self, path, kind, *, text=None, data=None, expect=None, restore=None):
+        """(ok, error, text view after) — write an office file in place, locked and recorded like
+        a text write. data: the file's new bytes (what the editing component returned). text: a
+        text view to bring the file to — restore(text) may hand back kept bytes with exactly that
+        text (a history version), otherwise the changed lines are written into the document.
+        expect: write only if the file's text view is exactly this now. The record's before / after
+        are the text views (so the change shows as a diff); the backup is the file itself."""
+        context = current_write_gate_context()
+        path = write_gate_norm_path(path)
+        name = os.path.basename(path) or path
+        owner = context.get('owner') or ('user' if context.get('origin') == 'user' else 'editor')
+        context = dict(context, owner=owner)
+        timeout = (WRITE_GATE_GUI_WAIT_S if threading.current_thread() is threading.main_thread()
+                   else WRITE_GATE_WORKER_WAIT_S)
+        hook = self.reservation_hook
+        if callable(hook) and context.get('origin') != 'user':
+            why = hook(owner, path, timeout, None)
+            if why:
+                return False, ('reserved', why), None
+        token, why = self.acquire([path], owner, 'write', timeout)
+        if not token:
+            return False, ('busy', why), None
+        entry = None
+        try:
+            try:
+                with open(path, 'rb') as handle:
+                    old = handle.read()
+            except Exception as exc:
+                return False, ('read_only' if isinstance(exc, PermissionError) else 'failed', str(exc)), None
+            try:
+                before = office_files.office_text(old, kind)
+            except Exception as exc:
+                return False, ('failed', 'the document cannot be read (%s)' % exc), None
+            if expect is not None and before != str(expect):
+                return False, ('changed', ''), None
+            if data is not None:
+                new = bytes(data)
+                try:
+                    after = office_files.office_text(new, kind)
+                except Exception as exc:
+                    return False, ('failed', 'the edited document cannot be read back (%s)' % exc), None
+            else:
+                wanted = str('' if text is None else text).replace('\r\n', '\n').replace('\r', '\n')
+                new = restore(wanted) if callable(restore) else None
+                after = wanted
+                if new is None:
+                    new, after, why = office_files.office_apply_text(old, kind, wanted)
+                    if new is None:
+                        return False, ('failed', why), None
+            if new == old:
+                return True, None, after
+            lock_file = editor_office_lock_owner(path)
+            if lock_file:
+                return False, ('failed', _tr('it is open in another app (Word, Excel or PowerPoint) right now. '
+                                              'Close it there first.')), None
+            try:
+                # into the same file (its permissions, tags, links stay), like text files
+                with open(path, 'r+b') as handle:
+                    handle.seek(0)
+                    handle.write(new)
+                    handle.truncate()
+                    handle.flush()
+                    try:
+                        os.fsync(handle.fileno())
+                    except OSError:
+                        pass
+            except Exception as exc:
+                try:   # put back what was there: a half-written document does not open
+                    with open(path, 'r+b') as handle:
+                        handle.seek(0)
+                        handle.write(old)
+                        handle.truncate()
+                except Exception:
+                    pass
+                return False, ('read_only' if isinstance(exc, PermissionError) else 'failed', str(exc)), None
+            new_sha = 'b:' + hashlib.sha256(new).hexdigest()
+            entry = self._record(path=path, action='modify', context=context, before=before, after=after,
+                                 before_sha='b:' + hashlib.sha256(old).hexdigest(), after_sha=new_sha,
+                                 backup_data=old if context.get('origin') != 'user' else None)
+            self.mark_written(path, new_sha)     # the watcher compares the file's bytes with this
+        finally:
+            self.release(token)
+        if entry:
+            self._notify(entry)
+        return True, None, after
+
     # ── commands: captured before, compared after ──
     def _expand_targets(self, paths) -> list:
         files = []
@@ -80587,7 +88597,8 @@ class ExternalChangeWatcher:
 
         class _Handler(FileSystemEventHandler):
             def on_any_event(self, event):
-                if getattr(event, 'event_type', '') in ('opened', 'closed_no_write') or getattr(event, 'is_directory', False):
+                # 'attrib' (watchdog 7): only permissions / tags / extended attributes changed, not the content
+                if getattr(event, 'event_type', '') in ('opened', 'closed_no_write', 'attrib') or getattr(event, 'is_directory', False):
                     return
                 for raw in (getattr(event, 'src_path', ''), getattr(event, 'dest_path', '')):
                     if raw:
@@ -82639,7 +90650,8 @@ if WATCHDOG_AVAILABLE:
 
         def on_any_event(self, event):
             try:
-                if getattr(event, 'event_type', '') in ('opened', 'closed_no_write'):
+                # 'attrib' (watchdog 7): only permissions / tags / extended attributes changed, not the content
+                if getattr(event, 'event_type', '') in ('opened', 'closed_no_write', 'attrib'):
                     return
                 touched = [os.path.realpath(str(getattr(event, 'src_path', '') or ''))]
                 if getattr(event, 'dest_path', ''):
@@ -85500,6 +93512,14 @@ class OutputsPanel(SmoothPanelWidget):
         self._force_dark = False
         self._outputs = []
         self._current_output = None
+        # 2026-11-11: the dropdown picks a turn; ‹ › walk through everything generated up to it
+        self._batches = []            # output_batches(self._outputs)
+        self._batch_index = -1
+        self._item_index = -1
+        self._doc_view = None         # read-only page preview of Word / Excel / PowerPoint / PDF files
+        self._doc_generation = 0
+        self._doc_workers = []
+        self._doc_path = ''
         self._preview_dirty = False
         # 没点「完成」的修改按成品 id 暂存：切到别的成品、面板被刷新、关掉再开都不会丢。
         self._drafts = {}
@@ -85529,6 +93549,28 @@ class OutputsPanel(SmoothPanelWidget):
         self.output_combo.setFixedHeight(36)
         self.output_combo.setPopupMaxWidth(360)
         self.output_combo.currentIndexChanged.connect(self._on_output_selected)
+
+        # ‹  name  2 / 4  › : the outputs of the turn picked above (style book 5.7.7)
+        self.pager_row = QWidget(self)
+        self.pager_prev = QPushButton('‹', self.pager_row)
+        self.pager_next = QPushButton('›', self.pager_row)
+        for button, step in ((self.pager_prev, -1), (self.pager_next, 1)):
+            button.setFixedSize(34, 34)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _checked=False, step=step: self.step_item(step))
+        self.pager_prev.setToolTip(_tr('Previous output'))
+        self.pager_next.setToolTip(_tr('Next output'))
+        self.pager_name = QLabel('', self.pager_row)
+        self.pager_name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.pager_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.pager_count = QLabel('', self.pager_row)
+        pager = QHBoxLayout(self.pager_row)
+        pager.setContentsMargins(0, 0, 0, 0)
+        pager.setSpacing(10)
+        pager.addWidget(self.pager_prev)
+        pager.addWidget(self.pager_name, 1)
+        pager.addWidget(self.pager_count)
+        pager.addWidget(self.pager_next)
 
         self.preview_stack = QStackedWidget(self)
         self.text_preview = AnnotatedTextPreview(self)
@@ -85599,7 +93641,8 @@ class OutputsPanel(SmoothPanelWidget):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.copy_button.clicked.connect(lambda: self._emit_current(self.copy_requested))
         self.save_button.clicked.connect(lambda: self._emit_current(self.save_requested))
-        self.open_editor_button.clicked.connect(lambda: self._emit_current(self.open_editor_requested))
+        self.open_editor_button.clicked.connect(
+            lambda: self._emit_current(self.open_editor_requested, allow_empty=True))
         self.context_button.clicked.connect(lambda: self._emit_current(self.context_requested))
 
         self.button_row = QWidget(self)
@@ -85624,6 +93667,9 @@ class OutputsPanel(SmoothPanelWidget):
         for button in (self.capture_frame_button, self.time_comment_button, self.copy_button, self.save_button,
                        self.open_editor_button, self.context_button, self.done_button):
             glass_button(button)
+        for button in (self.pager_prev, self.pager_next):      # round glass buttons, like every round button
+            glass_button(button, radius_for=lambda b: b.height() / 2.0,
+                         dark_for=lambda _b: bool(getattr(self, '_force_dark', False)) or is_dark_theme(app))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -85631,6 +93677,7 @@ class OutputsPanel(SmoothPanelWidget):
         layout.addWidget(self.title_lbl)
         layout.addWidget(self.meta_lbl)
         layout.addWidget(self.output_combo)
+        layout.addWidget(self.pager_row)
         layout.addWidget(self.splitter, 1)
         layout.addWidget(self.button_stack)
         self._apply_theme()
@@ -85684,6 +93731,22 @@ class OutputsPanel(SmoothPanelWidget):
             for button in (self.copy_button, self.save_button, self.open_editor_button, self.context_button, self.capture_frame_button, self.time_comment_button):
                 button.setStyleSheet(_secondary_capsule_stylesheet(dark))
             self.done_button.setStyleSheet(_primary_capsule_stylesheet(dark))
+            disc_bg = '#3A3A3A' if dark else '#F5F6F8'
+            hover = 'rgba(255,255,255,34)' if dark else 'rgba(0,0,0,22)'
+            for button in (self.pager_prev, self.pager_next):
+                button.setStyleSheet(
+                    f'QPushButton {{ border: none; border-radius: 17px; background: {disc_bg}; color: {fg}; '
+                    'font-size: 18px; padding: 0 0 2px 0; }'
+                    f' QPushButton:hover {{ background: {hover}; }}'
+                    f' QPushButton:disabled {{ color: {muted}; }}')
+            self.pager_name.setStyleSheet(
+                f'color: {fg}; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 13px; '
+                'font-weight: 600; background: transparent;')
+            self.pager_count.setStyleSheet(
+                f'color: {muted}; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 12px; '
+                'background: transparent;')
+            if self._doc_view is not None:
+                self._doc_view.set_theme(dark)
             self.button_stack.setFixedHeight(max(self.button_row.sizeHint().height(), self.done_button.sizeHint().height()))
             self.output_combo._force_dark = dark
             self.output_combo._update_style()
@@ -85718,43 +93781,103 @@ class OutputsPanel(SmoothPanelWidget):
         self._outputs = normalize_output_records(outputs)
         self._sync_output_combo_popup_width()
         previous_id = str((self._current_output or {}).get('id', '') or '')
+        previous_turn = (self._batches[self._batch_index]['question_index']
+                         if 0 <= self._batch_index < len(self._batches) else None)
+        self._batches = output_batches(self._outputs)
         self.output_combo.blockSignals(True)
         self.output_combo.clear()
-        selected_index = -1
-        for index, output in enumerate(self._outputs):
-            label = self._label_for_output(output, index)
-            self.output_combo.addItem(label, output.get('id'))
-            if not prefer_latest and output.get('id') == previous_id:
-                selected_index = index
-        if (prefer_latest or selected_index < 0) and self._outputs:
-            selected_index = len(self._outputs) - 1
-        self.output_combo.setCurrentIndex(selected_index)
+        for index, batch in enumerate(self._batches):
+            self.output_combo.addItem(self._label_for_batch(batch, index), batch['question_index'])
+        batch_index = item_index = -1
+        if self._batches:
+            if not prefer_latest and previous_turn is not None:
+                # the turn that was shown, and in it the output that was shown
+                batch_index = next((i for i, batch in enumerate(self._batches)
+                                    if batch['question_index'] == previous_turn), -1)
+                if batch_index >= 0 and previous_id in self._batches[batch_index]['ids']:
+                    item_index = self._batches[batch_index]['ids'].index(previous_id)
+            if batch_index < 0:
+                batch_index = len(self._batches) - 1
+            if item_index < 0:
+                item_index = self._newest_item_index(batch_index)
+        self.output_combo.setCurrentIndex(batch_index)
         self.output_combo.blockSignals(False)
-        if 0 <= selected_index < len(self._outputs):
-            self._current_output = self._outputs[selected_index]
-        else:
-            self._current_output = None
-        if render_preview:
+        self._select(batch_index, item_index, render=render_preview)
+        if not render_preview:
+            self._preview_dirty = True
+
+    def _record_by_id(self, output_id):
+        return next((item for item in self._outputs if str(item.get('id', '') or '') == output_id), None)
+
+    def _newest_item_index(self, batch_index: int) -> int:
+        """In a turn's list, the last output that this very turn generated (else the last one)."""
+        if not (0 <= batch_index < len(self._batches)):
+            return -1
+        batch = self._batches[batch_index]
+        own = [index for index, output_id in enumerate(batch['ids'])
+               if str((self._record_by_id(output_id) or {}).get('question_index', '')) == str(batch['question_index'])]
+        return own[-1] if own else len(batch['ids']) - 1
+
+    def _select(self, batch_index: int, item_index: int, render: bool = True):
+        self._batch_index, self._item_index = batch_index, item_index
+        ids = self._batches[batch_index]['ids'] if 0 <= batch_index < len(self._batches) else []
+        self._current_output = self._record_by_id(ids[item_index]) if 0 <= item_index < len(ids) else None
+        self._refresh_pager()
+        if render:
             self._render_current_output()
             self._preview_dirty = False
-        else:
-            self._preview_dirty = True
+
+    def _refresh_pager(self):
+        ids = self._batches[self._batch_index]['ids'] if 0 <= self._batch_index < len(self._batches) else []
+        self.pager_row.setVisible(bool(ids))
+        self.pager_prev.setEnabled(self._item_index > 0)
+        self.pager_next.setEnabled(0 <= self._item_index < len(ids) - 1)
+        self.pager_count.setText('%d / %d' % (self._item_index + 1, len(ids)) if ids else '')
+        name = output_display_name(self._current_output, max(0, self._item_index)) if self._current_output else ''
+        width = max(40, self.pager_name.width())
+        self.pager_name.setText(self.pager_name.fontMetrics().elidedText(name, Qt.TextElideMode.ElideMiddle, width))
+        self.pager_name.setToolTip(str((self._current_output or {}).get('path', '') or '') or name)
+
+    def select_output(self, output_id) -> bool:
+        """Show one output by its id: in the turn shown if it is listed there, else in the newest
+        turn that lists it."""
+        output_id = str(output_id or '')
+        order = [self._batch_index] + list(range(len(self._batches) - 1, -1, -1))
+        for index in order:
+            if 0 <= index < len(self._batches) and output_id in self._batches[index]['ids']:
+                if index != self.output_combo.currentIndex():
+                    self.output_combo.blockSignals(True)
+                    self.output_combo.setCurrentIndex(index)
+                    self.output_combo.blockSignals(False)
+                self._select(index, self._batches[index]['ids'].index(output_id))
+                return True
+        return False
+
+    def step_item(self, step: int):
+        """‹ › : the previous / next output of the turn shown."""
+        ids = self._batches[self._batch_index]['ids'] if 0 <= self._batch_index < len(self._batches) else []
+        target = self._item_index + int(step)
+        if 0 <= target < len(ids):
+            self._select(self._batch_index, target)
 
     def ensure_preview_rendered(self):
         if self._preview_dirty:
             self._render_current_output()
             self._preview_dirty = False
 
+    def _label_for_batch(self, batch: dict, index: int) -> str:
+        turn = int(batch.get('question_index', -1))
+        question = re.sub(r'\s+', ' ', str(batch.get('question', '') or '')).strip()
+        if len(question) > 42:
+            question = question[:42].rstrip() + '...'
+        if turn < 0:
+            return question or _tr('Outputs')
+        head = _tr('Q{n}').format(n=turn // 2 + 1)
+        return f'{head} · {question}' if question else head
+
     def _label_for_output(self, output: dict, index: int) -> str:
         kind = _tr(str(output.get('kind', 'text')).strip().capitalize())
-        title = str(output.get('title', '')).strip() or _tr('Output {n}').format(n=index + 1)
-        question = str(output.get('question', '')).strip()
-        if question:
-            question = re.sub(r'\s+', ' ', question)
-            if len(question) > 42:
-                question = question[:42].rstrip() + '...'
-            return f'{kind} · {question}'
-        return f'{kind} · {title}'
+        return f'{kind} · {output_display_name(output, index)}'
 
     def _sync_output_combo_popup_width(self):
         width = self.output_combo.width()
@@ -85763,12 +93886,21 @@ class OutputsPanel(SmoothPanelWidget):
         self.output_combo.setPopupMaxWidth(max(180, width))
 
     def _on_output_selected(self, index: int):
-        if 0 <= index < len(self._outputs):
-            self._current_output = self._outputs[index]
-        else:
-            self._current_output = None
-        self._render_current_output()
-        self._preview_dirty = False
+        # another turn: stay on the same output if that turn has it too, else its newest one
+        current_id = str((self._current_output or {}).get('id', '') or '')
+        current_path = os.path.normpath(str((self._current_output or {}).get('path', '') or '')) \
+            if (self._current_output or {}).get('path') else ''
+        item_index = -1
+        if 0 <= index < len(self._batches):
+            ids = self._batches[index]['ids']
+            if current_id in ids:
+                item_index = ids.index(current_id)
+            elif current_path:
+                item_index = next((i for i, output_id in enumerate(ids) if os.path.normpath(
+                    str((self._record_by_id(output_id) or {}).get('path', '') or '')) == current_path), -1)
+            if item_index < 0:
+                item_index = self._newest_item_index(index)
+        self._select(index if 0 <= index < len(self._batches) else -1, item_index)
 
     def _annotations(self) -> list[dict]:
         if not self._current_output:
@@ -85972,7 +94104,9 @@ class OutputsPanel(SmoothPanelWidget):
             return _tr('0 outputs')
         kind = str(output.get('kind', 'text')).strip().lower()
         created_at = str(output.get('created_at', '')).strip()
-        return _tr('{n} outputs · {kind}').format(n=len(self._outputs), kind=_tr(kind)) + (f' · {created_at}' if created_at else '')
+        shown = (len(self._batches[self._batch_index]['ids']) if 0 <= self._batch_index < len(self._batches)
+                 else len(self._outputs))
+        return _tr('{n} outputs · {kind}').format(n=shown, kind=_tr(kind)) + (f' · {created_at}' if created_at else '')
 
     def _refresh_meta(self):
         if self._status_text and time.time() < self._status_until:
@@ -86078,10 +94212,13 @@ class OutputsPanel(SmoothPanelWidget):
         has_output = bool(output)
         for button in (self.copy_button, self.save_button, self.context_button):
             button.setEnabled(has_output)
-        self.open_editor_button.setEnabled(False)
+        # always there: with nothing generated (or nothing the editor can show) it opens the editor
+        # as it is, with the files it had (Ryan 2026-11-11: it must not be a dead button)
+        self.open_editor_button.setEnabled(True)
         self._refresh_meta()
         self._sync_edit_controls()
         if not output:
+            self.splitter.widget(1).setVisible(True)
             self.text_preview.setReadOnly(True)
             self.capture_frame_button.hide()
             self.time_comment_button.hide()
@@ -86090,11 +94227,13 @@ class OutputsPanel(SmoothPanelWidget):
             return
         kind = str(output.get('kind', 'text')).strip().lower()
         title = str(output.get('title', '')).strip()
-        path = str(output.get('path', '')).strip()
-        self.open_editor_button.setEnabled(
-            bool((path and editor_supported_file(path))
-                 or (kind not in {'image', 'audio', 'video'} and str(output.get('content', '') or '').strip()))
-        )
+        path = output_display_path(output)       # a generated file: as it was at the turn shown
+        if self.preview_stack.currentWidget() is not self._doc_view:
+            self._doc_path = ''
+        # a document's page preview takes the whole width (it has no comments; pages need the room)
+        is_document = (not str(output.get('content', '') or '') and bool(path)
+                       and os.path.splitext(path)[1].lower() in OUTPUT_DOCUMENT_EXTS and os.path.isfile(path))
+        self.splitter.widget(1).setVisible(not is_document)
         self.image_preview.set_pen_color(self._current_pen_color())
         self.capture_frame_button.setVisible(kind == 'video')
         self.time_comment_button.setVisible(kind in {'audio', 'video'})
@@ -86134,16 +94273,105 @@ class OutputsPanel(SmoothPanelWidget):
         text = str(output.get('content', '') or '')
         editable = self._output_is_text_editable(output)
         if not text and path:
-            text = path
+            suffix = os.path.splitext(path)[1].lower()
+            if suffix in OUTPUT_DOCUMENT_EXTS and os.path.isfile(path):
+                self._show_document_preview(path)
+                self.text_preview.setReadOnly(True)
+                self._refresh_annotations_view()
+                return
+            text = self._file_preview_text(path)
         draft = self._drafts.get(str(output.get('id', '') or '')) if editable else None
         self._set_preview_text(draft if draft is not None else text)
         self.text_preview.setReadOnly(not editable)
         self._refresh_annotations_view()
         self.preview_stack.setCurrentWidget(self.text_preview)
 
+    def _file_preview_text(self, path: str) -> str:
+        """What the text area shows for a generated file without text of its own: the file's text
+        when it is a text file of a reasonable size, else its place and size."""
+        try:
+            if not os.path.isfile(path):
+                return _tr('The file is no longer there:') + '\n' + path
+            size = os.path.getsize(path)
+            if size <= OUTPUT_TEXT_PREVIEW_MAX_BYTES:
+                with open(path, 'rb') as handle:
+                    data = handle.read()
+                if b'\0' not in data[:8192]:
+                    return editor_decode_file_bytes(data)[0]
+            shown_size = '%.1f MB' % (size / 1048576.0) if size >= 1048576 else '%d KB' % max(1, size // 1024)
+            return '%s\n%s' % (path, _tr('{size} — no preview for this kind of file. Save or open it to see it.').format(
+                size=shown_size))
+        except Exception:
+            return path
+
+    def _show_document_preview(self, path: str):
+        """A Word / Excel / PowerPoint / PDF file: its pages, read-only (the Reader's drawing).
+        Editing happens in the editor (the Editor button)."""
+        if self._doc_view is None:
+            self._doc_view = ReaderView(None, self)
+            self.preview_stack.addWidget(self._doc_view)
+            self._doc_view.set_theme(bool(getattr(self, '_force_dark', False)) or is_dark_theme(app))
+        self.preview_stack.setCurrentWidget(self._doc_view)
+        try:
+            stamp = os.stat(path)
+            key = '%s|%d|%d' % (path, stamp.st_mtime_ns, stamp.st_size)
+        except OSError:
+            key = path
+        if key == self._doc_path:
+            return                      # the same file is on show already
+        self._doc_path = key
+        self._doc_generation += 1
+        generation = self._doc_generation
+        self._doc_view.show_message(_tr('Loading %s…') % os.path.basename(path))
+        worker = _ReaderLoadWorker(path)
+        self._doc_workers.append(worker)
+
+        def on_loaded(doc, generation=generation, worker=worker):
+            if worker in self._doc_workers:
+                self._doc_workers.remove(worker)
+            if generation != self._doc_generation:
+                try:
+                    doc.close()
+                except Exception:
+                    pass
+                return
+            old = self._doc_view.document()
+            doc.finalize_on_gui()
+            self._doc_view.set_document(doc, 'vertical')
+            self._doc_view.set_theme(bool(getattr(self, '_force_dark', False)) or is_dark_theme(app))
+
+            def fit(view=self._doc_view):
+                # the page column measures its own (until now hidden) viewport: size the pages
+                # once it has been laid out
+                try:
+                    if view._slots:
+                        view._relayout_slots()
+                        view._update_visible_slots()
+                except Exception:
+                    pass
+            QTimer.singleShot(0, fit)
+            QTimer.singleShot(120, fit)
+            if old is not None and old is not doc:
+                try:
+                    old.close()
+                except Exception:
+                    pass
+
+        def on_failed(message, generation=generation, worker=worker):
+            if worker in self._doc_workers:
+                self._doc_workers.remove(worker)
+            if generation == self._doc_generation:
+                self._doc_view.show_message(_tr('Could not open the file: %s') % message)
+
+        worker.loaded.connect(on_loaded, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(on_failed, Qt.ConnectionType.QueuedConnection)
+        _reader_register_worker(worker)
+        worker.start()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._refresh_meta()
+        self._refresh_pager()
         self._sync_output_combo_popup_width()
         if self._current_output and self._current_output.get('kind') == 'image':
             self._render_current_output()
@@ -86155,10 +94383,12 @@ class OutputsPanel(SmoothPanelWidget):
     def current_output(self) -> dict | None:
         return dict(self._current_output) if self._current_output else None
 
-    def _emit_current(self, signal):
+    def _emit_current(self, signal, allow_empty=False):
         output = self.current_output()
         if output:
             signal.emit(output)
+        elif allow_empty:
+            signal.emit({})       # nothing generated: the editor opens anyway
 
 
 class ShareTextDialog(QDialog):
@@ -87593,7 +95823,37 @@ class CollapsedButtonDrag(QObject):
         self.moving = False
         self.top_left = QPoint()
         self.start_center = QPoint()
+        self._right_start = None    # the right button on the circle: a click opens its input box (5.1.7)
+        self._right_moved = False   # … a right drag is kept for the scan (not yet)
         circle.button.installEventFilter(self)
+
+    def _right_button_event(self, kind, event) -> bool:
+        """The right button on the circle (style book 5.1.7): pressed and let go without travelling
+        CollapsedButtonDrag.THRESHOLD points = a right click, which opens / closes the input box. Every
+        right-button event is the circle's own (True)."""
+        if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
+            if event.button() != Qt.MouseButton.RightButton:
+                return False
+            self._right_start = event.globalPosition().toPoint() if self._window._collapsed_button_shown() else None
+            self._right_moved = False
+            return True
+        if kind == QEvent.Type.MouseMove and self._right_start is not None:
+            if not (event.buttons() & Qt.MouseButton.RightButton):
+                self._right_start = None   # the release went missing
+                return False
+            if not self._right_moved and (event.globalPosition().toPoint() - self._right_start).manhattanLength() >= self.THRESHOLD:
+                self._right_moved = True   # a right drag: the scan (style book 5.1.13)
+                self._window._circle_scan.begin()
+            return True
+        if kind == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.RightButton:
+            start, moved = self._right_start, self._right_moved
+            self._right_start, self._right_moved = None, False
+            if start is not None and not moved:
+                self._window._on_collapsed_circle_right_click()
+            elif moved:
+                self._window._circle_scan.finish()
+            return True
+        return False
 
     @property
     def pressed(self) -> bool:
@@ -87642,10 +95902,11 @@ class CollapsedButtonDrag(QObject):
         kind = event.type()
         window = self._window
         if kind == QEvent.Type.ContextMenu:
-            if window._collapsed_button_shown():
-                window._show_collapsed_button_menu('home', -1, event.globalPos(), owner=self._circle)
-                return True
-            return False
+            # The right button on the circle is its input box (2026-11-11, style book 5.1.7): no menu here.
+            # "Move Back to Default Position" is on the grid's middle.
+            return bool(window._collapsed_button_shown())
+        if self._right_button_event(kind, event):
+            return True
         if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
             self._start = None
             self.moving = False
@@ -88493,6 +96754,11 @@ class MyWidget(QWidget):  # 主窗口
         QTimer.singleShot(2500, self.apply_usage_bar_settings)
         # AI tasks (the dots beside the pointer): agentsview starts a moment after the window
         QTimer.singleShot(3500, self.apply_ai_tasks_settings)
+        # subscription sign-ins (Settings › Models › Subscriptions): the bundled proxy runs only
+        # when there is a sign-in to serve, started a moment after the window
+        self.cli_proxy = CliProxyRuntime(self)
+        app.aboutToQuit.connect(self.cli_proxy.stop)
+        QTimer.singleShot(4500, self.apply_cli_proxy_start)
         # Reap CLI subprocesses on EVERY catchable exit path, not just Qt's aboutToQuit:
         #  - atexit: any normal interpreter shutdown,
         #  - SIGTERM/SIGINT: `kill <pid>` / Ctrl-C (a QTimer keeps the interpreter awake so
@@ -88532,6 +96798,9 @@ class MyWidget(QWidget):  # 主窗口
         self._main_window_in_circle = False
         self._circle_window = CollapsedCircleWindow()
         self._circle_window.button.clicked.connect(self._on_collapsed_circle_clicked)
+        # 2026-11-12 (style book 5.1.10): green while a finished conversation waits to be looked at
+        self._circle_glow = CircleGlow(self._circle_window)
+        self._circle_last_path = ''       # the conversation last asked from the circle's input box
         self._circle_fade_anim = None
         self._circle_morph_anim = None    # MainWindowCircleMorph, made on first use
         self._circle_morph_image = None   # the main window's last picture (it comes out of the circle as that)
@@ -88539,6 +96808,7 @@ class MyWidget(QWidget):  # 主窗口
         # 2026-11-01 (style book 5.1.2 / 5.1.4): the 🥦 circle can be dragged; a long hover opens its grid
         self._collapsed_drag = CollapsedButtonDrag(self, self._circle_window)
         self._collapsed_launcher = None
+        self._collapsed_launcher_layer = 0   # which layer the grid shows / last showed (0 = layer 1)
         self._collapsed_slide_anim = None
         self._collapsed_body = None   # the circle while it is held / dragged / settling (CollapsedCircleBody)
         self._collapsed_menu_open = False
@@ -88547,6 +96817,16 @@ class MyWidget(QWidget):  # 主窗口
         self._collapsed_hover_timer = QTimer(self)
         self._collapsed_hover_timer.setInterval(80)
         self._collapsed_hover_timer.timeout.connect(self._collapsed_hover_tick)
+        # 2026-11-11 (style book 5.1.6): things dragged onto the circle go into its tray
+        self._circle_tray = CircleTray(self, self._circle_window)
+        # 2026-11-11 (style book 5.1.7): a right click on the circle drips its input box out of it
+        self._circle_drip = CircleDrip(self, self._circle_window)
+        # 2026-11-12 (style book 5.1.13): the right button dragged off the circle = the scan
+        self._circle_scan = CircleScan(self, self._circle_window)
+        # 2026-11-11 (style book 5.1.8): what is sent from that box is a new Agent conversation; its
+        # answer drips up out of the circle into a card over it
+        self._circle_answer = CircleAnswer(self, self._circle_window)
+        self._circle_drip.submitted.connect(self._on_circle_question)
         self.window_position_pin_button =MainWindowChromeButton('', self, diameter=12)
         self.window_position_pin_button.setCheckable(True)
         self.window_position_pin_button.setToolTip(_tr('Pin window position'))
@@ -88869,7 +97149,15 @@ class MyWidget(QWidget):  # 主窗口
         _left_content_lay.addWidget(self.widget3, 1)
         _left_content_lay.addWidget(self.widget4, 1)
         _left_content_lay.addWidget(self.widget5, 1)
-        _left_content_lay.addWidget(self.btn_sub5, 0)
+        # 2026-11-12 (style book 5.1.11): resting on "Run command" shows "⚡ Save" over it — the
+        # command becomes a quick command for the collapsed button's grid
+        self._run_command_hover = AssistantHoverStack(
+            main_btn=self.btn_sub5,
+            above_specs=[(_tr('⚡ Save'), self.save_command_as_quick_command)],
+        )
+        self._run_command_hover.setVisible(False)
+        self._run_command_hover_sync = ShownWithChild(self.btn_sub5, self._run_command_hover)
+        _left_content_lay.addWidget(self._run_command_hover, 0)
         # Match text1.MIN_H so both pills drive the bar to the same 40 px height
         _left_content.setMinimumHeight(self.text1.MIN_H)
 
@@ -99083,12 +107371,15 @@ class MyWidget(QWidget):  # 主窗口
             }
         self._refresh_agent_conversation_shelf()
 
-    def _mark_agent_conversation_badge_finished(self, path: str, status: str = 'finished', title: str = ''):
+    def _mark_agent_conversation_badge_finished(self, path: str, status: str = 'finished', title: str = '',
+                                                reason: str = ''):
+        """reason: AGENT_USAGE_END_OUTCOME when a failed run ended because the usage ran out."""
         path = str(path or '').strip()
         if not path:
             return
         self._agent_conversation_finished_badges[path] = {
             'status': status,
+            'reason': str(reason or ''),
             'title': title or self._agent_badge_title_for_path(path),
             'updated_at': datetime.datetime.now().isoformat(timespec='seconds'),
         }
@@ -99109,7 +107400,9 @@ class MyWidget(QWidget):  # 主窗口
                 self._agent_unseen_paths = set()
             self._agent_unseen_paths.add(path)
             title_text = str(title or self._agent_badge_title_for_path(path) or _tr('Agent conversation')).strip()
-            if status_l in {'failed', 'error'}:
+            if status_l in {'failed', 'error'} and reason == AGENT_USAGE_END_OUTCOME:
+                body = _tr('Not finished, the usage ran out — {title}').format(title=title_text)
+            elif status_l in {'failed', 'error'}:
                 body = _tr('Agent run failed — {title}').format(title=title_text)
             else:
                 body = _tr('Answer ready — {title}').format(title=title_text)
@@ -99230,6 +107523,7 @@ class MyWidget(QWidget):  # 主窗口
                 'path': path,
                 'title': title,
                 'status': status,
+                'reason': '' if run is not None else str(info.get('reason', '') or ''),
                 'updated_at': updated_at,
                 'unseen': path in getattr(self, '_agent_unseen_paths', set()),
             })
@@ -99496,15 +107790,16 @@ class MyWidget(QWidget):  # 主窗口
         target, _ = QFileDialog.getSaveFileName(self, _tr('Save output as'), default_name)
         if not target:
             return
+        path = output_display_path(output) or path      # the file as it was at the turn shown
         if path and os.path.exists(path):
             shutil.copy2(path, target)
             return
         write_text_file(target, str(output.get('content', '') or ''))
 
     def _open_output_record_in_editor(self, output: dict):
-        path = editor_output_record_path(output)
-        if path:
-            self.open_editor_window([path])
+        # no output (nothing generated yet): the editor opens all the same, with the files it had
+        path = editor_output_record_path(output) if output else ''
+        self.open_editor_window([path] if path else [])
 
     def _save_output_annotations(self, output: dict):
         self._save_output_record_fields(output, ('annotations',))
@@ -99687,6 +107982,11 @@ class MyWidget(QWidget):  # 主窗口
     def _use_output_as_context(self, output: dict):
         paths = []
         kind = str(output.get('kind', 'text')).strip().lower()
+        shown = output_display_path(output)
+        if not str(output.get('content', '') or '').strip() and shown and os.path.isfile(shown) \
+                and kind in {'text', 'code', 'file'}:
+            paths.append(shown)      # a generated file: the file itself, as shown
+            kind = ''
         if kind in {'text', 'code'}:
             out_dir = self._current_outputs_storage_dir()
             os.makedirs(out_dir, exist_ok=True)
@@ -100083,13 +108383,22 @@ class MyWidget(QWidget):  # 主窗口
                 f"- {source.get('title', '').strip() or source['url']} ({source['url']})" for source in sources
             )
             text_output = text_output + ('\n\n' if text_output else '') + source_block
+        # Did a search happen at all (2026-11-11)? A model the endpoint cannot search with (Claude
+        # through a relay) still answers — from the context and what it remembers — and nothing
+        # said so: the review and the answer took it for search results.
+        searched = bool(sources) or any(
+            'web_search' in str(getattr(item, 'type', '') or '')
+            for item in (getattr(response, 'output', None) or [])
+        )
+        if not searched:
+            text_output = WEB_SEARCH_NOT_PERFORMED_NOTE + ('\n\n' + text_output if text_output else '')
         return {
             'capability': 'web_search',
             'capability_label': specialized_capability_label('web_search'),
             'model_name': model_name,
             'text_output': text_output or 'Web search completed.',
             'artifacts': [],
-            'metadata': {'goal': goal, 'sources': sources},
+            'metadata': {'goal': goal, 'sources': sources, 'web_search_performed': searched},
         }
 
     def _run_image_generation_step(self,
@@ -101539,6 +109848,13 @@ class MyWidget(QWidget):  # 主窗口
             })
             output = str((result or {}).get('answer', '') or (result or {}).get('text', '') or '').strip()
             status = str((result or {}).get('status', '') or 'finished').strip()
+            usage_limited = bool((result or {}).get('usage_limit'))
+            if usage_limited:
+                # the target's usage ran out: the next model of this tool does the step (2026-11-12);
+                # none left = the step says so, and the answer is marked "Not finished"
+                fallback_result = run_profile_fallback(selected_profile_name)
+                if fallback_result is not None:
+                    return fallback_result
             if not output:
                 # 目标开着但没拿到可读回复（超时/页面异常）：同样跳过，
                 # 用下一个可用 profile 重跑本步。
@@ -101558,6 +109874,7 @@ class MyWidget(QWidget):  # 主窗口
                     'external_target_profile': selected_profile_name,
                     'external_target_status': status,
                     'external_target_payload': result or {},
+                    **({'usage_limit': True} if usage_limited else {}),
                 },
             }
         profile = (
@@ -101566,7 +109883,10 @@ class MyWidget(QWidget):  # 主窗口
             else None
         ) or resolve_step_model_profile(store, capability)   # its row; a chat step falls to Sub agent
         if profile is None:
-            return {}
+            # No model for this tool (its row in Settings > Models is empty, or names one this Mac
+            # does not have). The step says so (2026-11-11): it used to return nothing at all — an
+            # untitled empty "Step" in the answer's steps, dropped from what the answering model got.
+            return no_model_step_result(capability, goal, resolve_specialized_execution_mode(store, capability))
         model_name = str(profile.get('model', '')).strip()
         execution_mode = resolve_specialized_execution_mode(store, capability)
         if execution_mode == 'generic_chat_completion':
@@ -103235,6 +111555,120 @@ class MyWidget(QWidget):  # 主窗口
                     }
                 )
         return normalize_output_records(records)
+
+    # ── files the AI created or changed are generated outputs too (2026-11-11) ──
+    def _file_output_records(self, conversation_path, *, run_id='', question_text='', question_index=-1,
+                             assistant_index=-1, model_name='', known_outputs=None) -> list[dict]:
+        """Output records for the files this conversation's AI work created or changed and that are
+        not outputs yet (the write gate recorded each change with its conversation / run): one per
+        file, its newest change. A copy of each file as it is now is kept beside the conversation
+        (made on a worker thread), so an earlier turn can still show the file as it was then."""
+        conversation_path = str(conversation_path or '').strip()
+        try:
+            changes = write_gate().pool.task_changes(conversation_path, run_id)
+        except Exception:
+            logging.exception('Reading the changes of a turn failed.')
+            return []
+        known_outputs = [item for item in (known_outputs or []) if isinstance(item, dict)]
+        known_changes = {str(item.get('change_id', '') or '') for item in known_outputs}
+        own_paths = {os.path.normpath(str(item.get('path', '') or '')) for item in known_outputs
+                     if str(item.get('path', '') or '').strip() and not item.get('change_id')
+                     and str(item.get('question_index', -1)) == str(question_index)}
+        newest = {}
+        for entry in changes:
+            change_id, path = str(entry.get('change_id', '') or ''), str(entry.get('path', '') or '')
+            if not change_id or change_id in known_changes or not output_file_wanted(path):
+                continue
+            newest[os.path.normpath(path)] = entry       # oldest first: the last one stays
+        entries = sorted(newest.values(), key=lambda entry: str(entry.get('at', '')))[-OUTPUT_FILES_PER_TURN:]
+        records, copies, budget = [], [], OUTPUT_FILE_SNAPSHOT_TURN_BYTES
+        for entry in entries:
+            path = str(entry.get('path', '') or '')
+            if os.path.normpath(path) in own_paths:
+                continue      # a step already handed this file over as its result
+            try:
+                if not os.path.isfile(path):
+                    continue
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            change_id = str(entry.get('change_id', '') or '')
+            snapshot = ''
+            if conversation_path and size <= OUTPUT_FILE_SNAPSHOT_MAX_BYTES and size <= budget:
+                budget -= size
+                snapshot = os.path.join(conversation_attachment_dir(conversation_path), 'generated_files',
+                                        re.sub(r'[^A-Za-z0-9_-]+', '-', change_id), os.path.basename(path))
+                copies.append((path, snapshot))
+            records.append({
+                'id': 'out-file-' + change_id,
+                'kind': output_kind_from_path(path),
+                'title': os.path.basename(path),
+                'filename': os.path.basename(path),
+                'content': '',
+                'path': path,
+                'snapshot_path': snapshot,
+                'change_id': change_id,
+                'action': str(entry.get('action', '') or ''),
+                'question': question_text,
+                'question_index': question_index,
+                'assistant_index': assistant_index,
+                'created_at': str(entry.get('at', '') or datetime.datetime.now().isoformat(timespec='seconds')),
+                'source': 'file_change',
+                'model_name': model_name,
+            })
+        if copies:
+            def copy_all():
+                for source, target in copies:
+                    try:
+                        os.makedirs(os.path.dirname(target), exist_ok=True)
+                        shutil.copy2(source, target + '.part')
+                        os.replace(target + '.part', target)
+                    except Exception:
+                        logging.warning('Keeping a copy of a generated file failed: %s', source)
+                    time.sleep(0)
+            if getattr(self, '_file_output_copy_inline', False):   # tests: no thread to wait for
+                copy_all()
+            else:
+                threading.Thread(target=copy_all, name='GeneratedFileCopies', daemon=True).start()
+        return normalize_output_records(records)
+
+    def _conversation_outputs_at(self, conversation_path) -> list:
+        try:
+            record = load_conversation_record(str(conversation_path or ''), include_retrieval=False) if conversation_path else None
+            return list((record or {}).get('outputs', []) or [])
+        except Exception:
+            return []
+
+    def _register_file_outputs_now(self, conversation_path, run_id=''):
+        """A file was written for a conversation outside a turn's end (an AI edit approved in the
+        editor after the answer): it joins that conversation's latest turn."""
+        conversation_path = str(conversation_path or '').strip()
+        if not conversation_path or not os.path.exists(conversation_path):
+            return
+        try:
+            record = load_conversation_record(conversation_path)
+            if not isinstance(record, dict):
+                return
+            messages = list(record.get('messages', []) or [])
+            question_index = next((index for index in range(len(messages) - 1, -1, -1)
+                                   if isinstance(messages[index], dict)
+                                   and str(messages[index].get('role', '')).lower() == 'user'), -1)
+            if question_index < 0:
+                return
+            fresh = self._file_output_records(
+                conversation_path, run_id=run_id,
+                question_text=str(messages[question_index].get('content', '') or '').strip(),
+                question_index=question_index, assistant_index=min(question_index + 1, len(messages) - 1),
+                known_outputs=record.get('outputs', []))
+            if not fresh:
+                return
+            record['outputs'] = merge_output_records(record.get('outputs', []), fresh)
+            saved = write_conversation_record(conversation_path, record)
+            if str(self._active_conversation_path or '') == conversation_path:
+                self._active_conversation_path = saved.get('path', conversation_path)
+                self._refresh_outputs_panel(prefer_latest=True)
+        except Exception:
+            logging.exception('Adding a written file to the generated outputs failed.')
 
     def _restore_webfetch_from_conversation_record(self, record: dict | None):
         self._webfetch_generated_attachment = None
@@ -106476,6 +114910,15 @@ class MyWidget(QWidget):  # 主窗口
         circle = getattr(self, '_circle_window', None)
         if circle is not None:
             circle.resync_glass()   # the 🥦 circle's glass takes the new light / dark at once
+        tray = getattr(self, '_circle_tray', None)
+        if tray is not None:
+            tray.theme_changed()    # its cards (style book 5.1.6)
+        drip = getattr(self, '_circle_drip', None)
+        if drip is not None:
+            drip.theme_changed()    # its input box (style book 5.1.7)
+        answer = getattr(self, '_circle_answer', None)
+        if answer is not None:
+            answer.theme_changed()  # its answer card (style book 5.1.8)
 
     def close_main_window_to_tray(self):
         edge_anim = getattr(self, '_edge_auto_hide_animation', None)
@@ -106695,6 +115138,9 @@ end run'''"""
         return self._collapsed_button_default_place()
 
     def _collapsed_drag_started(self):
+        drip = getattr(self, '_circle_drip', None)
+        if drip is not None and drip.active():
+            drip.close(immediate=True)   # (style book 5.1.7: dragging the circle closes its box, its text kept)
         self._stop_collapsed_slide()
         self._collapsed_hover_since = None
         if not self._collapsed_body_active():   # from the grid's middle: no press on the circle came first
@@ -106730,12 +115176,13 @@ end run'''"""
         anim = getattr(self, '_collapsed_slide_anim', None)
         return anim is not None and anim.state() == QPropertyAnimation.State.Running
 
-    def _slide_collapsed_button(self, top_left: QPoint, done=None, ms: int = 120):
-        """Move the circle smoothly (home, after "Move Back to Default Position")."""
+    def _slide_collapsed_button(self, top_left: QPoint, done=None, ms: int = 120, easing=None):
+        """Move the circle smoothly (home, after "Move Back to Default Position"; up to make room for its
+        input box and back, style book 5.1.7)."""
         self._stop_collapsed_slide()
         anim = QPropertyAnimation(self._circle_window, b'pos', self)
         anim.setDuration(int(ms))
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setEasingCurve(easing if easing is not None else QEasingCurve.Type.OutCubic)
         anim.setEndValue(QPoint(top_left))
         if done is not None:
             anim.finished.connect(done)
@@ -106765,14 +115212,19 @@ end run'''"""
         if not self._collapsed_button_shown():
             self._collapsed_hover_timer.stop()
             self._collapsed_hover_since = None
+            self._circle_glow.stop()
+            CIRCLE_SCAN_RUNNING['on'] = False
             return
+        CIRCLE_SCAN_RUNNING['on'] = self._circle_scan.active()
+        self._sync_circle_glow()
         circle = self._circle_window
         launcher = self._collapsed_launcher
         launcher_up = launcher is not None and launcher.isVisible()
         body_up = self._collapsed_body_active()
         if (not launcher_up and not body_up and circle.windowOpacity() < 1.0
-                and not self._circle_fade_running() and not self._circle_morph_running()):
-            circle.setWindowOpacity(1.0)   # never leave the circle out of sight without its grid / stand-in
+                and not self._circle_fade_running() and not self._circle_morph_running()
+                and not self._circle_drip_animating()):
+            circle.setWindowOpacity(1.0)   # never leave the circle out of sight without its grid / stand-in / drop
         if self._collapsed_slide_running():
             # sliding out of / back under a resting pointer: that is no "left and came back"
             self._collapsed_hover_since = None
@@ -106783,8 +115235,10 @@ end run'''"""
             return
         if (self._collapsed_hover_need_leave or self._collapsed_drag.pressed or self._collapsed_menu_open
                 or launcher_up or body_up or self._collapsed_slide_running() or self._circle_morph_running()
-                or self._circle_fade_running()
+                or self._circle_fade_running() or self._circle_drip_active()
+                or (getattr(self, '_collapsed_click_timer', None) is not None and self._collapsed_click_timer.isActive())
                 or QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None):
+            # (… or a click is still waiting to see whether it becomes a double click, 5.1.12)
             self._collapsed_hover_since = None
             return
         now = time.monotonic()
@@ -106802,28 +115256,85 @@ end run'''"""
             launcher.home_clicked.connect(self._on_collapsed_launcher_home)
             launcher.item_clicked.connect(self._on_collapsed_launcher_item)
             launcher.add_requested.connect(
-                lambda index: QTimer.singleShot(0, lambda i=index: self._choose_collapsed_launcher_shortcut(i, insert=True)))
+                lambda index: QTimer.singleShot(0, lambda i=index: self._on_collapsed_launcher_add(i)))
             launcher.reordered.connect(self._on_collapsed_launcher_reordered)
             launcher.menu_requested.connect(
                 lambda kind, index, pos, owner=launcher: self._show_collapsed_button_menu(kind, index, pos, owner=owner))
             launcher.closed.connect(self._on_collapsed_launcher_closed)
+            launcher.layer_requested.connect(self._show_collapsed_launcher_layer)
+            launcher.buttons_down = mouse_button_held_anywhere
         return launcher
 
-    def _open_collapsed_launcher(self):
+    def _launcher_layer_count(self, at_least: int = 0) -> int:
+        """How many layers the grid offers (its page dots): up to the last one that holds something,
+        plus one empty one to grow into; never fewer than two, never more than five."""
+        layers = self._launcher_layers()
+        last = max([number for number, items in enumerate(layers) if items], default=0)
+        return min(COLLAPSED_LAUNCHER_LAYERS, max(2, last + 2, int(at_least) + 1))
+
+    def _open_collapsed_launcher(self, layer: int = 0, by_key: bool = False):
         """The grid grows out of the circle (style book 5.1.4), centred on it. When it would not fit
         there (near a screen edge) it is centred where it fits and travels there while it grows: the
         circle turns into the grid in one move (Ryan: "得先移动这个圆形按钮，再到可以显示的地方去显示"、
-        "看到的就是圆形按钮直接变成一个方形的九宫格"). The circle itself stays where it is."""
-        if not self._collapsed_button_shown() or self._collapsed_drag.pressed or self._collapsed_body_active():
+        "看到的就是圆形按钮直接变成一个方形的九宫格"). The circle itself stays where it is.
+        `layer` (5.1.12): which layer it shows (0 = layer 1, what resting on the circle opens; 1 = the
+        double click's). `by_key`: opened by a layer's shortcut — with the circle not on the screen it
+        opens at the pointer, its middle empty."""
+        shown = self._collapsed_button_shown()
+        if not shown and not by_key:
             return
-        circle = self._collapsed_circle_rect()
-        screen = QGuiApplication.screenAt(circle.center()) or self._circle_window.screen() or self.screen()
+        if shown and (self._collapsed_drag.pressed or self._collapsed_body_active()):
+            return
+        drip = getattr(self, '_circle_drip', None)
+        if drip is not None and drip.active():
+            drip.close(immediate=True)   # (style book 5.1.7: the grid opening closes the box, its text kept)
+        if shown:
+            circle = self._collapsed_circle_rect()
+            screen = QGuiApplication.screenAt(circle.center()) or self._circle_window.screen() or self.screen()
+        else:
+            pointer = QCursor.pos()
+            half = COLLAPSED_BUTTON_SIZE // 2
+            circle = QRect(pointer - QPoint(half, half), QSize(COLLAPSED_BUTTON_SIZE, COLLAPSED_BUTTON_SIZE))
+            screen = QGuiApplication.screenAt(pointer) or self.screen() or QGuiApplication.primaryScreen()
         center = CollapsedButtonLauncher.circle_center_with_room(circle.center(), screen.availableGeometry())
+        layer = max(0, min(COLLAPSED_LAUNCHER_LAYERS - 1, int(layer)))
+        self._collapsed_launcher_layer = layer
         launcher = self._collapsed_launcher_window()
         launcher.open_at(circle, self._collapsed_launcher_display_items(), is_dark_theme(app),
                          self._collapsed_icon_pixmap(CollapsedButtonLauncher.ICON), self._circle_window.button.font(),
-                         center=center, home_shown=self._collapsed_home_shown())
-        QTimer.singleShot(30, self._hide_circle_under_launcher)
+                         center=center, home_shown=shown and self._collapsed_home_shown(),
+                         layer=layer, layer_count=self._launcher_layer_count(layer), by_key=by_key)
+        if shown:
+            QTimer.singleShot(30, self._hide_circle_under_launcher)
+
+    def _show_collapsed_launcher_layer(self, layer: int):
+        """The open grid flips to another layer (a page dot, the wheel, a swipe, a layer's shortcut)."""
+        launcher = self._collapsed_launcher
+        if launcher is None or not launcher.isVisible():
+            return
+        layer = max(0, min(COLLAPSED_LAUNCHER_LAYERS - 1, int(layer)))
+        previous = self._collapsed_launcher_layer
+        if layer == previous:
+            return
+        self._collapsed_launcher_layer = layer
+        launcher.show_layer(layer, self._collapsed_launcher_display_items(), self._launcher_layer_count(layer),
+                            direction=1 if layer > previous else -1)
+
+    def toggle_collapsed_launcher_layer(self, layer: int):
+        """A layer's shortcut (Settings › Shortcuts & tools, style book 5.1.12): the grid opens showing
+        that layer — out of the circle, or at the pointer when the circle is not on the screen; the
+        same key again closes it, another layer's key flips to that layer."""
+        layer = max(0, min(COLLAPSED_LAUNCHER_LAYERS - 1, int(layer)))
+        launcher = self._collapsed_launcher
+        if launcher is not None and launcher.isVisible():
+            if self._collapsed_launcher_layer == layer:
+                launcher.close_animated()
+            else:
+                self._show_collapsed_launcher_layer(layer)
+            return
+        self._stop_collapsed_body()
+        self._collapsed_hover_need_leave = False
+        self._open_collapsed_launcher(layer=layer, by_key=True)
 
     def _hide_circle_under_launcher(self):
         """The grid grew out of the circle: the circle steps out of sight under it (the grid's frosted
@@ -106922,7 +115433,28 @@ end run'''"""
     def _on_collapsed_launcher_item(self, index: int):
         items = self._collapsed_launcher_items()
         if 0 <= index < len(items):
-            self._run_collapsed_launcher_shortcut(items[index])
+            if 'command' in items[index]:
+                command = self._circle_command(items[index]['command'])
+                if command is not None:
+                    self._run_circle_command(command)
+            else:
+                self._run_collapsed_launcher_shortcut(items[index])
+
+    def _on_collapsed_launcher_add(self, index: int):
+        """A click on an empty place's "+": on layer 1 with no quick commands made yet it picks a
+        shortcut at once (as always); otherwise the choice — a shortcut, a new quick command, or one
+        of the quick commands there are."""
+        launcher = self._collapsed_launcher
+        if (self._collapsed_launcher_layer == 0 and not self._circle_commands()) or launcher is None \
+                or not launcher.isVisible():
+            self._choose_collapsed_launcher_shortcut(index, insert=True)
+            return
+        launcher._menu_open = True
+        try:
+            self._show_collapsed_button_menu('empty', index, QCursor.pos(), owner=launcher)
+        finally:
+            launcher._menu_open = False
+            launcher._left_at = None
 
     def _on_collapsed_launcher_reordered(self, source: int, target: int):
         items = self._collapsed_launcher_items()
@@ -106930,25 +115462,65 @@ end run'''"""
             items.insert(target, items.pop(source))
             self._save_collapsed_launcher_items(items)
 
-    def _collapsed_launcher_items(self) -> list:
-        return normalize_collapsed_button_shortcuts(settings_global_value(COLLAPSED_BUTTON_SHORTCUTS_KEY, []))
+    def _launcher_layers(self) -> list:
+        """The grid's five layers as they are saved (layer 1 first); a place whose quick command was
+        deleted is left out."""
+        known = {command['id'] for command in self._circle_commands()}
+        layers = [normalize_collapsed_button_shortcuts(settings_global_value(COLLAPSED_BUTTON_SHORTCUTS_KEY, []))]
+        layers += normalize_collapsed_button_layers(settings_global_value(COLLAPSED_BUTTON_LAYERS_KEY, []))
+        return [[item for item in layer if 'command' not in item or item['command'] in known] for layer in layers]
 
-    def _collapsed_launcher_display_items(self) -> list:
-        """The shortcuts with their icons, as the Shortcuts app has them right now."""
-        glyphs = mac_shortcut_glyphs()
-        return [dict(item, glyph=glyphs.get(str(item.get('id', '') or '').upper(), 0))
-                for item in self._collapsed_launcher_items()]
-
-    def _save_collapsed_launcher_items(self, items: list):
+    def _save_launcher_layers(self, layers: list, commands: list | None = None) -> bool:
+        updates = {COLLAPSED_BUTTON_SHORTCUTS_KEY: normalize_collapsed_button_shortcuts(layers[0]),
+                   COLLAPSED_BUTTON_LAYERS_KEY: normalize_collapsed_button_layers(layers[1:])}
+        if commands is not None:
+            updates[CIRCLE_COMMANDS_KEY] = normalize_circle_commands(commands)
         try:
-            update_settings_globals({COLLAPSED_BUTTON_SHORTCUTS_KEY: normalize_collapsed_button_shortcuts(items)})
+            update_settings_globals(updates)
         except Exception:
             logging.exception('Saving the collapsed button grid failed.')
-            return
+            return False
+        self._refresh_collapsed_launcher_content()
+        return True
+
+    def _refresh_collapsed_launcher_content(self):
+        """The grid (when it is out) and the Settings list show what is saved now."""
         launcher = self._collapsed_launcher
         if launcher is not None and launcher.isVisible():
+            launcher.layer_count = self._launcher_layer_count(self._collapsed_launcher_layer)   # (a layer filled: one more dot)
             launcher.set_items(self._collapsed_launcher_display_items(), is_dark_theme(app),
                                self._collapsed_icon_pixmap(CollapsedButtonLauncher.ICON))
+        panel = getattr(self, 'settings_panel', None)
+        if panel is not None and hasattr(panel, 'refresh_circle_commands'):
+            try:
+                panel.refresh_circle_commands()
+            except RuntimeError:
+                pass
+
+    def _collapsed_launcher_items(self, layer: int | None = None) -> list:
+        """What the layer the grid shows holds (or layer number `layer`, 0 = layer 1), in order."""
+        layers = self._launcher_layers()
+        index = self._collapsed_launcher_layer if layer is None else int(layer)
+        return layers[max(0, min(len(layers) - 1, index))]
+
+    def _collapsed_launcher_display_items(self, layer: int | None = None) -> list:
+        """That layer for the grid: a shortcut with its icon as the Shortcuts app has it right now, a
+        quick command with its name and line icon."""
+        glyphs = mac_shortcut_glyphs()
+        commands = {command['id']: command for command in self._circle_commands()}
+        shown = []
+        for item in self._collapsed_launcher_items(layer):
+            if 'command' in item:
+                command = commands[item['command']]
+                shown.append({'command': command['id'], 'name': command['name'], 'symbol': command['icon'], 'glyph': 0})
+            else:
+                shown.append(dict(item, glyph=glyphs.get(str(item.get('id', '') or '').upper(), 0)))
+        return shown
+
+    def _save_collapsed_launcher_items(self, items: list):
+        layers = self._launcher_layers()
+        layers[max(0, min(len(layers) - 1, self._collapsed_launcher_layer))] = list(items)
+        self._save_launcher_layers(layers)
 
     def _collapsed_icon_pixmap(self, size: int = 34):
         """The picture chosen for the circle (None = 🥦, drawn as text)."""
@@ -107038,6 +115610,12 @@ end run'''"""
         circle = getattr(self, '_circle_window', None)
         if circle is None:
             return
+        drip = getattr(self, '_circle_drip', None)
+        if drip is not None and drip.active():
+            drip.close(immediate=True)   # (style book 5.1.7: no circle, no box; its text kept)
+        answer = getattr(self, '_circle_answer', None)
+        if answer is not None and answer.active():
+            answer.close(immediate=True)   # (style book 5.1.8: no circle, no card; the conversation stays)
         self._close_collapsed_launcher()
         self._stop_collapsed_body()
         self._stop_collapsed_slide()
@@ -107086,16 +115664,219 @@ end run'''"""
             self._close_collapsed_launcher()
             circle.move(place)
 
+    # ── the green glow (style book 5.1.10) ──
+    def _main_window_away(self) -> bool:
+        return self._is_main_window_pinned_collapsed() or not self.isVisible()
+
+    def _circle_glow_paths(self) -> list:
+        """The conversations the circle glows for, newest first: finished, not looked at yet, while the
+        main window is away. The one whose answer shows in the circle's card right now is being
+        looked at."""
+        unseen = getattr(self, '_agent_unseen_paths', None)
+        if not unseen or not self._main_window_away():
+            return []
+        answer = getattr(self, '_circle_answer', None)
+        shown = str(answer.path or '') if answer is not None and answer.state == 'open' else ''
+        finished = getattr(self, '_agent_conversation_finished_badges', {}) or {}
+        paths = [path for path in unseen if path != shown]
+        paths.sort(key=lambda path: str((finished.get(path) or {}).get('updated_at', '') or ''), reverse=True)
+        return paths
+
+    def _sync_circle_glow(self):
+        answer = getattr(self, '_circle_answer', None)
+        if answer is not None and answer.state == 'open' and answer.path and getattr(answer, '_final_shown', False) \
+                and answer.path in (getattr(self, '_agent_unseen_paths', None) or ()):
+            self._mark_agent_conversation_seen(answer.path)   # its answer is in the card: looked at
+        self._circle_glow.set_on(bool(self._circle_glow_paths()))
+
     def _on_collapsed_circle_clicked(self):
         """A click on the circle = a click on the grid's middle: the main window comes out of the circle,
         or goes into it when it is open. With the middle left empty while the main window is open
-        (Settings), the click opens the grid at once instead — there is no Broccoli to click there."""
+        (Settings), the click opens the grid at once instead — there is no Broccoli to click there.
+        While the circle glows (5.1.10) the main window comes out with the finished conversation."""
+        if bool(settings_global_value(COLLAPSED_BUTTON_DOUBLE_CLICK_KEY, True)):
+            # A double click shows the circle's last answer again (2026-11-12, Ryan: "A 重新打开上一个
+            # 回答，改成这样吧" — first it opened layer 2 of the grid, which the grid's own page dots
+            # reach anyway), so a single click waits the system's double-click time before it counts.
+            timer = getattr(self, '_collapsed_click_timer', None)
+            if timer is None:
+                timer = self._collapsed_click_timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self._collapsed_circle_single_click)
+            if timer.isActive():
+                timer.stop()
+                self._collapsed_hover_since = None
+                self._collapsed_hover_need_leave = True   # the pointer rests on the circle: no grid
+                self._reopen_circle_answer()
+                return
+            timer.start(max(120, int(QApplication.doubleClickInterval())))
+            return
+        self._collapsed_circle_single_click()
+
+    def _reopen_circle_answer(self) -> bool:
+        """A double click on the circle (style book 5.1.8): the answer of the conversation last asked
+        from the circle drips out again — still being written: as it stands; the card is out
+        already: it goes back in. Nothing asked yet (or that conversation is gone): nothing happens."""
+        answer = getattr(self, '_circle_answer', None)
+        if answer is None or not self._collapsed_button_shown():
+            return False
+        if answer.active():
+            answer.close()
+            return True
+        path = str(getattr(self, '_circle_last_path', '') or '') or str(settings_global_value(CIRCLE_LAST_CONVERSATION_KEY, '') or '')
+        try:
+            record = load_conversation_record(path, include_retrieval=False) if path else None
+        except Exception:
+            record = None
+        if record is None:
+            return False
+        self._circle_last_path = path
+        question = next((str(message.get('content')) for message in reversed(record.get('messages') or [])
+                         if isinstance(message, dict) and message.get('role') == 'user' and isinstance(message.get('content'), str)), '')
+        answer.follow(path, self._agent_run_for_path(path), question)
+        self._mark_agent_conversation_seen(path)
+        return True
+
+    def _collapsed_circle_single_click(self):
+        waiting = self._circle_glow_paths()
+        if waiting:
+            self._open_circle_conversation_in_main(waiting[0])
+            return
         if not self._is_main_window_pinned_collapsed() and self.isVisible() and not self._collapsed_home_shown():
             self._stop_collapsed_body()
             self._collapsed_hover_need_leave = False
             self._open_collapsed_launcher()
             return
         self._toggle_main_window_from_circle()
+
+    def _on_collapsed_circle_right_click(self):
+        """A right click on the circle (style book 5.1.7): its input box drips out of it, or goes back in."""
+        if not self._collapsed_button_shown():
+            return
+        self._collapsed_hover_since = None
+        self._collapsed_hover_need_leave = True   # the pointer rests on the circle: no grid
+        answer = getattr(self, '_circle_answer', None)
+        last = str(getattr(self, '_circle_last_path', '') or '')
+        if last and answer is not None and not answer.active() and not self._circle_drip.active() \
+                and last in self._circle_glow_paths():
+            # glowing for the circle's own conversation (5.1.10): its answer drips out, no input box
+            answer.follow(last, None, '')
+            self._mark_agent_conversation_seen(last)
+            return
+        self._circle_drip.toggle()
+
+    def _circle_drip_active(self) -> bool:
+        """The circle's input box or its answer card is out (resting on the circle opens no grid then)."""
+        drip = getattr(self, '_circle_drip', None)
+        answer = getattr(self, '_circle_answer', None)
+        scan = getattr(self, '_circle_scan', None)
+        return (drip is not None and drip.active()) or (answer is not None and answer.active()) \
+            or (scan is not None and scan.active())
+
+    def _circle_drip_animating(self) -> bool:
+        """A drop is moving (into the box, or up into the answer card): the circle is under its stand-in."""
+        drip = getattr(self, '_circle_drip', None)
+        answer = getattr(self, '_circle_answer', None)
+        scan = getattr(self, '_circle_scan', None)
+        return (drip is not None and drip.animating()) or (answer is not None and answer.animating()) \
+            or (scan is not None and scan.active())
+
+    def _on_circle_question(self, text: str, new: bool = False, attach=None):
+        """Return in the circle's input box (style book 5.1.8): a new Agent conversation with the
+        settings the main window uses now, run in the background; its answer shows in the card over
+        the circle. While that card is out, a further question goes on in the same conversation (put
+        in line when its answer is still being written). `new`: a new conversation in any case (a
+        quick command, 5.1.11). `attach`: whether the tray's things go with it (None = as the box's
+        paperclip mark says)."""
+        prompt = str(text or '').strip()
+        answer = getattr(self, '_circle_answer', None)
+        if not prompt or answer is None:
+            return
+        path = str(answer.path or '') if answer.active() and not new else ''
+        # the tray's things go with it (style book 5.1.9) unless the paperclip mark was switched off;
+        # nothing twice into the same conversation
+        drip = getattr(self, '_circle_drip', None)
+        tray = getattr(self, '_circle_tray', None)
+        files, lines, keys = [], [], []
+        attach = bool(attach) if attach is not None else (drip is None or drip.attach)
+        if tray is not None and attach:
+            tray.prune_missing()
+            files, lines, keys = circle_tray_question_parts(tray.items, answer.sent_keys if path else ())
+        if path and self._agent_run_for_path(path) is not None:
+            # (what is put in line is text only: its files go as their paths under the question)
+            prompt = circle_question_with_lines(prompt, files + lines)
+            answer.sent_keys.update(keys)
+            queue_items = self._agent_queue_for_path(path)
+            queue_items.append({
+                'id': self._next_agent_queue_id(),
+                'prompt': prompt,
+                'status': 'waiting',
+                'task_id': str((self._agent_run_for_path(path) or {}).get('task_id', '') or ''),
+                'created_at': datetime.datetime.now().isoformat(timespec='seconds'),
+            })
+            _shadow_persist_queue(path, queue_items)
+            self._refresh_agent_queue_panel(path)
+            answer.note_queued()
+            return
+        title = ''
+        if not path or load_conversation_record(path, include_retrieval=False) is None:
+            record = self._create_empty_agent_conversation_record(prompt, source='circle')
+            path = str(record.get('path', '') or '').strip()
+            answer.sent_keys = set()   # a new conversation: nothing has gone with it yet
+            if tray is not None and attach:
+                files, lines, keys = circle_tray_question_parts(tray.items)
+            title = str(record.get('title', '') or prompt)
+            if not path:
+                return
+            self._refresh_history_panel()
+        started = self._start_agent_prompt_for_conversation(path, circle_question_with_lines(prompt, lines), source='circle',
+                                                            attachment_paths=files)
+        run = self._agent_runs_by_conversation.get(path) if started else None
+        if not started:
+            self._show_agent_conversation_badge(path, status='failed', title=title or prompt)
+            self._refresh_agent_conversation_shelf()
+        answer.follow(path, run, prompt, failed=not started)
+        self._circle_last_path = path
+        try:
+            update_settings_globals({CIRCLE_LAST_CONVERSATION_KEY: path})   # (a double click finds it after a restart too)
+        except Exception:
+            logging.exception('Remembering the circle\'s last conversation failed.')
+        if started:
+            answer.sent_keys.update(keys)
+            if tray is not None:
+                tray.release_scans(keys)   # scanned windows are for this one question (5.1.13)
+        if drip is not None:
+            drip.refresh_clip()
+
+    def _circle_question_attach_count(self) -> int:
+        """How many of the tray's things would go with a question sent from the circle's input box now."""
+        tray = getattr(self, '_circle_tray', None)
+        answer = getattr(self, '_circle_answer', None)
+        if tray is None:
+            return 0
+        sent = answer.sent_keys if (answer is not None and answer.active() and answer.path) else ()
+        files, lines, _keys = circle_tray_question_parts(tray.items, sent)
+        return len(files) + len(lines)
+
+    def _open_circle_conversation_in_main(self, path: str):
+        """The answer card's "open in main window": the main window out (of the circle, of the screen
+        edge), Broccoli forward, that conversation shown."""
+        if self._is_main_window_pinned_collapsed() or not self.isVisible():
+            if self.i % 2 == 0:
+                self.i += 1
+            self.pin_a_tab()
+        elif str(getattr(self, '_edge_auto_hidden_side', '') or ''):
+            self._show_window_from_screen_edge()
+        self._bring_broccoli_forward()
+        self._activate_agent_conversation_badge(path)
+
+    def dialog_anchor_rect(self):
+        """Where a dialog of the main window goes while the main window is away and the circle's answer
+        card is out: beside that card (see _center_broccoli_dialog); None = as always."""
+        answer = getattr(self, '_circle_answer', None)
+        if answer is None or (self.isVisible() and not self._is_main_window_pinned_collapsed()):
+            return None
+        return answer.card_rect()
 
     def _toggle_main_window_from_circle(self):
         """Ryan 2026-11-07: "如果说主界面已经显示了，那么点击中间就是唤出或者隐藏……如果说主界面没有显示、
@@ -107246,17 +116027,31 @@ end run'''"""
     def _show_collapsed_button_menu(self, kind: str, index: int, global_pos: QPoint, owner=None):
         """Right click on the circle or the grid's middle ('home'), on a shortcut ('item'), or on an
         empty place ('empty': `index` = where a new shortcut goes in the order)."""
-        menu = style_broccoli_context_menu(QMenu(owner or self))
         if kind == 'home':
-            action = menu.addAction(_tr('Move Back to Default Position'))
-            action.setData('reset')
-            action.setEnabled(bool(normalize_collapsed_button_position(
-                settings_global_value(COLLAPSED_BUTTON_POSITION_KEY, []))))
-        elif kind == 'item':
-            menu.addAction(_tr('Change Shortcut…')).setData('change')
+            # 2026-11-11 (Ryan: "完成一轮对话之后再右键点击就只剩右键菜单了"): resting on the circle opens the
+            # grid after 0.6 s, so a right click often landed on the grid's middle and got this menu
+            # instead of the input box. The middle IS the circle: its right click is the circle's.
+            # "Move Back to Default Position" is in Settings › Window & startup now.
+            self._close_collapsed_launcher()
+            QTimer.singleShot(0, self._on_collapsed_circle_right_click)
+            return
+        menu = style_broccoli_context_menu(QMenu(owner or self))
+        items = self._collapsed_launcher_items()
+        if kind == 'item':
+            if 0 <= index < len(items) and 'command' in items[index]:
+                menu.addAction(_tr('Edit Quick Command…')).setData('edit_command')
+            else:
+                menu.addAction(_tr('Change Shortcut…')).setData('change')
             menu.addAction(_tr('Remove')).setData('remove')
         else:
             menu.addAction(_tr('Add Shortcut…')).setData('add')
+            menu.addAction(_tr('New Quick Command…')).setData('new_command')
+            here = {item['command'] for item in items if 'command' in item}
+            others = [command for command in self._circle_commands() if command['id'] not in here]
+            if others:
+                menu.addSeparator()
+                for command in others[:30]:
+                    menu.addAction(command['name']).setData('command:' + command['id'])
         self._collapsed_menu_open = True
         try:
             chosen = menu.exec(QPoint(global_pos))
@@ -107272,6 +116067,17 @@ end run'''"""
             items = self._collapsed_launcher_items()
             if 0 <= index < len(items):
                 items.pop(index)
+                self._save_collapsed_launcher_items(items)
+        elif what == 'edit_command':
+            if 0 <= index < len(items):
+                QTimer.singleShot(0, lambda cid=items[index]['command']: self._edit_circle_command(cid))
+        elif what == 'new_command':
+            QTimer.singleShot(0, lambda at=index, layer=self._collapsed_launcher_layer:
+                              self._edit_circle_command('', layer=layer, at=at))
+        elif isinstance(what, str) and what.startswith('command:'):
+            items = self._collapsed_launcher_items()
+            if len(items) < COLLAPSED_LAUNCHER_SLOTS:
+                items.insert(max(0, min(index, len(items))), {'command': what[len('command:'):]})
                 self._save_collapsed_launcher_items(items)
 
     def _choose_collapsed_launcher_shortcut(self, index: int, insert: bool = False):
@@ -107329,6 +116135,152 @@ end run'''"""
                 signals.run_failed.emit(str(item.get('name', '') or ''), str(exc))
 
         threading.Thread(target=work, daemon=True, name='shortcut-run').start()
+
+    # ── Broccoli's own quick commands (style book 5.1.11) ──
+    def _circle_commands(self) -> list:
+        return normalize_circle_commands(settings_global_value(CIRCLE_COMMANDS_KEY, []))
+
+    def _circle_command(self, identifier: str):
+        for command in self._circle_commands():
+            if command['id'] == str(identifier or ''):
+                return command
+        return None
+
+    def _circle_command_layer(self, identifier: str):
+        """The layer (0 = layer 1) this quick command sits in, or None."""
+        for number, layer in enumerate(self._launcher_layers()):
+            if any(item.get('command') == identifier for item in layer):
+                return number
+        return None
+
+    def _store_circle_command(self, command: dict, layer='auto', at: int | None = None):
+        """Save a new quick command (no 'id') or a changed one, and put it into the grid: `layer` =
+        'auto' (a new one: the first free place from layer 2 on; a changed one: where it is), a layer's
+        number (0 = layer 1; full → as 'auto'), or 'none' (out of the grid). Returns it, or None."""
+        commands = self._circle_commands()
+        command = dict(command)
+        identifier = str(command.get('id', '') or '')
+        new = not identifier or all(item['id'] != identifier for item in commands)
+        if new:
+            identifier = command['id'] = uuid.uuid4().hex[:12]
+            commands.append(command)
+        else:
+            commands = [command if item['id'] == identifier else item for item in commands]
+        commands = normalize_circle_commands(commands)
+        if all(item['id'] != identifier for item in commands):
+            return None   # (no name or no text)
+        layers = self._launcher_layers()
+        current = next((n for n, items in enumerate(layers) if any(i.get('command') == identifier for i in items)), None)
+        entry = {'command': identifier}
+        if layer == 'none':
+            wanted = None
+        elif isinstance(layer, int) and not isinstance(layer, bool) and 0 <= layer < len(layers):
+            wanted = layer
+        else:
+            wanted = current if current is not None else circle_command_free_layer(layers, 1)
+        if wanted != current:
+            if current is not None:
+                layers[current] = [item for item in layers[current] if item.get('command') != identifier]
+            if wanted is not None and len(layers[wanted]) >= COLLAPSED_LAUNCHER_SLOTS:
+                wanted = circle_command_free_layer(layers, 1)   # that layer is full: the next one with room
+            if wanted is not None:
+                place = len(layers[wanted]) if at is None else max(0, min(int(at), len(layers[wanted])))
+                layers[wanted].insert(place, entry)
+        if not self._save_launcher_layers(layers, commands):
+            return None
+        return self._circle_command(identifier)
+
+    def _delete_circle_command(self, identifier: str):
+        commands = [item for item in self._circle_commands() if item['id'] != str(identifier or '')]
+        layers = [[item for item in layer if item.get('command') != identifier] for layer in self._launcher_layers()]
+        self._save_launcher_layers(layers, commands)
+
+    def _edit_circle_command(self, identifier: str = '', preset: dict | None = None, layer='auto', at: int | None = None):
+        """The quick command dialog: a new one (optionally filled in from `preset`) or the one with
+        this id. Returns what was saved, or None."""
+        self._close_collapsed_launcher()
+        existing = self._circle_command(identifier) if identifier else None
+        if identifier and existing is None:
+            return None
+        try:
+            if NSApp is not None:
+                NSApp.activateIgnoringOtherApps_(True)   # a dialog to type into: Broccoli to the front
+        except Exception:
+            pass
+        shown_layer = layer
+        if existing is not None:
+            current = self._circle_command_layer(identifier)
+            shown_layer = current if current is not None else 'none'
+        dialog = CircleCommandDialog(self, dark=is_dark_theme(app), command=existing or preset or {},
+                                     layer=shown_layer, new=existing is None)
+        _center_broccoli_dialog(dialog, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        result, wanted_layer = dialog.result_command(), dialog.layer()
+        dialog.deleteLater()
+        if not accepted:
+            return None
+        if existing is not None:
+            result['id'] = existing['id']
+            if wanted_layer == shown_layer:
+                wanted_layer = 'auto'   # not moved
+        return self._store_circle_command(result, layer=wanted_layer, at=at)
+
+    def _run_circle_command(self, command: dict):
+        """Start a quick command: a script runs at once in the background (no AI); a question goes to
+        the Agent as a new conversation, its answer drips out of the circle (5.1.8)."""
+        command = dict(command or {})
+        if command.get('kind') == 'ask':
+            self._on_circle_question(str(command.get('text', '') or ''), new=True, attach=bool(command.get('with_tray')))
+            return
+        signals = getattr(self, '_mac_shortcut_signals', None)
+        if signals is None:
+            signals = self._mac_shortcut_signals = MacShortcutSignals(self)
+            signals.run_failed.connect(self._on_mac_shortcut_failed)
+        if not getattr(signals, '_command_failed_connected', False):
+            signals._command_failed_connected = True
+            signals.command_failed.connect(self._on_circle_command_failed)
+
+        def work(item=command):
+            try:
+                run_circle_script(item)
+            except Exception as exc:
+                signals.command_failed.emit(str(item.get('name', '') or ''), str(exc))
+
+        threading.Thread(target=work, daemon=True, name='quick-command-run').start()
+
+    def _on_circle_command_failed(self, name: str, reason: str):
+        message = _tr('Could not run the quick command “{name}”.').format(name=name)
+        if reason:
+            message += '\n\n' + reason
+        show_broccoli_message(self, _tr('Quick commands'), message)
+
+    def save_command_as_quick_command(self):
+        """Command mode › "⚡ Save" over "Run command": the AppleScript the AI wrote last becomes a
+        quick command (the dialog asks for its name)."""
+        script = str(read_file_contents(BasePath + 'command.txt', '') or '').strip()
+        if not script:
+            show_broccoli_message(self, _tr('Quick commands'), _tr('There is no command yet. Ask for one first.'))
+            return None
+        return self._edit_circle_command('', preset={'kind': 'applescript', 'text': script})
+
+    def _last_question_text(self) -> str:
+        """The last question of the conversation the Agent page shows."""
+        path = str(getattr(self, '_active_conversation_path', '') or '')
+        try:
+            record = load_conversation_record(path, include_retrieval=False) if path else None
+        except Exception:
+            record = None
+        for message in reversed((record or {}).get('messages') or []):
+            if isinstance(message, dict) and message.get('role') == 'user' and isinstance(message.get('content'), str):
+                return message['content'].strip()
+        return ''
+
+    def save_last_question_as_quick_command(self):
+        question = self._last_question_text()
+        if not question:
+            return None
+        name = ' '.join(question.split())[:24]
+        return self._edit_circle_command('', preset={'kind': 'ask', 'text': question, 'name': name})
 
     def _on_mac_shortcut_failed(self, name: str, reason: str):
         message = _tr('Could not run the shortcut “{name}”.').format(name=name)
@@ -107624,8 +116576,16 @@ end run'''"""
         forward_action = menu.addAction(_tr('Forward'))
         forward_action.setEnabled(idx < len(stack) - 1)
         self._add_open_link_in_default_browser_action(menu, link_url)
+        # 2026-11-12 (style book 5.1.11): the question that worked well becomes a quick command
+        save_question_action = None
+        if idx < 0 and self._last_question_text():
+            menu.addSeparator()
+            save_question_action = menu.addAction(_tr('Save Last Question as Quick Command…'))
         chosen = menu.exec(global_pos)
         if chosen is None:
+            return
+        if save_question_action is not None and chosen == save_question_action:
+            self.save_last_question_as_quick_command()
             return
         if chosen == back_action:
             self._real2_go_back()
@@ -107854,6 +116814,20 @@ end run'''"""
             QUrl.fromLocalFile(AGENT_MATHJAX_DIR + os.sep),
         )
 
+    def _retry_agent_shell_once(self, payload: dict, request_id: int) -> bool:
+        """The load that just finished was not the shell's own (2026-11-10, Qt 6.12 / Chromium 140):
+        when the shell is set while the page before it is still loading, that page's end (done, or
+        failed when cut off) can come in after the shell was asked for, and its page has no
+        broccoliInstallConversation. Load the shell once more for this render instead of falling
+        back to the full render — that one is a page without an address, which cannot show local
+        pictures or use Broccoli's own MathJax. A second miss falls back as before."""
+        if request_id != self._active_render_request_id or getattr(self, '_agent_shell_retried_request', None) == request_id:
+            return False
+        self._agent_shell_retried_request = request_id
+        self._agent_shell_ready = False
+        self._load_agent_conversation_shell(payload)
+        return True
+
     def _inject_agent_conversation_payload(self, payload: dict):
         request_id = int((payload or {}).get('request_id', 0) or 0)
         if request_id != self._active_render_request_id:
@@ -107884,7 +116858,8 @@ end run'''"""
             + ('true' if bool((payload or {}).get('has_explicit_math', False)) else 'false') + ')'
         )
         if restore is None:
-            script = 'window.broccoliInstallConversation && ' + install_call + ';'
+            # noShell: the page that finished loading is not our shell (see _retry_agent_shell_once)
+            script = '(window.broccoliInstallConversation ? ' + install_call + ' : {ok: false, noShell: true});'
         else:
             # 装载、回到上次位置、淡入、显示浮条在同一次脚本里完成：不会先闪到底部再跳回。
             # 淡入放在复原位置之后：复原时还没有位移，之后逐帧对齐会减掉淡入的位移。
@@ -107900,7 +116875,7 @@ end run'''"""
             }
             script = (
                 '(function(){'
-                'if (!window.broccoliInstallConversation) return null;'
+                'if (!window.broccoliInstallConversation) return {ok: false, noShell: true};'
                 'var result = ' + install_call + ';'
                 'if (result && result.ok) {'
                 'if (window.broccoliRestoreScrollAnchor) {'
@@ -107921,6 +116896,13 @@ end run'''"""
             if request_id != self._active_render_request_id:
                 return
             if not isinstance(result, dict) or not bool(result.get('ok')):
+                if isinstance(result, dict) and result.get('noShell'):
+                    saved_restore = getattr(self, '_pending_position_restore', None)
+                    if restore is not None and saved_restore is None:
+                        self._pending_position_restore = restore   # the retry restores the place too
+                    if self._retry_agent_shell_once(payload, request_id):
+                        return
+                    self._pending_position_restore = saved_restore
                 self._legacy_render_payload(payload, 'shell_js_injection_failed')
                 return
             self.cleanup_async_render()
@@ -109316,6 +118298,8 @@ end run'''"""
         if len(question) > 120:
             question = question[:120].rstrip() + '…'
         subject = self._agent_badge_title_for_path(path) or question or _tr('Agent conversation')
+        if outcome == 'failed' and run.get('usage_limit'):
+            subject = _tr('Usage ran out') + ' · ' + subject
         # {mac} is filled in on the queue's thread (reading the computer name can take a moment)
         body = _tr('Open it in Broccoli on the Mac “{mac}”.')
         if question:
@@ -109600,7 +118584,10 @@ end run'''"""
     def _build_agent_supplement_prompt(self, supplements: list[dict]) -> str:
         return build_agent_supplement_instruction_block(supplements, continuation=True)
 
-    def _start_agent_prompt_for_conversation(self, conversation_path: str, prompt: str, *, source: str = 'queue') -> bool:
+    def _start_agent_prompt_for_conversation(self, conversation_path: str, prompt: str, *, source: str = 'queue',
+                                             attachment_paths: list | None = None) -> bool:
+        """`attachment_paths` (2026-11-12, the circle's tray, style book 5.1.9): local files sent with the
+        question the way files dropped on the main window's prompt are."""
         conversation_path = str(conversation_path or '').strip()
         prompt = str(prompt or '').strip()
         if not conversation_path or not prompt:
@@ -109628,6 +118615,30 @@ end run'''"""
         modelnow = load_runtime_model_name()
         timeout = load_saved_timeout()
         agent_annotations_context = self._agent_annotations_context_for_path(conversation_path)
+        encoded_attachments, attachment_records, attachment_prep_pending = [], [], []
+        for path in [str(item) for item in (attachment_paths or []) if str(item or '').strip()]:
+            try:
+                if not os.path.isfile(path):
+                    continue
+                if attachment_prep_supported(path) and attachment_prep_ready_entry(path) is None:
+                    # (a picture's base64 is made on the preflight thread, not here on the interface's)
+                    start_attachment_prep(path)
+                    attachment_prep_pending.append({'path': path, 'attachment_index': len(encoded_attachments),
+                                                    'record_index': None, 'limit_chars': None})
+                    encoded_attachments.append({'kind': ATTACHMENT_PENDING_IMAGE_KIND, 'name': os.path.basename(path), 'path': path})
+                else:
+                    encoded = _encode_attachment_file(path)
+                    if isinstance(encoded, list):
+                        encoded_attachments.extend(encoded)
+                    elif isinstance(encoded, dict):
+                        encoded_attachments.append(encoded)
+                attachment_records.append({
+                    'asset_id': hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                    'name': os.path.basename(path),
+                    'stored_path': path,
+                })
+            except Exception:
+                logging.exception('A file could not be sent with the question: %s', path)
         is_visible = conversation_path == str(self._active_conversation_path or '').strip()
         if is_visible:
             self.render_stream_preview(build_chat_preview(history_messages, prompt),
@@ -109640,8 +118651,9 @@ end run'''"""
                 'history_messages': history_messages,
                 'storage_history_messages': history_messages,
                 'retrieval_documents': [],
-                'attachment_records': [],
-                'attachments': [],
+                'attachment_records': attachment_records,
+                'attachments': encoded_attachments,
+                **({'attachment_prep_pending': attachment_prep_pending} if attachment_prep_pending else {}),
                 'api_key': api_key,
                 'endpoint': endpoint,
                 'model': modelnow,
@@ -109768,6 +118780,15 @@ end run'''"""
             if lines:
                 return _tr('Running Computer Use...') + '\n' + '\n'.join(f'- {line}' for line in lines[-8:]) + activity_suffix
             return _tr('Running Computer Use...') + activity_suffix
+        if phase == 'external_target':
+            # @Claude Code / @Codex / a web @target: its own name, not "MCP tools" (2026-11-09)
+            config = run.get('config') if isinstance(run.get('config'), dict) else {}
+            target = config.get('external_target') if isinstance(config.get('external_target'), dict) else {}
+            alias = str(target.get('alias', '') or '').strip()
+            head = _tr('Running @{alias}...').format(alias=alias) if alias else _tr('Running the @ target...')
+            if lines:
+                return head + '\n' + '\n'.join(f'- {line}' for line in lines[-8:]) + activity_suffix
+            return head + activity_suffix
         if lines:
             return _tr('Running MCP tools...') + '\n' + '\n'.join(f'- {line}' for line in lines[-8:]) + activity_suffix
         return _tr('Generating answer...') + activity_suffix
@@ -110381,6 +119402,10 @@ end run'''"""
         )
         signals.terminal_command.connect(
             self.on_agent_terminal_command_requested,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        signals.office_document.connect(
+            self.on_agent_office_document_requested,
             Qt.ConnectionType.QueuedConnection,
         )
         signals.finished.connect(
@@ -114854,6 +123879,11 @@ end run'''"""
                 structured_outputs=deliverable_outputs,
                 step_results=list(config.get('step_results') or []),
             )
+            generated_outputs = generated_outputs + self._file_output_records(
+                conversation_path, run_id=str(run.get('run_id', '') or ''), question_text=run['question_text'],
+                question_index=question_index, assistant_index=assistant_index,
+                model_name=f'@{alias}' if alias else label,
+                known_outputs=generated_outputs + self._conversation_outputs_at(conversation_path))
             if is_visible_conversation and not self.try_append_final_messages(new_messages):
                 self.render_final_output(final_text, history_messages=new_messages)
             saved_path = self._save_conversation_at_path(conversation_path, new_messages, new_outputs=generated_outputs)
@@ -114961,6 +123991,7 @@ end run'''"""
                     'answer': '',
                     'text': answer_text,
                     'error': str(error_text or ''),
+                    'usage_limit': usage_limit_error_text(error_text),   # the step takes the next model
                     'target': dict(target or {}),
                 }
                 event = request.get('event')
@@ -114983,7 +124014,8 @@ end run'''"""
             f'external-target-{run_id}',
             capability='external_target',
             capability_label='External target',
-            title=f'@{alias} failed' if alias else 'External target failed',
+            title=((f'@{alias} not finished: usage ran out' if usage_limit_error_text(error_text) and status != 'needs_login'
+                    else f'@{alias} failed') if alias else 'External target failed'),
             goal=str(error_text or '').strip(),
             status='failed',
             source='external_target',
@@ -114992,6 +124024,12 @@ end run'''"""
         is_visible_conversation = conversation_path == str(self._active_conversation_path or '')
         error_label = 'needs login' if status == 'needs_login' else 'failed'
         answer_text = f'External target @{alias} {error_label}: {error_text}' if alias else f'External target {error_label}: {error_text}'
+        # the target's own usage ran out (Claude Code / Codex say so themselves): the fixed lines, with
+        # what it said (when the usage comes back) kept under them (2026-11-12)
+        usage_ended = status != 'needs_login' and usage_limit_error_text(error_text)
+        if usage_ended:
+            run['usage_limit'] = ('@' + alias) if alias else '?'
+            answer_text = agent_usage_end_text(run['usage_limit']) + '\n\n' + str(error_text or '').strip()
         display_prefix_html = (
             '<div class="pipeline-default-heading"><strong>{} · @{}</strong></div>'.format(
                 html.escape(_tr('External target')), html.escape(alias))
@@ -115003,6 +124041,7 @@ end run'''"""
             attachments=config.get('attachment_records'),
             assistant_display_prefix_html=display_prefix_html,
             persist_current=is_visible_conversation,
+            outcome=AGENT_USAGE_END_OUTCOME if usage_ended else '',
         )
         if is_visible_conversation and not self.try_append_final_messages(new_messages):
             self.render_final_output(final_text, history_messages=new_messages)
@@ -115010,7 +124049,8 @@ end run'''"""
         if is_visible_conversation:
             self._append_question_to_branch_state(run['question_text'], max(0, len(new_messages) - 2))
             self.text1.setPlainText(self.LastQ)
-        self._mark_agent_conversation_badge_finished(saved_path, 'failed')
+        self._mark_agent_conversation_badge_finished(
+            saved_path, 'failed', reason=AGENT_USAGE_END_OUTCOME if usage_ended else '')
         run['status'] = 'failed'
         self._forget_agent_run(run)
         if is_visible_conversation:
@@ -116010,6 +125050,8 @@ end run'''"""
                 prompt = prompt + '\n\n' + build_autonomy_report_instructions(autonomy_outcome)
             if terminal_auto_approved and agent_terminal_capability_enabled():
                 prompt = prompt + '\n\n' + AUTO_APPROVE_FINAL_ANSWER_NOTE
+            if terminal_auto_approved and self.editor_window_if_open() is not None:
+                prompt = prompt + '\n\n' + AUTO_APPROVE_EDITOR_EDIT_NOTE
 
         # Prompt-cache-optimized assembly. Prefix caching is a prefix match: any
         # byte change in the leading portion invalidates the rest. So the leading
@@ -116118,9 +125160,8 @@ end run'''"""
                 else:
                     messages.append({"role": "user", "content": prompt})
         else:
-            # Non-chat modes (translation/grammar/summarize/etc.) and step flows:
-            # no history and no caching benefit — keep the original single combined
-            # system message (persona + runtime context) byte-for-byte.
+            # Non-chat modes (translation/grammar/summarize/etc.) and step flows: no caching
+            # benefit — the single combined system message (persona + runtime context).
             if runtime_context_text:
                 system_message["content"] += "\n\n" + runtime_context_text
             # Editor context (only set for mode 0 — e.g. the finalize-after-steps
@@ -116131,13 +125172,26 @@ end run'''"""
             user_content = prompt
             if editor_runtime_context_text:
                 user_content = editor_runtime_context_text + "\n\n" + prompt
-            messages = [
-                system_message,
-                {
-                    "role": "user",
-                    "content": user_content,
-                },
-            ]
+            messages = [system_message]
+            # The answer after steps gets the earlier turns too, as the real turns they were
+            # (2026-11-11). It used to get none: a short conversation is sent "as displayed", so
+            # no summary / excerpts were retrieved for it, and this request then left the turns
+            # themselves out — the model answering a follow-up question knew nothing of the turn
+            # before (Mac mini, Vivobarefoot: "不知道是哪个品牌"). An @target keeps its own layout.
+            if mode_index == 0 and step_results and not external_target_enabled:
+                earlier_turns = []
+                for history_message in prompt_history_messages or []:
+                    normalized = normalize_chat_history_message(history_message)
+                    if normalized and str(normalized.get('content', '')).strip():
+                        earlier_turns.append(
+                            {"role": normalized["role"], "content": str(normalized.get("content", ""))})
+                if earlier_turns:
+                    system_message["content"] += (
+                        "\n\nThe earlier turns of this conversation come before the final message. They are "
+                        "the conversation so far: what the final message asks continues from them."
+                    )
+                    messages.extend(earlier_turns)
+            messages.append({"role": "user", "content": user_content})
         # Disabled diagnostic capture for agent request assembly.
         # To debug missing/garbled context again, set AGENT_REQUEST_DEBUG_ENABLED
         # to True. It writes the final API messages and source history to
@@ -118263,6 +127317,96 @@ end run'''"""
             return
         self._attach_screenshot_to_current_tab_and_send(path)
 
+    def _editor_next_mark_number(self) -> int:
+        """Marks are numbered within one question: one more than the highest mark whose picture is
+        still among the attachments (sent or removed pictures free their numbers; a new question
+        starts at 1 again)."""
+        highest = 0
+        try:
+            for item in self._attachment_tray.get_items():
+                match = re.match(r'Broccoli-Mark-(\d+)_', os.path.basename(str(item.get('path') or '')))
+                if match:
+                    highest = max(highest, int(match.group(1)))
+        except Exception:
+            pass
+        return highest + 1
+
+    @staticmethod
+    def _editor_stamp_mark(picture, label: str, number: int, anchor=None):
+        """Write the mark's name onto its picture, so that the picture itself says which note it
+        belongs to: a red tag in the top left corner ("Mark 2") and the number in a red disc at
+        the circle (anchor: a point of the drawn line, in the picture's pixels)."""
+        stamped = QPixmap(picture)
+        stamped.setDevicePixelRatio(1.0)
+        size = max(18, int(stamped.width() / 48))
+        painter = QPainter(stamped)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = QFont('Helvetica Neue')
+        font.setPixelSize(size)
+        font.setBold(True)
+        painter.setFont(font)
+        red, white = QColor('#FF3B30'), QColor('#FFFFFF')
+        pad = int(size * 0.45)
+        text_w = painter.fontMetrics().horizontalAdvance(label)
+        tag = QRectF(pad, pad, text_w + pad * 2.4, size + pad * 1.4)
+        painter.setPen(QPen(white, max(2, size // 9)))
+        painter.setBrush(red)
+        painter.drawRoundedRect(tag, tag.height() / 2, tag.height() / 2)
+        painter.setPen(white)
+        painter.drawText(tag, Qt.AlignmentFlag.AlignCenter, label)
+        if anchor is not None:
+            try:
+                radius = size * 0.85
+                x = min(max(radius + 2, float(anchor[0])), stamped.width() - radius - 2)
+                y = min(max(radius + 2, float(anchor[1]) - radius * 1.2), stamped.height() - radius - 2)
+                if QRectF(x - radius, y - radius, radius * 2, radius * 2).intersects(tag):
+                    y = tag.bottom() + radius + 4          # never on top of the tag
+                disc = QRectF(x - radius, y - radius, radius * 2, radius * 2)
+                painter.setPen(QPen(white, max(2, size // 9)))
+                painter.setBrush(red)
+                painter.drawEllipse(disc)
+                painter.setPen(white)
+                painter.drawText(disc, Qt.AlignmentFlag.AlignCenter, str(number))
+            except Exception:
+                pass
+        painter.end()
+        return stamped
+
+    def _editor_send_marked_region(self, picture, reference: str, comment: str, anchor=None) -> bool:
+        """The editor's "Mark Region" on an office document: the picture (with the circle drawn on
+        it) goes into the Agent's attachments, the note and the place into its prompt. Not sent
+        automatically — the user may add to it first. Several marks in one question: each gets a
+        number that is written ON its picture, in its file name and in front of its note, so the
+        model can tell which note belongs to which picture."""
+        number = self._editor_next_mark_number()
+        label = _tr('Mark {n}').format(n=number)
+        try:
+            picture = self._editor_stamp_mark(picture, label, number, anchor)
+        except Exception:
+            logging.exception('The mark number could not be drawn on the picture.')
+        try:
+            os.makedirs(SCREENSHOT_CAPTURE_DIR, exist_ok=True)
+            stamp = time.strftime('%Y%m%d-%H%M%S') + '-%03d' % int((time.time() % 1) * 1000)
+            path = os.path.join(SCREENSHOT_CAPTURE_DIR, f'Broccoli-Mark-{number}_{stamp}.png')
+            if not picture.save(path, 'PNG'):
+                raise OSError('the picture could not be written')
+        except Exception as exc:
+            self._show_broccoli_message(_tr('Mark Region'), _tr('The picture could not be saved: {reason}').format(reason=exc))
+            return False
+        self._reveal_main_window_once()
+        self._select_main_tab(TAB_API)
+        self._attachment_tray.add_file(path)
+        self._attachment_tray.show_drop_hint(False)
+        self._show_tray_animated()
+        # one block per mark: "[Mark 2] the note" + which picture that is + the place
+        text = '[%s] %s\n%s' % (label, comment.strip(), _tr(
+            '({mark} is the attached picture with “{mark}” written in its top left corner; the red line on it '
+            'circles the part I mean, in {place})').format(mark=label, place=reference))
+        self._set_plain_text_prompt(self.text1, text, True)
+        self.text1.setFocus()
+        self._refresh_text1_popup_visibility()
+        return True
+
     def _attach_screenshot_to_current_tab_and_send(self, path: str):
         current_index = self.stacked_widget.currentIndex()
         if current_index == TAB_API:
@@ -118503,6 +127647,9 @@ end run'''"""
                 assistant_display_prefix_html=display_prefix_html,
                 persist_current=is_visible_conversation,
                 model_label=answer_model_label,
+                # a step did not run because its model's usage ran out and none was left for it: the
+                # answer is written from the rest, and its A row says "Not finished" (2026-11-12)
+                outcome=AGENT_USAGE_END_OUTCOME if agent_usage_limited_step_model(config.get('step_results')) else '',
             )
             if is_visible_conversation and mode_index == 1 and extracted:
                 write_text_file(BasePath + 'command.txt', extracted)
@@ -118523,6 +127670,11 @@ end run'''"""
                 structured_outputs=deliverable_outputs,
                 step_results=list(config.get('step_results') or []),
             )
+            generated_outputs = generated_outputs + self._file_output_records(
+                conversation_path, run_id=str(run.get('run_id', '') or ''), question_text=run['question_text'],
+                question_index=question_index, assistant_index=assistant_index,
+                model_name=str(config.get('model', '') or ''),
+                known_outputs=generated_outputs + self._conversation_outputs_at(conversation_path))
             if is_visible_conversation and not self.try_append_final_messages(new_messages):
                 self.render_final_output(final_text, history_messages=new_messages)
             # 分支树先记上这个问题，和对话一起存一次：以前完成时整份对话存两遍。
@@ -118605,23 +127757,30 @@ end run'''"""
             return
         if self._finalize_remote_run_incident(run, error_text):
             return
+        config = run.get('config') if isinstance(run.get('config'), dict) else {}
+        # the usage ran out and no other model was left to answer (the failover ran before this):
+        # the turn ends in a few fixed lines, not the raw error (2026-11-12)
+        usage_ended = usage_limit_error_text(error_text)
+        usage_label = model_profile_label(config.get('model', ''), config.get('profile_name', '')) if usage_ended else ''
+        if usage_ended:
+            run['usage_limit'] = usage_label or '?'
         self._agent_plan_upsert_step(
             run_id,
             f'final-answer-{run_id}',
             capability='final_answer',
             capability_label='Final answer',
-            title='Final response failed',
+            title='Final response not finished: usage ran out' if usage_ended else 'Final response failed',
             goal=str(run.get('question_text', '') or ''),
             status='failed',
             source='final_answer',
         )
-        config = run.get('config') if isinstance(run.get('config'), dict) else {}
         conversation_path = str(config.get('conversation_path', '') or run.get('conversation_path', '') or '')
         is_visible_conversation = conversation_path == str(self._active_conversation_path or '')
         pipeline_prefix = str(config.get('pipeline_prefix', '') or '').strip()
         pipeline_heading = str(config.get('pipeline_heading', '') or '').strip()
         display_prefix_html = ''.join(part for part in [pipeline_prefix, pipeline_heading] if part)
-        fallback_error = f'Error, please try again!{error_text}'
+        fallback_error = (agent_usage_end_text(usage_label, config.get('step_results')) if usage_ended
+                          else f'Error, please try again!{error_text}')
         new_messages, final_text = append_chat_turn(
             run.get('storage_history_messages', run.get('history_messages', [])),
             run['question_text'],
@@ -118629,6 +127788,8 @@ end run'''"""
             attachments=config.get('attachment_records'),
             assistant_display_prefix_html=display_prefix_html,
             persist_current=is_visible_conversation,
+            model_label=usage_label,
+            outcome=AGENT_USAGE_END_OUTCOME if usage_ended else '',
         )
         if is_visible_conversation and not self.try_append_final_messages(new_messages):
             self.render_final_output(final_text, history_messages=new_messages)
@@ -118636,7 +127797,8 @@ end run'''"""
         if is_visible_conversation:
             self._append_question_to_branch_state(run['question_text'], max(0, len(new_messages) - 2))
             self.text1.setPlainText(self.LastQ)
-        self._mark_agent_conversation_badge_finished(saved_path, 'failed')
+        self._mark_agent_conversation_badge_finished(
+            saved_path, 'failed', reason=AGENT_USAGE_END_OUTCOME if usage_ended else '')
         run['status'] = 'failed'
         self._forget_agent_run(run)
         if is_visible_conversation:
@@ -118652,7 +127814,8 @@ end run'''"""
                 if isinstance(pending, dict):
                     self._inject_agent_conversation_payload(pending)
             elif isinstance(pending, dict):
-                self._legacy_render_payload(pending, 'shell_load_failed')
+                if not self._retry_agent_shell_once(pending, int(pending.get('request_id', 0) or 0)):
+                    self._legacy_render_payload(pending, 'shell_load_failed')
             return
         request_id = int(getattr(self, '_active_render_request_id', 0) or 0)
         perf_state = self._active_render_perf.pop(request_id, None)
@@ -118949,6 +128112,13 @@ end run'''"""
         if globals_store is None:
             globals_store = load_settings_store().get('globals', {})
         enabled = bool(globals_store.get(AI_TASKS_ENABLED_KEY, False))
+        # the hooks follow the two switches (both on = in, else out); the files are small, but they
+        # are somebody else's: off the main thread, and only written when something changes
+        hooks_wanted = enabled and bool(globals_store.get(AI_TASK_HOOKS_KEY, False))
+        if hooks_wanted != getattr(self, '_ai_task_hooks_applied', None):
+            self._ai_task_hooks_applied = hooks_wanted
+            threading.Thread(target=self._apply_ai_task_hooks, args=(hooks_wanted,), daemon=True,
+                             name='ai-task-hooks').start()
         monitor = getattr(self, 'ai_task_monitor', None)
         if not enabled:
             if monitor is not None:
@@ -118968,6 +128138,14 @@ end run'''"""
         disabled = normalize_ai_tasks_disabled_agents(globals_store.get(AI_TASKS_DISABLED_AGENTS_KEY))
         monitor.start([name for name in disabled if name != AI_TASK_BROCCOLI_PROVIDER])
         self._refresh_ai_tasks()
+
+    @staticmethod
+    def _apply_ai_task_hooks(wanted: bool):
+        try:
+            if wanted or ai_task_hooks_installed():
+                ai_task_hooks_apply(wanted)
+        except Exception:
+            logging.exception('AI tasks: changing the hooks files failed.')
 
     def _ai_tasks_enabled(self) -> bool:
         monitor = getattr(self, 'ai_task_monitor', None)
@@ -118997,12 +128175,16 @@ end run'''"""
         for record in self._agent_conversation_shelf_records():
             path = str(record.get('path', '') or '')
             running = str(record.get('status', '') or '') in AI_TASK_RUNNING_AGENT_STATUSES
+            # ended because the usage ran out: the red ring and "Usage limit", like any other tool's
+            usage_ended = not running and record.get('reason') == AGENT_USAGE_END_OUTCOME
             items.append({
+                'reason': 'rate_limit' if usage_ended else '',
                 'key': 'agent:' + path, 'kind': 'agent', 'path': path, 'id': '',
                 'agent': AI_TASK_BROCCOLI_PROVIDER, 'provider': AI_TASK_BROCCOLI_PROVIDER,
                 'label': ai_task_agent_label(AI_TASK_BROCCOLI_PROVIDER),
                 'title': str(record.get('title', '') or ''), 'cwd': '', 'source': 'agent',
-                'state': AI_TASK_STATE_RUNNING if running else AI_TASK_STATE_DONE,
+                'state': (AI_TASK_STATE_RUNNING if running else AI_TASK_STATE_FAILED if usage_ended
+                          else AI_TASK_STATE_DONE),
                 'activity': _ai_task_time(record.get('updated_at')),
                 'seen': not bool(record.get('unseen')),
             })
@@ -119044,18 +128226,58 @@ end run'''"""
         items = self._ai_task_items()
         finished = tracker.update(items)
         self._ai_task_last_items = items
+        if tracker.went_quiet or tracker.left_quiet:
+            self._ai_task_quiet_reminders(tracker.went_quiet, tracker.left_quiet)
         shown, colors = self._ai_task_shown(items)
         overlay = getattr(self, '_ai_task_overlay', None)
         if overlay is not None and overlay.isVisible():
             overlay.update_items(shown, colors)
         if not finished or not shown:
             return
-        if any(item.get('kind') == 'session' for item in finished) \
+        if any(item.get('kind') == 'session' and item.get('state') in AI_TASK_SOUND_STATES for item in finished) \
                 and self._completion_alert_enabled(COMPLETION_SOUND_SETTING_KEY):
             play_completion_sound()   # Broccoli's own agent: its notification already sounds
         overlay = self._ai_task_overlay_window()
         if not overlay.isVisible():
             overlay.show_at_pointer(shown, colors, expanded=False)
+
+    def _ai_task_quiet_reminders(self, went_quiet: list, left_quiet: list):
+        """Sessions that just went quiet get one reminder in Reminders (Settings › AI tasks, its own
+        switch); those that moved again have theirs ticked off. The queue works on its own thread."""
+        try:
+            queue = self._completion_reminder_queue()
+            for reminder in left_quiet:
+                queue.mark_seen(reminder)   # also when the switch went off meanwhile
+            if not went_quiet or not bool(load_settings_store().get('globals', {}).get(
+                    AI_TASKS_QUIET_REMINDER_KEY, True)):
+                return
+            now = time.time()
+            history = getattr(self, '_usage_history', {})
+            for item in went_quiet:
+                key = ai_task_quiet_reminder_key(item)
+                title, body = ai_task_quiet_reminder_text(
+                    item, ai_task_usage_flat(history.get(item.get('provider', '')), now))
+                queue.enqueue(key, path=key, title=title, body=body)
+        except Exception:
+            logging.exception('AI tasks: the "no news" reminder failed.')
+
+    def _note_usage_history(self):
+        """The last hour of each provider's usage numbers, kept as the readings come in (nothing is
+        read for this): the "no news" reminder says when they did not change either."""
+        monitor = getattr(self, 'usage_monitor', None)
+        readings = (getattr(monitor, 'state', None) or {}).get('readings') if monitor is not None else None
+        history = self.__dict__.setdefault('_usage_history', {})
+        now = time.time()
+        for provider, reading in (readings or {}).items() if isinstance(readings, dict) else []:
+            if not isinstance(reading, dict) or reading.get('error'):
+                continue
+            when = float(reading.get('fetched_at') or 0)
+            used = tuple(window.get('used') for window in list(reading.get('windows') or [])
+                         + list(reading.get('extra') or []) if isinstance(window, dict))
+            rows = history.setdefault(str(provider), [])
+            if when and used and (not rows or rows[-1][0] != when):
+                rows.append((when, used))
+            history[str(provider)] = [row for row in rows if now - row[0] <= 3600]
 
     def toggle_ai_task_overlay(self):
         """The AI tasks shortcut: the column, open, at the pointer (again = close it)."""
@@ -119082,14 +128304,69 @@ end run'''"""
                 self.terminal_widget._select_session(item.get('terminal_tab', ''))
             except Exception:
                 logging.exception('AI tasks: could not select the terminal tab.')
+        elif item.get('agent') == 'openclaw':
+            self._open_ai_task_openclaw(item)
         else:
             if getattr(self, '_ai_task_open_signals', None) is None:
                 self._ai_task_open_signals = AITaskOpenSignals(self)
                 self._ai_task_open_signals.inside_broccoli.connect(
                     lambda: (self._bring_broccoli_forward(), self._select_main_tab(TAB_TERMINAL)))
+                self._ai_task_open_signals.not_found.connect(
+                    lambda: self._show_ai_task_notice(_tr('No window found for this task')))
             threading.Thread(target=self._open_ai_task_outside, args=(item,), daemon=True,
                              name='ai-task-open').start()
         QTimer.singleShot(0, self._refresh_ai_tasks)
+
+    def _open_ai_task_openclaw(self, item: dict):
+        """OpenClaw's own page on this session, in the Localhost tab: the tab already on OpenClaw's
+        page goes there, else a new one. OpenClaw not running = a tag says so."""
+        port = openclaw_gateway_port()
+        panel = getattr(self, 'localhost_panel', None)
+        if panel is None or not local_port_answers(port):
+            self._show_ai_task_notice(_tr('OpenClaw is not running'))
+            return
+        url = ai_task_openclaw_url(str(item.get('session_key', '') or ''), port)
+        self._bring_broccoli_forward()
+        self._select_main_tab(TAB_LOCALHOST)
+        for idx, view in enumerate(list(getattr(panel, '_views', []) or [])):
+            try:
+                at = view.url() if view is not None else None
+                if at is not None and at.port() == port and at.host() in ('127.0.0.1', 'localhost'):
+                    panel.select_site(idx)
+                    view.load(QUrl(url))
+                    return
+            except RuntimeError:
+                continue
+        panel.open_saved_url(url, _tr('OpenClaw'), reuse_open_site=False)
+
+    def _show_ai_task_notice(self, text: str):
+        """A few words at the pointer for about 2.5 s (the hover tag of style book 5.1.5): a click
+        on a capsule that could not go anywhere says why instead of doing nothing."""
+        try:
+            tag = getattr(self, '_ai_task_notice_tag', None)
+            if tag is None:
+                tag = self._ai_task_notice_tag = BranchGraphHintTag()
+                timer = self._ai_task_notice_timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.setInterval(2500)
+                timer.timeout.connect(tag.hide)
+            tag.set_content(text, '', is_dark_theme(app))
+            overlay = getattr(self, '_ai_task_overlay', None)
+            pointer = overlay._cursor_pos() if overlay is not None else QCursor.pos()   # the overlay's pointer (tests: a fake one)
+            screen = QGuiApplication.screenAt(pointer) or QGuiApplication.primaryScreen()
+            x, y = pointer.x() + 14, pointer.y() + 18
+            if screen is not None:
+                area = screen.availableGeometry()
+                x = max(area.left() + 8, min(x, area.right() - 8 - tag.width()))
+                y = max(area.top() + 8, min(y, area.bottom() - 8 - tag.height()))
+            tag.move(x, y)
+            tag.setWindowOpacity(1.0)
+            tag.present()
+            if tag.pos() != QPoint(x, y):
+                tag.move(x, y)
+            self._ai_task_notice_timer.start()
+        except Exception:
+            logging.exception('AI tasks: could not show the notice.')
 
     def _bring_broccoli_forward(self):
         try:
@@ -119106,6 +128383,10 @@ end run'''"""
         VS Code: its window for the folder to the front, then Claude Code's link to the
         conversation. A terminal: the app the session's process runs in, to the front."""
         try:
+            link = ai_task_conversation_link(item)
+            if link:
+                subprocess.run(['open', link], timeout=10, check=False, stdin=subprocess.DEVNULL)
+                return
             pid = ai_task_find_process(item.get('agent', ''), item.get('cwd', ''), item.get('id', '').split(':')[-1])
             app_pid, bundle = ai_task_app_bundle_for_process(pid) if pid else (0, '')
             if app_pid == os.getpid():   # typed into one of Broccoli's own shell tabs
@@ -119126,6 +128407,7 @@ end run'''"""
                 subprocess.run(['open', '-a', bundle], timeout=10, check=False, stdin=subprocess.DEVNULL)
             else:
                 logging.info('AI tasks: no window found for %s in %s', item.get('agent'), item.get('cwd'))
+                self._ai_task_open_signals.not_found.emit()
         except Exception:
             logging.exception('AI tasks: could not open the task.')
 
@@ -119224,6 +128506,7 @@ end run'''"""
         return self.usage_monitor.refresh(self._usage_strip_selected())
 
     def _on_usage_readings_changed(self):
+        self._note_usage_history()
         self._refresh_usage_strip()
         panel = getattr(self, 'settings_panel', None)
         if panel is not None and hasattr(panel, 'refresh_usage_status'):
@@ -119263,6 +128546,15 @@ end run'''"""
             panel.show_usage_page()
 
     # ---- built-in app connections (Open Connector, 2026-10-29) ----
+    def apply_cli_proxy_start(self):
+        runtime = getattr(self, 'cli_proxy', None)
+        if runtime is None:
+            return
+        panel = getattr(self, 'settings_panel', None)
+        if hasattr(panel, 'bind_cli_proxy'):
+            panel.bind_cli_proxy(runtime)
+        runtime.start_if_signed_in()
+
     def apply_open_connector_settings(self, enabled: bool):
         runtime = getattr(self, 'open_connector', None)
         if runtime is None:
@@ -119451,6 +128743,12 @@ end run'''"""
         exact_hits = [p for p in open_files if p == requested]
         if len(exact_hits) == 1:
             return exact_hits[0]
+        if requested.lower().endswith('.txt'):
+            # an office file travels to @targets as "<name>.docx.txt" (its text view)
+            wanted = os.path.basename(requested[:-4])
+            office_hits = [p for p in open_files if editor_office_kind(p) and os.path.basename(p) == wanted]
+            if len(office_hits) == 1:
+                return office_hits[0]
         return ''
 
     def _editor_find_flow_context_for_edit(self, editor, store, record, current_text, proposed_text):
@@ -119517,11 +128815,25 @@ end run'''"""
         store = editor.session.store(path)
         if store is None:
             return None, 'editor_edit rejected: editor store unavailable'
+        if store.office_kind:
+            # an office file: the edit is made on the file's text view. What the user changed in
+            # the document's view is saved first, so the text view holds it and the edit is merged
+            # with it like with any other change made since the model read the file.
+            why = self._editor_flush_office(editor, path)
+            if why:
+                return None, why
         current_text = editor_live_text_for(editor, path)
         proposed_text, base_text, theirs_text, replace_error = self._editor_edit_against_base(
             record, path, current_text)
         if replace_error:
             return None, replace_error
+        if store.office_kind:
+            # checked now, before anyone is asked to approve: can these lines be written into the
+            # document? (the same code writes them after approval). Harmless tidying — slide
+            # numbers, cell order — is taken over, so what is shown is what will be in the file.
+            proposed_text, office_error = self._editor_office_check(store, current_text, proposed_text)
+            if office_error:
+                return None, office_error
         left_lines, right_lines, marks = editor_compute_diff(current_text, proposed_text)
         changed_lines = sum(1 for m in marks if m != 'equal')
         existing_entries = {}
@@ -119587,6 +128899,40 @@ end run'''"""
             'rebased': base_text != current_text,
         }
         return proposal, ''
+
+    def _editor_flush_office(self, editor, path) -> str:
+        """'' — or an editor_edit rejection when the unsaved changes of an office file's view
+        could not be saved before an AI edit of that file."""
+        try:
+            why = editor.editor_page.flush_office_edits(path)
+        except Exception as exc:
+            why = str(exc)
+        if not why:
+            return ''
+        name = os.path.basename(str(path or ''))
+        return editor_edit_rejection(
+            'editor_edit NOT applied: %s has unsaved changes in the editor that could not be saved first (%s). '
+            'Nothing was written. Ask the user to save the file, then try again.' % (name, why),
+            _tr('“{name}” has unsaved changes that could not be saved ({reason}), so the AI’s change was not '
+                'applied. Save the file and send your request again.').format(name=name, reason=why))
+
+    def _editor_office_check(self, store, current_text, proposed_text):
+        """(text that will be in the file, '') — or (None, rejection) when the proposed text view
+        cannot be written into the office document."""
+        name = os.path.basename(store.path)
+        data = store._office_disk_bytes()
+        if data is None:
+            return None, 'editor_edit rejected: %s cannot be read' % name
+        if store._office_text_of(data) != current_text:
+            return None, ('editor_edit rejected: %s changed on disk a moment ago; read it again and re-issue '
+                          'the edit.' % name)
+        if store.version_with_text(proposed_text) is not None:
+            return proposed_text, ''       # exactly a kept version: that file is put back
+        _new, final, why = office_files.office_apply_text(data, store.office_kind, proposed_text)
+        if final is None:
+            return None, ('editor_edit rejected: this change cannot be written into %s — %s\n%s'
+                          % (name, why, office_files.office_text_guide(store.office_kind)))
+        return final, ''
 
     def _editor_edit_against_base(self, record, path, current_text):
         """Apply the model's edit to the text it actually saw (the send-time base), then merge in
@@ -119664,15 +129010,41 @@ end run'''"""
                                'file_hash': hashlib.sha256(live.encode('utf-8')).hexdigest()})
         return ''
 
+    def _editor_prepare_queued_proposal_again(self, proposal):
+        """Approve-all: a proposal that waited behind another one of the same answer is prepared
+        from the model's edit once more — exactly what happened when they were written straight
+        one after the other. It stays the same pending action. '' or a rejection."""
+        editor = self.editor_window_if_open()
+        if editor is None:
+            return 'editor_edit rejected: file not open in editor'
+        record = proposal.get('record') if isinstance(proposal.get('record'), dict) else {}
+        fresh, error = self._editor_prepare_editor_edit_proposal(editor, record)
+        if error:
+            return error
+        kept = {key: proposal[key] for key in ('_serialized_proposal', '_shadow_approval_record') if key in proposal}
+        proposal.clear()
+        proposal.update(fresh)
+        proposal.update(kept)
+        live = str(proposal.get('current_text', '') or '')
+        for record_ in kept.values():
+            if isinstance(record_, dict) and 'current_text' in record_:
+                record_.update({'current_text': live, 'proposed_text': str(proposal.get('proposed_text', '') or ''),
+                                'file_hash': hashlib.sha256(live.encode('utf-8')).hexdigest()})
+        return ''
+
     def _editor_show_next_queued_edit(self):
         """After a decision: show the next proposal that was waiting (one at a time — a newer
         one used to replace the open one, rejecting it as 'superseded')."""
         queue = self.__dict__.get('_editor_edit_queue')
-        while isinstance(queue, list) and queue and self.__dict__.get('_editor_edit_permission_panel') is None:
+        while (isinstance(queue, list) and queue and self.__dict__.get('_editor_edit_permission_panel') is None
+               and not self.__dict__.get('_editor_edit_review_active')):
             proposal = queue.pop(0)
-            error = self._editor_refresh_queued_proposal(proposal)
+            if proposal.pop('_prepare_again', False):
+                error = self._editor_prepare_queued_proposal_again(proposal)
+            else:
+                error = self._editor_refresh_queued_proposal(proposal)
             if not error:
-                self._show_editor_edit_permission_panel(proposal)
+                self._editor_decide_edit_proposal(proposal)
                 return
             _shadow_persist_approval_request(proposal.get('_shadow_approval_record') or {}, 'editor_edit', 'denied')
             if ICLOUD_M1C_UNIFIED_FINALIZER_ENABLED:
@@ -119778,8 +129150,11 @@ end run'''"""
         _shadow_persist_approval_request(approval_record, 'editor_edit', 'pending')
         decision = str(getattr(self, '_editor_edit_test_auto_decision', '') or '').strip().lower()
         if not decision and self._editor_edit_auto_approved(proposal):
-            decision = 'approve'   # approve-all mode: backed up first, see _editor_apply_editor_edit_proposal
-            proposal['auto_approved'] = True
+            # approve-all mode (2026-11-12, Ryan: "编辑器应该也先审核。和其他的流程是一样的"): the review
+            # model looks at the change first, like a terminal command — nothing to ask = written by
+            # itself (a copy is kept first), otherwise the same window as without approve-all
+            self._editor_decide_edit_proposal(proposal)
+            return True
         if decision == 'approve':
             approved = bool(self._editor_apply_editor_edit_proposal(proposal))
             _shadow_persist_approval_request(
@@ -119796,8 +129171,113 @@ end run'''"""
             if ICLOUD_M1C_UNIFIED_FINALIZER_ENABLED:
                 self._resolve_agent_local_action(proposal, 'denied')
             return False
-        self._show_editor_edit_permission_panel(proposal)
+        self._editor_decide_edit_proposal(proposal)
         return True
+
+    def _editor_decide_edit_proposal(self, proposal):
+        """One decision at a time: a proposal waits while another one is reviewed or shown."""
+        if self.__dict__.get('_editor_edit_permission_panel') is not None or self.__dict__.get('_editor_edit_review_active'):
+            queue = self.__dict__.get('_editor_edit_queue')
+            if not isinstance(queue, list):
+                queue = self._editor_edit_queue = []
+            if self._editor_edit_auto_approved(proposal):
+                # written without a window, one after the other: when its turn comes it is prepared
+                # again from the model's edit, on the file as the one before it left it
+                proposal['_prepare_again'] = True
+            queue.append(proposal)
+            return
+        if self._editor_edit_auto_approved(proposal):
+            self._editor_start_edit_review(proposal)
+        else:
+            self._show_editor_edit_permission_panel(proposal)
+
+    def _editor_edit_review_action(self, proposal) -> str:
+        """What the review model reads: the file, the model's summary, the change as a diff."""
+        path = str(proposal.get('path', '') or '')
+        diff = '\n'.join(difflib.unified_diff(
+            str(proposal.get('current_text', '') or '').split('\n'),
+            str(proposal.get('proposed_text', '') or '').split('\n'),
+            fromfile='before', tofile='after', lineterm='', n=2))
+        if len(diff) > 9000:
+            diff = diff[:9000] + '\n… (the rest of the diff is not shown)'
+        return 'File: %s\nSummary by the agent: %s\nChange:\n%s' % (
+            path, str(proposal.get('summary', '') or '(none)'), diff or '(no difference)')
+
+    def _editor_start_edit_review(self, proposal):
+        """The review is a model call: it runs in a thread, the decision comes back to the GUI
+        thread (_editor_edit_review_done). The run stays parked on its pending local action."""
+        signals = self.__dict__.get('_editor_edit_review_signals')
+        if signals is None:
+            signals = self._editor_edit_review_signals = EditorEditReviewSignals()
+            signals.done.connect(self._editor_edit_review_done, Qt.ConnectionType.QueuedConnection)
+        self._editor_edit_review_active = True
+        record = proposal.get('record') if isinstance(proposal.get('record'), dict) else {}
+        run = self._agent_run_for_id(str(record.get('_origin_run_id', '') or '')) if record.get('_origin_run_id') else None
+        config = (run or {}).get('config') if isinstance((run or {}).get('config'), dict) else {}
+        path = str(proposal.get('path', '') or '')
+        action = self._editor_edit_review_action(proposal)
+        request_text = str((run or {}).get('question_text', '') or config.get('question_text', '') or '')
+        purpose = str(proposal.get('understanding', '') or record.get('understanding', '') or '')
+        writer_model = str(config.get('model', '') or '')
+        test_review = self.__dict__.get('_editor_edit_test_review')
+
+        def work():
+            try:
+                if callable(test_review):
+                    review = test_review(proposal)
+                else:
+                    review = review_agent_action('editor_edit', action, request_text=request_text, purpose=purpose,
+                                                 cwd=os.path.dirname(path), writer_model=writer_model)
+            except Exception as exc:
+                review = approval_review_failed(str(exc) or exc.__class__.__name__)
+            signals.done.emit({'proposal': proposal, 'review': review})
+
+        threading.Thread(target=work, name='editor-edit-review', daemon=True).start()
+
+    def _editor_edit_review_done(self, payload):
+        self._editor_edit_review_active = False
+        payload = payload if isinstance(payload, dict) else {}
+        proposal = payload.get('proposal') if isinstance(payload.get('proposal'), dict) else {}
+        review = payload.get('review') if isinstance(payload.get('review'), dict) else approval_review_failed('not reviewed')
+        record = proposal.get('record') if isinstance(proposal.get('record'), dict) else {}
+        run = self._agent_run_for_id(str(record.get('_origin_run_id', '') or '')) if record.get('_origin_run_id') else None
+        conversation = str(record.get('_origin_conversation_path', '') or (run or {}).get('conversation_path', '')
+                           or getattr(self, '_active_conversation_path', '') or '')
+        path = str(proposal.get('path', '') or '')
+        summary = '%s · %s' % (os.path.basename(path), str(proposal.get('summary', '') or ''))
+        # a change the review would send back cannot go back to the model here (its answer is
+        # finished): the user decides
+        must_ask = approval_review_must_ask(review) or str(review.get('decision', '') or '') == 'reject'
+        blocked = autonomy_block_approval(run, 'editor_edit', {'summary': summary, 'path': path, 'mutating': True},
+                                          needs_manual=must_ask)
+
+        def settle(outcome):
+            _shadow_persist_approval_request(proposal.get('_shadow_approval_record') or {}, 'editor_edit', outcome)
+            if ICLOUD_M1C_UNIFIED_FINALIZER_ENABLED:
+                self._resolve_agent_local_action(proposal, outcome)
+
+        if blocked:
+            approval_review_log(conversation, 'editor_edit', summary, review, 'denied (autonomous run)')
+            settle('denied')
+            self._editor_note_editor_edit_rejection(blocked, name=os.path.basename(path))
+        elif must_ask:
+            approval_review_log(conversation, 'editor_edit', summary, review, 'asked')
+            proposal['review'] = review
+            self._show_editor_edit_permission_panel(proposal)
+            return      # the window's buttons settle it and show the next one
+        else:
+            error = self._editor_refresh_queued_proposal(proposal)    # the file may have changed meanwhile
+            if error:
+                approval_review_log(conversation, 'editor_edit', summary, review, 'not applied')
+                settle('denied')
+                self._editor_note_editor_edit_rejection(error, name=os.path.basename(path))
+            else:
+                proposal['auto_approved'] = True
+                approved = bool(self._editor_apply_editor_edit_proposal(proposal))
+                approval_review_log(conversation, 'editor_edit', summary, review,
+                                    'allowed automatically' if approved else 'not applied')
+                settle('approved' if approved else 'failed')
+        self._editor_show_next_queued_edit()
 
     def _editor_edit_auto_approved(self, proposal) -> bool:
         """Approve-all or an autonomous run / conversation (a task from another device the same)."""
@@ -119987,6 +129467,13 @@ end run'''"""
         except Exception:
             pass
         record = proposal.get('record') if isinstance(proposal.get('record'), dict) else {}
+        if getattr(store, 'office_kind', ''):
+            # typed into the document's view while the proposal waited: saved first, so the check
+            # below sees it (and rejects the now outdated proposal instead of losing the typing)
+            why = self._editor_flush_office(editor, path)
+            if why:
+                self._editor_note_editor_edit_rejection(why, name=os.path.basename(path))
+                return False
         disk_text = store.read_disk()
         edit_mode = str(record.get('mode', '') or '')
         name = os.path.basename(path)
@@ -120093,7 +129580,146 @@ end run'''"""
                 summary=proposal.get('summary', ''),
             )
         self._editor_refresh_after_edit(editor, path)
+        # the edited file is one of that conversation's generated outputs (its latest turn)
+        self._register_file_outputs_now(
+            origin_conversation or str(getattr(self, '_active_conversation_path', '') or ''),
+            run_id=str(record.get('_origin_run_id', '') or ''))
         return True
+
+    # ---- the office tool (2026-11-11): a model's script on an office file open in the editor ----
+    def on_agent_office_document_requested(self, request: dict):
+        """GUI-thread end of the broccoli_office_document tool. 'layout': saves what the user typed
+        and hands back the file's bytes. 'script': tries the script on the open document; when it
+        changed something the user is shown before / after and decides; approved = written."""
+        try:
+            request['result'] = self._office_document_request(request)
+        except Exception as exc:
+            logging.exception('The office tool failed.')
+            request['result'] = 'The office tool failed: %s. Nothing was written.' % exc
+        finally:
+            event = request.get('event')
+            if event is not None:
+                event.set()
+
+    def _office_document_request(self, request: dict) -> str:
+        editor = self.editor_window_if_open()
+        if editor is None:
+            return 'The Broccoli Editor is not open any more.'
+        path = self._editor_resolve_open_file(editor, request.get('file', ''))
+        store = editor.session.store(path) if path else None
+        if store is None or not getattr(store, 'office_kind', ''):
+            names = ', '.join(os.path.basename(p) for p in editor.session.open_files if editor_office_kind(p)) or '(none)'
+            return 'No open office file matches "%s". Open office files: %s' % (request.get('file', ''), names)
+        page = editor.editor_page
+        name = os.path.basename(path)
+        if request.get('action') == 'layout':
+            why = page.flush_office_edits(path)
+            if why:
+                return '%s has unsaved changes that could not be saved first (%s).' % (name, why)
+            data = store._office_disk_bytes()
+            if data is None:
+                return '%s cannot be read.' % name
+            request['data'], request['kind'] = data, store.office_kind
+            return ''
+        prelude, why = office_script_image_prelude(request.get('images'))
+        if why:
+            return 'Not run: %s.' % why
+        if request.get('abandoned'):
+            return ''
+        trial = page.office_script_trial(path, request.get('script', ''), prelude)
+        if not trial.get('ok'):
+            return ('The script was NOT applied to %s: %s\nNothing was changed. Correct the script and call again.'
+                    % (name, trial.get('error') or 'unknown error'))
+        returned = ('\nThe script returned: %s' % trial['value']) if trial.get('value') else ''
+        if not trial.get('changed'):
+            return 'The script ran on %s and changed nothing.%s' % (name, returned or '\nIt returned nothing.')
+        marks = editor_compute_diff(trial['text_before'], trial['text_after'])[2]
+        text_lines = sum(1 for mark in marks if mark != 'equal')
+        decision = str(getattr(self, '_office_script_test_decision', '') or '').strip().lower()
+        if request.get('abandoned'):
+            decision = 'deny'      # the run was stopped while the script ran
+        if not decision:
+            decision = self._ask_office_script_approval(request, name, trial, text_lines)
+        if decision != 'approve':
+            page.office_script_discard(path)
+            return ('The user did NOT approve this change of %s; the document is as it was. Do not repeat the same '
+                    'script — ask the user what they want changed.' % name)
+        error = self._editor_commit_office_script(editor, path, request, trial)
+        if error:
+            page.office_script_discard(path)
+            return 'The user approved, but %s could not be written: %s. The document is as it was.' % (name, error)
+        return ('Applied and saved to %s (approved by the user). Changed parts: %s. Text view lines changed: %d.%s'
+                % (name, ', '.join(trial.get('parts') or [])[:400], text_lines, returned))
+
+    def _ask_office_script_approval(self, request, name, trial, text_lines) -> str:
+        """'approve' or 'deny'. Always asked (2026-11-11, Ryan: every time for now) — also in
+        approve-all mode and for a task from another device."""
+        run = self._agent_run_for_id(str(request.get('run_id', '') or '')) if request.get('run_id') else None
+        try:
+            self._notify_phone_waiting_local_action(run)
+        except Exception:
+            pass
+        apply_label = approval_tr('Apply')
+        deny_label = approval_tr('Deny')
+        summary = str(request.get('summary') or '').strip() or approval_tr('(the AI gave no description)')
+        script = str(request.get('script') or '').strip()
+        if len(script) > 360:
+            script = script[:360].rstrip() + ' …'
+        message = '\n'.join([
+            approval_tr('The AI wants to change this document with a script. It was tried on the open document — '
+                        'the file itself is not changed yet. The editor shows the result now.'),
+            '',
+            summary,
+            '',
+            approval_tr('Lines of the text view that change: {n}').format(n=text_lines),
+            '',
+            approval_tr('Script:'),
+            script,
+        ])
+        clicked = ask_broccoli_message(
+            self, approval_tr('Change “{name}”?').format(name=name), message, [deny_label, apply_label],
+            default_button_text=apply_label, size=QSize(560, 520), approval=True, escape_button_text=deny_label,
+            pictures=[(approval_tr('Before'), trial.get('before')), (approval_tr('After'), trial.get('after'))])
+        return 'approve' if clicked == apply_label else 'deny'
+
+    def _editor_commit_office_script(self, editor, path, request, trial) -> str:
+        """Write an approved script result into the file, like an approved editor_edit: the file's
+        state before is kept in the history, the write goes through the write gate as the AI's
+        change for its conversation, the result becomes a version. '' or why it was not written."""
+        page = editor.editor_page
+        store = editor.session.store(path)
+        pending = page._office_trials.get(path)
+        if store is None or pending is None:
+            return 'the tried result is gone'
+        disk_text = store.read_disk()
+        if disk_text != pending.get('text_before'):
+            return 'the file changed on disk while the change waited for approval'
+        conversation = str(request.get('conversation_path') or '') or str(getattr(self, '_active_conversation_path', '') or '')
+        run_id = str(request.get('run_id') or '')
+        summary = str(request.get('summary') or '').strip() or 'office script'
+        cid, turn = self._editor_conversation_identity(conversation or None)
+        if store.backup_disk_state('external_change') == -1:
+            return 'the copy of the file before the change could not be saved'
+        version_n = store.save_version(disk_text, 'ai_edit', conversation_id=cid, turn=turn, note=summary)
+        if version_n == -1:
+            return 'the copy of the file before the change could not be saved'
+        with write_gate_context(origin='editor_ai', owner=conversation or 'editor', run_id=run_id, summary=summary):
+            written = editor_write_file(editor, store, '', unattended=True, office_bytes=pending['bytes'],
+                                        expect=disk_text)
+        if not written:
+            store.update_version(version_n, applied=False)
+            return EditorPage._office_write_reason(getattr(store, 'last_write_error', None))
+        page._office_trials.pop(path, None)
+        text = store.read_disk()
+        result_n = store.save_version(text, 'ai_edit_result', conversation_id=cid, turn=turn, note=summary)
+        if result_n > 0:
+            store.note_disk_state(text, result_n)
+        self._editor_refresh_after_edit(editor, path)
+        try:
+            self._register_file_outputs_now(conversation, run_id=run_id)
+        except Exception:
+            logging.exception('Registering the changed office file as an output failed.')
+        return ''
 
     def _editor_refresh_after_edit(self, editor, path):
         try:
@@ -120104,6 +129730,11 @@ end run'''"""
         try:
             editor.file_bar.set_dirty(path, False)
             editor.file_bar.set_stale(path, False)
+        except Exception:
+            pass
+        try:
+            # an Excel file Broccoli wrote: its view hands the file back once with formulas calculated
+            editor.editor_page.office_recalculate_after_write(path)
         except Exception:
             pass
         if path == editor.session.current_path:
@@ -124023,6 +133654,8 @@ end run'''"""
             'failed': _tr('⚠️ Not finished · click here to see it'),
             'stopped': _tr('Stopped · click here to see it'),
         }
+        if outcome == 'failed' and run.get('usage_limit'):
+            texts['failed'] = _tr('⚠️ Not finished · the usage ran out · click here to see it')
         self._set_live_line({'path': path, 'state': outcome, 'text': texts.get(outcome, texts['failed'])})
 
     def _stream_preview_while_browsing(self, text: str, rail_messages: list[dict] | None) -> bool:
@@ -125003,6 +134636,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.collapsed_with_main_checkbox.setChecked(bool(globals_store.get(COLLAPSED_BUTTON_WITH_MAIN_KEY, True)))
         self.collapsed_home_checkbox.setChecked(bool(globals_store.get(COLLAPSED_BUTTON_HOME_WITH_MAIN_KEY, True)))
         self.collapsed_home_checkbox.setEnabled(self.collapsed_with_main_checkbox.isChecked())
+        self.collapsed_double_click_checkbox.setChecked(bool(globals_store.get(COLLAPSED_BUTTON_DOUBLE_CLICK_KEY, True)))
         self.start_on_login_checkbox.setChecked(is_start_on_login_enabled())
         self.terminal_auto_start_agent_cli_checkbox.setChecked(
             bool(globals_store.get('terminal_auto_start_agent_cli_tabs', True))
@@ -125075,6 +134709,8 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.le_region_screenshot.setText(globals_store.get('region_screenshot_shortcut', '') or '')
         self.le_edge_toggle.setText(globals_store.get('edge_toggle_shortcut', '') or '')
         self.le_collapsed_circle.setText(globals_store.get(COLLAPSED_BUTTON_SHORTCUT_KEY, '') or '')
+        for _layer_key, _layer_edit in zip(COLLAPSED_BUTTON_LAYER_SHORTCUT_KEYS, self.le_grid_layers):
+            _layer_edit.setText(globals_store.get(_layer_key, '') or '')
         self.le_ai_tasks.setText(globals_store.get(AI_TASKS_SHORTCUT_KEY, '') or '')
         self.refresh_embedding_profile_selector(globals_store.get('embedding_profile', ''))
         self.refresh_specialized_profile_selectors(globals_store.get('specialized_profiles', {}))
@@ -125262,6 +134898,71 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.clear_profile_form()
         self.profile_name_input.setText(f'Profile {len(self.settings_store["profiles"]) + 1}')
 
+    def on_profile_share_menu(self):
+        menu = QMenu(self)
+        share_action = menu.addAction(_tr('Share profiles…'))
+        import_action = menu.addAction(_tr('Import profiles…'))
+        style_broccoli_context_menu(menu)
+        button = self.profile_share_button
+        chosen = menu.exec(button.mapToGlobal(QPoint(0, button.height() + 2)))
+        menu.deleteLater()
+        if chosen is share_action:
+            self.on_share_profiles()
+        elif chosen is import_action:
+            self.on_import_profiles()
+
+    def on_share_profiles(self):
+        """The saved profiles (what is on disk, not unsaved edits in the form) as an encrypted file."""
+        dialog = ModelProfilesPickDialog(self, self._profiles_sorted_by_name(), 'share',
+                                         selected_names=[str(self.profile_selector.currentData() or '')],
+                                         code=new_model_share_code())
+        self._center_child_dialog(dialog)
+        dialog.exec()
+
+    def on_import_profiles(self, path: str = '', code: str | None = None) -> list:
+        """Pick a shared file, type its code, choose which profiles to add. Returns the added ones.
+        (path / code given: no file panel / no code question — the tests' way in.)"""
+        title = _tr('Import profiles')
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(
+                self, title, str(Path.home()),
+                _tr('Broccoli model profiles (*.{ext});;All files (*)').format(ext=MODEL_SHARE_FILE_EXT))
+            if not path:
+                return []
+        try:
+            if os.path.getsize(path) > MODEL_SHARE_MAX_BYTES:
+                raise ModelShareError('not_a_share_file')
+            with open(path, 'rb') as handle:
+                data = handle.read()
+        except ModelShareError as exc:
+            show_broccoli_message(self, title, model_share_error_text(exc.reason))
+            return []
+        except OSError as exc:
+            show_broccoli_message(self, title, _tr('Could not read the file: {error}').format(error=str(exc)[:200]))
+            return []
+        asked = code is None
+        while True:
+            if asked:
+                code, ok = ask_broccoli_text(self, title, _tr('Share code'), '')
+                if not ok:
+                    return []
+            try:
+                profiles = model_share_unpack(data, code)
+                break
+            except ModelShareError as exc:
+                show_broccoli_message(self, title, model_share_error_text(exc.reason))
+                if exc.reason != 'wrong_code' or not asked:
+                    return []
+        dialog = ModelProfilesPickDialog(self, profiles, 'import')
+        self._center_child_dialog(dialog)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return []
+        added = add_shared_profiles(self.settings_store['profiles'], dialog.selected_profiles())
+        if added:
+            self._save_panel_settings_store()
+            self.refresh_profile_selector(str(self.profile_selector.currentData() or '') or None)
+        return added
+
     def on_delete_profile(self):
         profile_name = self.profile_selector.currentData()
         if not profile_name:
@@ -125338,6 +135039,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             )
             ai_tasks_shortcut = normalize_optional_shortcut_text(self.le_ai_tasks.text())
             collapsed_circle_shortcut = normalize_optional_shortcut_text(self.le_collapsed_circle.text())
+            grid_layer_shortcuts = [normalize_optional_shortcut_text(edit.text()) for edit in self.le_grid_layers]
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         if same_position_screenshot_shortcut and same_position_screenshot_shortcut == ui_shortcut:
@@ -125357,6 +135059,12 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 ui_shortcut, same_position_screenshot_shortcut, region_screenshot_shortcut, edge_toggle_shortcut,
                 ai_tasks_shortcut}:
             raise ValueError(_tr('Collapsed button shortcut must be different from the other shortcuts.'))
+        taken_shortcuts = [ui_shortcut, same_position_screenshot_shortcut, region_screenshot_shortcut, edge_toggle_shortcut,
+                           ai_tasks_shortcut, collapsed_circle_shortcut]
+        for layer_shortcut in grid_layer_shortcuts:
+            if layer_shortcut and layer_shortcut in taken_shortcuts:
+                raise ValueError(_tr('Grid layer shortcuts must be different from the other shortcuts.'))
+            taken_shortcuts.append(layer_shortcut)
         # 结构性防丢：以内存现值打底，表单收集覆盖其上。收集字典漏列的
         # 键从此只是"不更新"，不再是"Save 时被整体替换清掉"。
         collected_globals = dict(self.settings_store.get('globals') or {})
@@ -125389,6 +135097,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             COLLAPSED_BUTTON_ICON_PATH_KEY: self._collapsed_icon_path,
             COLLAPSED_BUTTON_WITH_MAIN_KEY: self.collapsed_with_main_checkbox.isChecked(),
             COLLAPSED_BUTTON_HOME_WITH_MAIN_KEY: self.collapsed_home_checkbox.isChecked(),
+            COLLAPSED_BUTTON_DOUBLE_CLICK_KEY: self.collapsed_double_click_checkbox.isChecked(),
             'start_on_login': self.start_on_login_checkbox.isChecked(),
             'terminal_auto_start_agent_cli_tabs': self.terminal_auto_start_agent_cli_checkbox.isChecked(),
             'web_auto_open_last_urls': self.web_auto_open_last_urls_checkbox.isChecked(),
@@ -125449,6 +135158,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             'region_screenshot_shortcut': region_screenshot_shortcut,
             'edge_toggle_shortcut': edge_toggle_shortcut,
             COLLAPSED_BUTTON_SHORTCUT_KEY: collapsed_circle_shortcut,
+            **dict(zip(COLLAPSED_BUTTON_LAYER_SHORTCUT_KEYS, grid_layer_shortcuts)),
             AI_TASKS_SHORTCUT_KEY: ai_tasks_shortcut,
             'pdf_max_pages': self.pdf_pages_combo.currentData(),
             'embedding_profile': str(self.embedding_profile_combo.currentData() or '').strip(),
@@ -125648,6 +135358,8 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.le_region_screenshot.setText(globals_store.get('region_screenshot_shortcut', '') or '')
         self.le_edge_toggle.setText(globals_store.get('edge_toggle_shortcut', '') or '')
         self.le_collapsed_circle.setText(globals_store.get(COLLAPSED_BUTTON_SHORTCUT_KEY, '') or '')
+        for _layer_key, _layer_edit in zip(COLLAPSED_BUTTON_LAYER_SHORTCUT_KEYS, self.le_grid_layers):
+            _layer_edit.setText(globals_store.get(_layer_key, '') or '')
         self.le_ai_tasks.setText(globals_store.get(AI_TASKS_SHORTCUT_KEY, '') or '')
         self.refresh_profile_selector(profile['name'])
         if self.hotkey_manager is not None:
@@ -125696,6 +135408,9 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.btn_edge_toggle.setText(_tr('Record Edge show/hide shortcut'))
         self.btn_collapsed_circle.update_theme()
         self.btn_collapsed_circle.setText(_tr('Record Collapsed button shortcut'))
+        for _layer_number, _layer_button in enumerate(self.btn_grid_layers, 1):
+            _layer_button.update_theme()
+            _layer_button.setText(_tr('Record Grid layer {n} shortcut').format(n=_layer_number))
         self.btn_ai_tasks.update_theme()
         self.btn_ai_tasks.setText(_tr('Record AI tasks shortcut'))
 
@@ -125711,6 +135426,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             'edge_toggle': self.btn_edge_toggle,
             'collapsed_circle': self.btn_collapsed_circle,
             'ai_tasks': self.btn_ai_tasks,
+            **{f'grid_layer_{number}': button for number, button in enumerate(self.btn_grid_layers, 1)},
         }.get(target, self.btn_ui)
         target_button.setStyleSheet('''
             QPushButton{
@@ -125738,6 +135454,8 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             self.le_edge_toggle.setText(shortcut)
         elif target == 'collapsed_circle':
             self.le_collapsed_circle.setText(shortcut)
+        elif target.startswith('grid_layer_'):
+            self.le_grid_layers[int(target.rsplit('_', 1)[1]) - 1].setText(shortcut)
         elif target == 'ai_tasks':
             self.le_ai_tasks.setText(shortcut)
         else:
@@ -128198,6 +137916,9 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             self.settings_nav.set_theme('dark' if dark else 'light')
             self.language_list_widget.setStyleSheet(list_style)
             self.memory_list_widget.setStyleSheet(list_style)
+            if getattr(self, 'circle_command_list', None) is not None:
+                self.circle_command_list.setStyleSheet(list_style)
+                self.refresh_circle_commands()   # (its icons in the new text colour)
             self.prompt_list_widget.setStyleSheet(list_style)
             self.skill_list_widget.setStyleSheet(list_style)
             self.userscript_list_widget.setStyleSheet(list_style)
@@ -128218,6 +137939,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 getattr(self, 'history_manage_table', None),
                 getattr(self, 'usage_providers_table', None),
                 getattr(self, 'ai_tasks_table', None),
+                getattr(self, 'cli_proxy_table', None),
                 getattr(self, 'wiki_table', None),
                 getattr(self, 'wiki_sources_table', None),
             ):
@@ -128271,6 +137993,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 self.le_region_screenshot,
                 self.le_edge_toggle,
                 self.le_collapsed_circle,
+                *self.le_grid_layers,
                 self.le_ai_tasks,
                 self.webfetch_download_input,
                 self.annotation_pen_color_input,
@@ -130003,6 +139726,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self._completion_alert_signals = CompletionAlertSignals(self)
         self._completion_alert_signals.sound_state.connect(self._show_completion_sound_state)
         self._completion_alert_signals.reminder_probe_done.connect(self._show_completion_reminder_probe)
+        self._completion_alert_signals.quiet_reminder_probe_done.connect(self._show_ai_tasks_quiet_reminder_probe)
 
         def status_row(button_text: str, url: str):
             label = QLabel('', self)
@@ -130055,6 +139779,127 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         return page
 
     # ── Settings › AI tasks (2026-10-31, style book 5.1.3) ─────────────────────────────────
+    # ── General › Quick commands (2026-11-12, style book 5.1.11) ──────────────────────────
+    def _circle_command_main(self):
+        main = self.window()
+        if not hasattr(main, '_store_circle_command'):
+            main = globals().get('w3')
+        return main if main is not None and hasattr(main, '_store_circle_command') else None
+
+    def _build_circle_commands_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        self.circle_command_list = QListWidget(self)
+        self.circle_command_list.setStyleSheet(_input_card_stylesheet(is_dark_theme(app)))
+        self.circle_command_list.setIconSize(QSize(16, 16))
+        self.circle_command_list.currentRowChanged.connect(lambda _row: self._update_circle_command_buttons())
+        self.circle_command_list.itemDoubleClicked.connect(lambda _item: self._edit_selected_circle_command())
+        self.circle_command_new_button = MacNormalButton(_tr('New…'), self)
+        self.circle_command_edit_button = MacNormalButton(_tr('Edit…'), self)
+        self.circle_command_run_button = MacNormalButton(_tr('Run'), self)
+        self.circle_command_delete_button = MacNormalButton(_tr('Delete'), self)
+        self.circle_command_new_button.clicked.connect(self._new_circle_command)
+        self.circle_command_edit_button.clicked.connect(self._edit_selected_circle_command)
+        self.circle_command_run_button.clicked.connect(self._run_selected_circle_command)
+        self.circle_command_delete_button.clicked.connect(self._delete_selected_circle_command)
+        buttons = (self.circle_command_new_button, self.circle_command_edit_button,
+                   self.circle_command_run_button, self.circle_command_delete_button)
+        width = max([96] + [button.sizeHint().width() for button in buttons])
+        actions = QWidget()
+        actions_layout = QHBoxLayout(actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(6)
+        for button in buttons:
+            button.setFixedWidth(width)
+            actions_layout.addWidget(button)
+        actions_layout.addStretch(1)
+        hint = QLabel(_tr(
+            'A script runs at once, without the AI. A question goes to the Agent as a new conversation; '
+            'its answer comes out of the collapsed button. New commands go to layer 2 of its grid: rest the '
+            'pointer on the collapsed button, then scroll in the grid or click its page dots.'), self)
+        hint.setWordWrap(True)
+        hint.setStyleSheet('font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 11px; color: #8E8E93;')
+        layout.addWidget(self.circle_command_list, 1)
+        layout.addWidget(actions)
+        layout.addWidget(hint)
+        self._circle_command_ids = []
+        self.refresh_circle_commands()
+        return page
+
+    def refresh_circle_commands(self):
+        """The list as it is saved now (the main window calls this after every change)."""
+        widget = getattr(self, 'circle_command_list', None)
+        if widget is None:
+            return
+        keep = self._selected_circle_command_id()
+        commands = normalize_circle_commands(settings_global_value(CIRCLE_COMMANDS_KEY, []))
+        layers = [normalize_collapsed_button_shortcuts(settings_global_value(COLLAPSED_BUTTON_SHORTCUTS_KEY, []))]
+        layers += normalize_collapsed_button_layers(settings_global_value(COLLAPSED_BUTTON_LAYERS_KEY, []))
+        where = {item['command']: number for number, layer in enumerate(layers) for item in layer if 'command' in item}
+        kinds = dict(CIRCLE_COMMAND_KINDS)
+        color = QColor('#F2F2F7' if is_dark_theme(app) else '#20242B')
+        widget.blockSignals(True)
+        widget.clear()
+        self._circle_command_ids = []
+        for command in commands:
+            place = (_tr('Layer {n}').format(n=where[command['id']] + 1) if command['id'] in where
+                     else _tr('Not in the grid'))
+            text = f"{command['name']}    {_tr(kinds.get(command['kind'], 'Ask the Agent'))} · {place}"
+            icon = shortcut_icon_pixmap({'symbol': command['icon'], 'name': command['name']}, color, 16)
+            widget.addItem(QListWidgetItem(QIcon(icon), text))
+            self._circle_command_ids.append(command['id'])
+        if keep in self._circle_command_ids:
+            widget.setCurrentRow(self._circle_command_ids.index(keep))
+        widget.blockSignals(False)
+        self._update_circle_command_buttons()
+
+    def _selected_circle_command_id(self) -> str:
+        widget = getattr(self, 'circle_command_list', None)
+        row = widget.currentRow() if widget is not None else -1
+        ids = getattr(self, '_circle_command_ids', [])
+        return ids[row] if 0 <= row < len(ids) else ''
+
+    def _update_circle_command_buttons(self):
+        chosen = bool(self._selected_circle_command_id())
+        for button in (self.circle_command_edit_button, self.circle_command_run_button, self.circle_command_delete_button):
+            button.setEnabled(chosen)
+
+    def _select_circle_command(self, identifier: str):
+        if identifier in self._circle_command_ids:
+            self.circle_command_list.setCurrentRow(self._circle_command_ids.index(identifier))
+
+    def _new_circle_command(self):
+        main = self._circle_command_main()
+        saved = main._edit_circle_command('') if main is not None else None
+        if saved:
+            self._select_circle_command(saved['id'])
+
+    def _edit_selected_circle_command(self):
+        main, identifier = self._circle_command_main(), self._selected_circle_command_id()
+        if main is not None and identifier:
+            main._edit_circle_command(identifier)
+            self._select_circle_command(identifier)
+
+    def _run_selected_circle_command(self):
+        main, identifier = self._circle_command_main(), self._selected_circle_command_id()
+        command = main._circle_command(identifier) if main is not None and identifier else None
+        if command is not None:
+            main._run_circle_command(command)
+
+    def _delete_selected_circle_command(self):
+        main, identifier = self._circle_command_main(), self._selected_circle_command_id()
+        command = main._circle_command(identifier) if main is not None and identifier else None
+        if command is None:
+            return
+        delete, cancel = _tr('Delete'), _tr('Cancel')
+        chosen = ask_broccoli_message(self, _tr('Quick commands'),
+                                      _tr('Delete the quick command “{name}”?').format(name=command['name']),
+                                      [cancel, delete], default_button_text=cancel, escape_button_text=cancel)
+        if chosen == delete:
+            main._delete_circle_command(identifier)
+
     def _build_ai_tasks_page(self) -> QWidget:
         page = SettingsShownPage()
         page.shown.connect(self._ai_tasks_populate)
@@ -130069,7 +139914,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         explain = QLabel(_tr(
             'When Claude Code, Codex or another AI tool on this Mac (in VS Code, a terminal or Broccoli) or '
             'Broccoli’s own agent finishes a turn, a column of dots appears beside the pointer: grey = still '
-            'running, green = done. Point at it to see the tasks; click one to go there. The sound is the '
+            'running, green = done, orange = it waits for you, red = it ended on an error. Point at it to see the tasks; click one to go there. The sound is the '
             'one under Completion alerts. The built-in agentsview reads the sessions; nothing leaves this Mac.'), self)
         explain.setWordWrap(True)
         explain.setStyleSheet(caption)
@@ -130109,6 +139954,28 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             'right-button dragging (some games, 3D apps) does not work while this is on.'), self)
         right_drag_note.setWordWrap(True)
         right_drag_note.setStyleSheet(caption)
+        self.ai_tasks_hooks_checkbox = QCheckBox(_tr('Show when Claude Code or Codex waits for your approval'), self)
+        self.ai_tasks_hooks_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        hooks_note = QLabel(_tr(
+            'Adds Broccoli’s own entry to the hooks in ~/.claude/settings.json and ~/.codex/hooks.json '
+            '(a copy of each file is kept first; other programs’ entries are not touched; switching this '
+            'off takes Broccoli’s out again). The entry only tells Broccoli that a session is waiting: '
+            'the dot turns orange. It never approves anything. Sessions started after this see it; '
+            'Codex may ask once whether to trust the new hook.'), self)
+        hooks_note.setWordWrap(True)
+        hooks_note.setStyleSheet(caption)
+        self.ai_tasks_quiet_reminder_checkbox = QCheckBox(
+            _tr('Remind me when a task has had no news for {n} minutes').format(n=int(AI_TASKS_STALL_SECONDS // 60)), self)
+        self.ai_tasks_quiet_reminder_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.ai_tasks_quiet_reminder_checkbox.clicked.connect(self._on_ai_tasks_quiet_reminder_clicked)
+        self._ai_tasks_quiet_note_text = _tr(
+            'A task that is not finished and has said nothing for that long gets one reminder in the '
+            'Reminders app, so your iPhone and Apple Watch ring too. It is ticked off when the task moves again. '
+            'The same goes for a task that has waited {m} minutes for your approval or your answer.').format(
+                m=int(AI_TASK_WAITING_REMINDER_SECONDS // 60))
+        self.ai_tasks_quiet_reminder_note = QLabel(self._ai_tasks_quiet_note_text, self)
+        self.ai_tasks_quiet_reminder_note.setWordWrap(True)
+        self.ai_tasks_quiet_reminder_note.setStyleSheet(caption)
 
         tools_title = QLabel(_tr('Tools'), self)
         self.ai_tasks_table = QTableWidget(0, 3, self)
@@ -130144,8 +140011,8 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         buttons_layout.addStretch(1)
         buttons_layout.addWidget(self.ai_tasks_color_combo)
         tools_note = QLabel(_tr(
-            'A provider has the same color here as on the usage bars. Green and grey are kept for done and '
-            'running, red and orange for a nearly used-up bar.'), self)
+            'A provider has the same color here as on the usage bars. Green, grey, orange and red are kept '
+            'for a task’s state and for a nearly used-up bar.'), self)
         tools_note.setWordWrap(True)
         tools_note.setStyleSheet(caption)
         self.ai_tasks_status_label = QLabel('', self)
@@ -130160,6 +140027,12 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         layout.addSpacing(4)
         layout.addWidget(self.ai_tasks_right_drag_checkbox)
         layout.addWidget(right_drag_note)
+        layout.addSpacing(4)
+        layout.addWidget(self.ai_tasks_hooks_checkbox)
+        layout.addWidget(hooks_note)
+        layout.addSpacing(4)
+        layout.addWidget(self.ai_tasks_quiet_reminder_checkbox)
+        layout.addWidget(self.ai_tasks_quiet_reminder_note)
         layout.addSpacing(6)
         layout.addWidget(tools_title)
         layout.addWidget(table, 1)
@@ -130349,13 +140222,38 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             AI_TASKS_ENABLED_KEY: self.ai_tasks_checkbox.isChecked(),
             AI_TASKS_COUNT_KEY: int(self.ai_tasks_count_combo.currentData() or AI_TASKS_DEFAULT_COUNT),
             AI_TASKS_RIGHT_DRAG_KEY: self.ai_tasks_right_drag_checkbox.isChecked(),
+            AI_TASK_HOOKS_KEY: self.ai_tasks_hooks_checkbox.isChecked(),
+            AI_TASKS_QUIET_REMINDER_KEY: self.ai_tasks_quiet_reminder_checkbox.isChecked(),
             AI_TASKS_DISABLED_AGENTS_KEY: normalize_ai_tasks_disabled_agents(self._ai_tasks_disabled_form),
         }
+
+    def _on_ai_tasks_quiet_reminder_clicked(self, checked: bool):
+        if not checked:
+            self.ai_tasks_quiet_reminder_note.setText(self._ai_tasks_quiet_note_text)
+            return
+        # Ask Reminders once now, so macOS shows its permission prompt while you are here
+        # (osascript can take seconds: never on this thread).
+        self.ai_tasks_quiet_reminder_note.setText(_tr('Checking access to Reminders…'))
+        emit = self._completion_alert_signals.quiet_reminder_probe_done.emit
+        threading.Thread(target=lambda: emit(probe_mac_completion_reminders()),
+                         name='RemindersAccessCheck', daemon=True).start()
+
+    def _show_ai_tasks_quiet_reminder_probe(self, result: dict):
+        if not hasattr(self, 'ai_tasks_quiet_reminder_checkbox'):
+            return
+        text = self._ai_tasks_quiet_note_text
+        if self.ai_tasks_quiet_reminder_checkbox.isChecked() \
+                and str((result or {}).get('state', '') or '') == 'permission_denied':
+            text = _tr('Broccoli is not allowed to use Reminders.') + ' ' + _tr(
+                'Allow it in System Settings → Privacy & Security → Automation.')
+        self.ai_tasks_quiet_reminder_note.setText(text)
 
     def _load_ai_tasks_form(self, globals_store: dict):
         self.ai_tasks_checkbox.setChecked(bool(globals_store.get(AI_TASKS_ENABLED_KEY, False)))
         self.ai_tasks_right_drag_checkbox.setChecked(bool(globals_store.get(AI_TASKS_RIGHT_DRAG_KEY, True)))
-        count = _coerce_int(globals_store.get(AI_TASKS_COUNT_KEY), AI_TASKS_DEFAULT_COUNT, 1, AI_TASKS_MAX_COUNT)
+        self.ai_tasks_hooks_checkbox.setChecked(bool(globals_store.get(AI_TASK_HOOKS_KEY, False)))
+        self.ai_tasks_quiet_reminder_checkbox.setChecked(bool(globals_store.get(AI_TASKS_QUIET_REMINDER_KEY, True)))
+        count =_coerce_int(globals_store.get(AI_TASKS_COUNT_KEY), AI_TASKS_DEFAULT_COUNT, 1, AI_TASKS_MAX_COUNT)
         self.ai_tasks_count_combo.blockSignals(True)
         index = self.ai_tasks_count_combo.findData(count)
         self.ai_tasks_count_combo.setCurrentIndex(index if index >= 0 else AI_TASKS_DEFAULT_COUNT - 1)
@@ -131151,6 +141049,274 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             logging.exception('opening the approve-all backup folder failed')
 
     # ── Models › Models by location (2026-10-26) ─────────────────────────────────────────
+    # ── Models › Subscriptions (the bundled CLIProxyAPI, 2026-11-12) ─────────────────────────
+    def _build_cli_proxy_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        caption = ('font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; '
+                   'font-size: 11px; color: #8E8E93;')
+        self._cli_proxy = None
+        self._cli_proxy_models_token = None
+        explain = QLabel(_tr(
+            'Broccoli runs a small proxy on this Mac only. Sign in to a subscription in your browser, and '
+            'its models can be added as ordinary profiles. The sign-in stays on this Mac. Providers may not '
+            'allow their subscriptions to be used this way: an account can be limited or closed for it.'), self)
+        explain.setWordWrap(True)
+        explain.setStyleSheet(caption)
+        self.cli_proxy_status_label = QLabel('', self)
+        self.cli_proxy_status_label.setWordWrap(True)
+        self.cli_proxy_status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        self.cli_proxy_table = QTableWidget(0, 2, self)
+        self.cli_proxy_table.setShowGrid(False)
+        self.cli_proxy_table.setHorizontalHeaderLabels([_tr('Subscription'), _tr('Account')])
+        header = self.cli_proxy_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.cli_proxy_table.setColumnWidth(0, 150)
+        self.cli_proxy_table.verticalHeader().setVisible(False)
+        self.cli_proxy_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.cli_proxy_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.cli_proxy_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.cli_proxy_table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.cli_proxy_table.setMinimumHeight(250)   # the seven subscriptions without scrolling
+        self.cli_proxy_table.itemSelectionChanged.connect(self._cli_proxy_sync_buttons)
+
+        self.cli_proxy_sign_in_button = MacNormalButton(_tr('Sign in'), self)
+        self.cli_proxy_sign_out_button = MacNormalButton(_tr('Sign out'), self)
+        self.cli_proxy_models_button = MacNormalButton(_tr('Add models…'), self)
+        self.cli_proxy_move_button = MacNormalButton(_tr('Move VibeProxy profiles here'), self)
+        self.cli_proxy_move_button.setToolTip(_tr(
+            'Profiles that go through a VibeProxy installed on this Mac (localhost:8317) are pointed at '
+            'this proxy instead. Sign in to the same subscriptions here first.'))
+        self.cli_proxy_sign_in_button.clicked.connect(self._cli_proxy_sign_in_clicked)
+        self.cli_proxy_sign_out_button.clicked.connect(self._cli_proxy_sign_out_clicked)
+        self.cli_proxy_models_button.clicked.connect(self._cli_proxy_models_clicked)
+        self.cli_proxy_move_button.clicked.connect(self._cli_proxy_move_clicked)
+        actions = QWidget()
+        actions_layout = QHBoxLayout(actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(4)
+        actions_layout.addWidget(self.cli_proxy_sign_in_button)
+        actions_layout.addWidget(self.cli_proxy_sign_out_button)
+        actions_layout.addWidget(self.cli_proxy_models_button)
+        actions_layout.addStretch(1)
+        # its own row: with the long Japanese labels four buttons do not fit the 500-wide panel
+        move_row = QWidget()
+        move_layout = QHBoxLayout(move_row)
+        move_layout.setContentsMargins(0, 0, 0, 0)
+        move_layout.addWidget(self.cli_proxy_move_button)
+        move_layout.addStretch(1)
+
+        manifest = cli_proxy_manifest()
+        version_text = ''
+        if manifest.get('version'):
+            version_text = _tr('CLIProxyAPI {version} · licence: {licence}').format(
+                version=manifest.get('version'), licence=manifest.get('license_name') or 'MIT')
+        self.cli_proxy_version_label = QLabel(version_text, self)
+        self.cli_proxy_version_label.setWordWrap(True)
+        self.cli_proxy_version_label.setStyleSheet(caption)
+
+        layout.addWidget(explain)
+        layout.addSpacing(4)
+        layout.addWidget(self.cli_proxy_status_label)
+        layout.addWidget(self.cli_proxy_table, 1)
+        layout.addWidget(actions)
+        layout.addWidget(move_row)
+        layout.addWidget(self.cli_proxy_version_label)
+        self.refresh_cli_proxy_page()
+        return page
+
+    def bind_cli_proxy(self, runtime) -> None:
+        """The main window's proxy: the page follows its state, sign-ins and the sign-in under way."""
+        if runtime is None or getattr(self, '_cli_proxy', None) is runtime:
+            return
+        self._cli_proxy = runtime
+        runtime.state_changed.connect(lambda *_args: self.refresh_cli_proxy_page())
+        runtime.accounts_changed.connect(lambda *_args: self.refresh_cli_proxy_page())
+        runtime.login_changed.connect(self._cli_proxy_login_changed)
+        runtime.models_ready.connect(self._cli_proxy_models_ready)
+        self.refresh_cli_proxy_page()
+
+    def _cli_proxy_rows(self) -> list:
+        """One row per sign-in; a subscription without one gets a row that says so."""
+        runtime = getattr(self, '_cli_proxy', None)
+        accounts = runtime.accounts if runtime is not None and runtime.is_running() else []
+        known = [provider for provider, _label in CLI_PROXY_PROVIDERS]
+        rows = []
+        for provider in known + sorted({a['provider'] for a in accounts if a['provider'] not in known}):
+            mine = [a for a in accounts if a['provider'] == provider]
+            for account in mine:
+                rows.append({'provider': provider, 'name': account['name'], 'account': account['account']})
+            if not mine:
+                rows.append({'provider': provider, 'name': '', 'account': ''})
+        return rows
+
+    def refresh_cli_proxy_page(self):
+        if not hasattr(self, 'cli_proxy_table'):
+            return
+        runtime = getattr(self, '_cli_proxy', None)
+        reason = runtime.unavailable_reason() if runtime is not None else (
+            '' if cli_proxy_binary_path() and cli_proxy_macos_ok() else
+            _tr('This copy of Broccoli does not include the subscription proxy.') if not cli_proxy_binary_path() else
+            _tr('Subscription sign-ins need macOS {version} or later.').format(version=CLI_PROXY_MIN_MACOS))
+        state = runtime.state if runtime is not None else 'stopped'
+        waiting = runtime.login_provider() if runtime is not None else ''
+        if reason:
+            text = reason
+        elif waiting:
+            text = _tr('Waiting for the sign-in to {name} in your browser…').format(name=cli_proxy_provider_label(waiting))
+        elif state == 'running':   # worded here, not when it started: the language may have changed since
+            text = _tr('Running on this Mac (port {port})').format(port=runtime.port)
+        elif state == 'starting':
+            text = _tr('Starting…')
+        elif state == 'error':
+            text = runtime.detail or _tr('The subscription proxy did not start.')
+        else:
+            text = _tr('Not running: it starts when you sign in.')
+        self.cli_proxy_status_label.setText(text)
+
+        table = self.cli_proxy_table
+        selected = table.currentRow()
+        wanted = table.item(selected, 0).data(Qt.ItemDataRole.UserRole) if selected >= 0 and table.item(selected, 0) else None
+        rows = self._cli_proxy_rows()
+        table.blockSignals(True)
+        table.setRowCount(0)
+        for row_index, row in enumerate(rows):
+            table.insertRow(row_index)
+            first = QTableWidgetItem(cli_proxy_provider_label(row['provider']))
+            first.setData(Qt.ItemDataRole.UserRole, row)
+            second = QTableWidgetItem(row['account'] or _tr('Not signed in'))
+            second.setToolTip(row['account'])
+            if not row['account']:
+                second.setForeground(QColor('#8E8E93'))
+            table.setItem(row_index, 0, first)
+            table.setItem(row_index, 1, second)
+        pick = 0
+        if isinstance(wanted, dict):
+            for row_index, row in enumerate(rows):
+                if row['provider'] == wanted.get('provider') and row['name'] == wanted.get('name'):
+                    pick = row_index
+                    break
+            else:
+                pick = next((i for i, row in enumerate(rows) if row['provider'] == wanted.get('provider')), 0)
+        table.blockSignals(False)
+        if rows:
+            table.selectRow(pick)
+        self._cli_proxy_sync_buttons()
+
+    def _cli_proxy_selected_row(self) -> dict:
+        table = self.cli_proxy_table
+        item = table.item(table.currentRow(), 0) if table.currentRow() >= 0 else None
+        row = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        return row if isinstance(row, dict) else {}
+
+    def _cli_proxy_vibeproxy_profiles(self) -> list:
+        return [profile for profile in self.settings_store.get('profiles') or []
+                if cli_proxy_endpoint_port(profile.get('endpoint', '')) in CLI_PROXY_VIBEPROXY_PORTS]
+
+    def _cli_proxy_sync_buttons(self):
+        runtime = getattr(self, '_cli_proxy', None)
+        usable = runtime is not None and not runtime.unavailable_reason()
+        waiting = runtime.login_provider() if runtime is not None else ''
+        row = self._cli_proxy_selected_row()
+        running = usable and runtime.is_running()
+        self.cli_proxy_sign_in_button.setText(_tr('Cancel') if waiting else _tr('Sign in'))
+        self.cli_proxy_sign_in_button.setEnabled(bool(usable and (waiting or row)))
+        self.cli_proxy_sign_out_button.setEnabled(bool(running and not waiting and row.get('name')))
+        self.cli_proxy_models_button.setEnabled(bool(running and not waiting and runtime.accounts))
+        self.cli_proxy_move_button.setEnabled(bool(running and runtime.accounts and self._cli_proxy_vibeproxy_profiles()))
+
+    def _cli_proxy_sign_in_clicked(self):
+        runtime = getattr(self, '_cli_proxy', None)
+        if runtime is None:
+            return
+        if runtime.login_provider():
+            runtime.cancel_login()
+            return
+        row = self._cli_proxy_selected_row()
+        if row:
+            runtime.begin_login(row['provider'])
+
+    def _cli_proxy_login_changed(self, provider: str, result: str, message: str):
+        self.refresh_cli_proxy_page()
+        if result == 'failed':
+            show_broccoli_message(self, _tr('Subscriptions'),
+                                  _tr('The sign-in to {name} did not finish.').format(name=cli_proxy_provider_label(provider))
+                                  + ('\n' + message if message else ''))
+
+    def _cli_proxy_sign_out_clicked(self):
+        runtime = getattr(self, '_cli_proxy', None)
+        row = self._cli_proxy_selected_row()
+        if runtime is None or not row.get('name'):
+            return
+        sign_out = _tr('Sign out')
+        choice = ask_broccoli_message(
+            self, _tr('Subscriptions'),
+            _tr('Sign out of {name} ({account})? Profiles that use its models stop working until you sign in again.').format(
+                name=cli_proxy_provider_label(row['provider']), account=row['account']),
+            [_tr('Cancel'), sign_out], default_button_text=_tr('Cancel'))
+        if choice == sign_out:
+            runtime.sign_out(row['name'])
+
+    def _cli_proxy_models_clicked(self):
+        runtime = getattr(self, '_cli_proxy', None)
+        if runtime is None:
+            return
+        self._cli_proxy_models_token = object()
+        self.cli_proxy_models_button.setEnabled(False)
+        runtime.fetch_models(self._cli_proxy_models_token)
+
+    def _cli_proxy_models_ready(self, token, models: list, error: str):
+        if token is None or token is not self._cli_proxy_models_token:
+            return
+        self._cli_proxy_models_token = None
+        self._cli_proxy_sync_buttons()
+        runtime = getattr(self, '_cli_proxy', None)
+        if error or not models or runtime is None:
+            show_broccoli_message(self, _tr('Subscriptions'),
+                                  _tr('The proxy listed no models.') + ('\n' + error if error else ''))
+            return
+        have = {(cli_proxy_endpoint_port(p.get('endpoint', '')), str(p.get('model', '')))
+                for p in self.settings_store.get('profiles') or [] if cli_proxy_profile_is_own(p)}
+        candidates = [normalize_profile_entry({'name': model['id'], 'endpoint': runtime.base_url(),
+                                               'api_key': runtime.client_key, 'model': model['id']}, model['id'])
+                      for model in sorted(models, key=lambda m: m['id'].lower())
+                      if (runtime.port, model['id']) not in have]
+        if not candidates:
+            show_broccoli_message(self, _tr('Subscriptions'), _tr('Every model of your sign-ins is a profile already.'))
+            return
+        dialog = ModelProfilesPickDialog(self, candidates, 'models')
+        self._center_child_dialog(dialog)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if add_shared_profiles(self.settings_store['profiles'], dialog.selected_profiles()):
+            self._save_panel_settings_store()
+            self.refresh_profile_selector(str(self.profile_selector.currentData() or '') or None)
+            self._cli_proxy_sync_buttons()
+
+    def _cli_proxy_move_clicked(self):
+        runtime = getattr(self, '_cli_proxy', None)
+        profiles = self._cli_proxy_vibeproxy_profiles()
+        if runtime is None or not runtime.is_running() or not profiles:
+            return
+        move = _tr('Move')
+        choice = ask_broccoli_message(
+            self, _tr('Subscriptions'),
+            _tr('{count} profiles go through VibeProxy (localhost:8317). Point them at Broccoli\'s own proxy instead? '
+                'A model works only if you are signed in to its subscription here.').format(count=len(profiles)),
+            [_tr('Cancel'), move], default_button_text=move)
+        if choice != move:
+            return
+        for profile in profiles:
+            profile['endpoint'] = runtime.base_url()
+            profile['api_key'] = runtime.client_key
+        self._save_panel_settings_store()
+        self.reload_from_store()
+        self._cli_proxy_sync_buttons()
+
     def _build_model_location_page(self) -> QWidget:
         from PyQt6.QtWidgets import QTreeWidget
         page = QWidget()
@@ -131690,7 +141856,13 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.profile_save_button = MacNormalButton('✓', self)
         self.profile_save_button.setToolTip(_tr('Save profile (keep Settings open)'))
         self.profile_save_button.clicked.connect(self.save_profile_inline)
-        for _profile_btn in (self.profile_new_button, self.profile_delete_button, self.profile_save_button):
+        # ⋯: share the profiles with another Mac or a friend / take in a shared file (2026-11-12)
+        self.profile_share_button = MacNormalButton('⋯', self)
+        self.profile_share_button.setToolTip(_tr('Share or import profiles'))
+        self.profile_share_button.setAccessibleName(_tr('Share or import profiles'))
+        self.profile_share_button.clicked.connect(self.on_profile_share_menu)
+        for _profile_btn in (self.profile_new_button, self.profile_delete_button, self.profile_save_button,
+                             self.profile_share_button):
             _profile_btn.setFixedWidth(28)
 
         # This QFormLayout is FieldsStayAtSizeHint, so Expanding/stretch are ignored —
@@ -131726,6 +141898,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         profile_row_layout.addWidget(self.profile_new_button)
         profile_row_layout.addWidget(self.profile_delete_button)
         profile_row_layout.addWidget(self.profile_save_button)
+        profile_row_layout.addWidget(self.profile_share_button)
         profile_row_layout.addStretch(1)
         profile_row.setLayout(profile_row_layout)
 
@@ -131805,8 +141978,19 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 'in the collapsed button, the middle always shows Broccoli.'))
         self.collapsed_with_main_checkbox.setChecked(True)
         self.collapsed_home_checkbox.setChecked(True)
+        # 2026-11-12 (style book 5.1.8): a double click on the circle shows its last answer again
+        self.collapsed_double_click_checkbox = QCheckBox(_tr('Double-click the collapsed button to show its last answer again'), self)
+        self.collapsed_double_click_checkbox.setToolTip(
+            _tr('On: a single click waits a moment (the system\'s double-click time) before it shows or hides '
+                'the main window. Off: a click works at once.'))
+        self.collapsed_double_click_checkbox.setChecked(True)
         self.collapsed_with_main_checkbox.toggled.connect(
             lambda on: self.collapsed_home_checkbox.setEnabled(bool(on)))
+        # 2026-11-11: this used to be the circle's right-click menu; the right click is its input box now
+        self.collapsed_reset_position_button = MacNormalButton(_tr('Move Back to Default Position'), self)
+        self.collapsed_reset_position_button.setToolTip(
+            _tr('Puts the collapsed button back in the bottom right corner of the screen and forgets where it was dragged to.'))
+        self.collapsed_reset_position_button.clicked.connect(self._reset_collapsed_button_position_from_settings)
         self.start_on_login_checkbox = QCheckBox(_tr('Start Broccoli on login'), self)
         self.terminal_auto_start_agent_cli_checkbox = QCheckBox(_tr('Auto-start Codex / Claude Code tabs on launch'), self)
         self.web_auto_open_last_urls_checkbox = QCheckBox(_tr('Auto-open last Web / Localhost URLs on launch'), self)
@@ -131868,6 +142052,18 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.le_collapsed_circle = QLineEdit(self)
         self.le_collapsed_circle.setPlaceholderText(_tr('Optional shortcut'))
         self.le_collapsed_circle.setFixedHeight(22)
+        # 2026-11-12 (style book 5.1.12): one optional shortcut per layer of the circle's grid; the
+        # same width as the other record buttons (the label is made to fit)
+        self.btn_grid_layers, self.le_grid_layers = [], []
+        for _layer_number in range(1, COLLAPSED_LAUNCHER_LAYERS + 1):
+            _layer_button = MacNormalButton(_tr('Record Grid layer {n} shortcut').format(n=_layer_number), self)
+            _layer_button.clicked.connect(lambda _checked=False, n=_layer_number: self.record_grid_layer(n))
+            _layer_button.setFixedWidth(shortcut_button_w)
+            _layer_edit = QLineEdit(self)
+            _layer_edit.setPlaceholderText(_tr('Optional shortcut'))
+            _layer_edit.setFixedHeight(22)
+            self.btn_grid_layers.append(_layer_button)
+            self.le_grid_layers.append(_layer_edit)
         self.le_same_position_screenshot = QLineEdit(self)
         self.le_same_position_screenshot.setPlaceholderText(_tr('Optional shortcut'))
         self.le_same_position_screenshot.setFixedHeight(22)
@@ -132579,6 +142775,14 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         general_page_shortcuts_layout.addWidget(shortcut_row_region_screenshot)   # FIX-45
         general_page_shortcuts_layout.addWidget(shortcut_row_edge_toggle)
         general_page_shortcuts_layout.addWidget(shortcut_row_collapsed_circle)
+        for _layer_button, _layer_edit in zip(self.btn_grid_layers, self.le_grid_layers):
+            _layer_row = QWidget()
+            _layer_row_layout = QHBoxLayout(_layer_row)
+            _layer_row_layout.setContentsMargins(0, 0, 0, 0)
+            _layer_row_layout.setSpacing(6)
+            _layer_row_layout.addWidget(_layer_button)
+            _layer_row_layout.addWidget(_layer_edit, 1)
+            general_page_shortcuts_layout.addWidget(_layer_row)
         general_page_shortcuts_layout.addWidget(self.frame1)
         general_page_shortcuts_layout.addWidget(QLabel(_tr('Terminal shell mode')))
         general_page_shortcuts_layout.addWidget(terminal_shell_row)
@@ -132959,9 +143163,18 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         collapsed_icon_row_layout.addWidget(self.collapsed_icon_combo, 1)
         collapsed_icon_row_layout.addWidget(self.collapsed_icon_choose_button)
         general_page_window_startup_layout.addWidget(collapsed_icon_row)
-        for collapsed_checkbox in (self.collapsed_with_main_checkbox, self.collapsed_home_checkbox):
+        for collapsed_checkbox in (self.collapsed_with_main_checkbox, self.collapsed_home_checkbox,
+                                   self.collapsed_double_click_checkbox):
             collapsed_checkbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             general_page_window_startup_layout.addWidget(collapsed_checkbox)
+        collapsed_position_row = QWidget()
+        collapsed_position_row_layout = QHBoxLayout(collapsed_position_row)
+        collapsed_position_row_layout.setContentsMargins(0, 0, 0, 0)
+        collapsed_position_row_layout.setSpacing(4)
+        collapsed_position_row_layout.addWidget(QLabel(_tr('Collapsed button position'), self))
+        collapsed_position_row_layout.addStretch(1)
+        collapsed_position_row_layout.addWidget(self.collapsed_reset_position_button)
+        general_page_window_startup_layout.addWidget(collapsed_position_row)
         # ── Agent plan（独立分组，与窗口/启动无关）：每步执行前的
         # "等待 Plan 编辑"停顿时长滑杆。
         general_page_window_startup_layout.addSpacing(8)
@@ -133340,6 +143553,10 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
              _tr('The pages listed in the "+" menu of the Web / Localhost bar, and their order.'), True),
             (self._build_auto_approve_page(), _tr('Automatic approval'),
              _tr('Let tasks run without anyone at the screen: every action is approved, after a backup.'), True),
+            # 自己的快捷指令（2026-11-12，样式书 5.1.11）：列表自己撑满整页，不外套滚动区；排在最后，前面各页的页码不变
+            (self._build_circle_commands_page(), _tr('Quick commands'),
+             _tr('Your own commands for the collapsed button\'s grid: a script that runs at once, or a question for the Agent.'),
+             False),
         ):
             self.general_pages.addWidget(
                 self._register_settings_page(0, page, title, hint, scrollable=scrollable)
@@ -133529,6 +143746,8 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
              _tr('How well each model does on agent steps, used when choosing models.')),
             (models_page_3, _tr('Models by location'),
              _tr('Models that may not be used at home, at the office or on another network.')),
+            (self._build_cli_proxy_page(), _tr('Subscriptions'),
+             _tr('Sign in to an AI subscription and use its models as profiles, without an API key.')),
         ):
             self.models_pages.addWidget(self._register_settings_page(1, page, title, hint))
         self.models_prev_button = glass_button(MacNormalButton('‹', self))   # page turns: glass (the rest stay grey)
@@ -133887,6 +144106,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             self.model_input,
             self.timeout_input, self.le_ui, self.le_same_position_screenshot,
             self.le_region_screenshot, self.le_edge_toggle, self.le_collapsed_circle, self.le_ai_tasks,
+            *self.le_grid_layers,
             self.webfetch_download_input,
             self.display_history_limit_input,
             self.parallel_workers_input,
@@ -133967,6 +144187,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.collapsed_icon_combo.currentIndexChanged.connect(self._mark_dirty_if_needed)
         self.collapsed_with_main_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.collapsed_home_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.collapsed_double_click_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.start_on_login_checkbox.toggled.connect(self._mark_dirty_if_needed)
         if hasattr(self, 'step_pause_slider'):
             self.step_pause_slider.valueChanged.connect(self._mark_dirty_if_needed)
@@ -134130,6 +144351,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 COLLAPSED_BUTTON_ICON_PATH_KEY: self._collapsed_icon_path,
                 COLLAPSED_BUTTON_WITH_MAIN_KEY: self.collapsed_with_main_checkbox.isChecked(),
                 COLLAPSED_BUTTON_HOME_WITH_MAIN_KEY: self.collapsed_home_checkbox.isChecked(),
+                COLLAPSED_BUTTON_DOUBLE_CLICK_KEY: self.collapsed_double_click_checkbox.isChecked(),
                 'terminal_auto_start_agent_cli_tabs': self.terminal_auto_start_agent_cli_checkbox.isChecked(),
                 'web_auto_open_last_urls': self.web_auto_open_last_urls_checkbox.isChecked(),
                 'prefer_displayed_history_context': self.checkBox_display_history.isChecked(),
@@ -134188,6 +144410,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 'region_screenshot_shortcut': self.le_region_screenshot.text().strip(),
                 'edge_toggle_shortcut': self.le_edge_toggle.text().strip(),
                 COLLAPSED_BUTTON_SHORTCUT_KEY: self.le_collapsed_circle.text().strip(),
+                **{key: edit.text().strip() for key, edit in zip(COLLAPSED_BUTTON_LAYER_SHORTCUT_KEYS, self.le_grid_layers)},
                 AI_TASKS_SHORTCUT_KEY: self.le_ai_tasks.text().strip(),
                 'pdf_max_pages': self.pdf_pages_combo.currentData(),
                 'embedding_profile': self.embedding_profile_combo.currentData(),
@@ -134310,6 +144533,14 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             if not self._choose_collapsed_icon_picture():
                 self.collapsed_icon_combo.setCurrentIndex(self.collapsed_icon_combo.findData(DEFAULT_COLLAPSED_BUTTON_ICON))
         self.collapsed_icon_choose_button.setVisible(self.collapsed_icon_combo.currentData() == 'custom')
+
+    def _reset_collapsed_button_position_from_settings(self):
+        """Settings › Window & startup › "Move Back to Default Position": the main window does it."""
+        main = self.window()
+        if not hasattr(main, '_reset_collapsed_button_position'):
+            main = globals().get('w3')
+        if main is not None and hasattr(main, '_reset_collapsed_button_position'):
+            main._reset_collapsed_button_position()
 
     def _choose_collapsed_icon_picture(self) -> bool:
         """A picture for the collapsed circle; a copy (at most 256 px) goes into Broccoli's data folder."""
@@ -134495,6 +144726,14 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
 
     def record_edge_toggle(self):
         target = 'edge_toggle'
+        if self.hotkey_manager is not None and self.hotkey_manager.record_target == target:
+            self.hotkey_manager.cancel_recording()
+            self.reset_record_buttons()
+            return
+        self.begin_shortcut_recording(target)
+
+    def record_grid_layer(self, number: int):
+        target = f'grid_layer_{int(number)}'
         if self.hotkey_manager is not None and self.hotkey_manager.record_target == target:
             self.hotkey_manager.cancel_recording()
             self.reset_record_buttons()
@@ -134754,12 +144993,210 @@ EDITOR_TEXT_EXTS = {
 }
 
 
+# ---- Office files: Word / Excel / PowerPoint in the editor (2026-11-11, Ryan) ----
+# Ryan: "我这里要做的是编辑器，不是阅读器" (the user edits these files in the editor, not only reads
+# them), "查查有没有现成的三件套的库……整体更新，而不是自己去改代码", "非常完整可插拔，随时更新，随时替换".
+# So the editing surface is a bundled component Broccoli ships unchanged (office_editor/, taken as
+# a whole by office_editor_update.py, listed in external_components.json); everything Broccoli knows
+# about it is one adapter class in office_editor_bridge.py. The editor itself — history, diffs, the
+# AI edit flow — keeps working on text: for an office file that text is its "text view"
+# (office_files.py: one line per paragraph / table row / cell / text-box paragraph), and a text edit
+# is written back into the file by office_files.office_apply_text. Neither path depends on the
+# other: without the component the files go to the Reader as before.
+try:
+    import office_files
+except Exception:   # python-docx / openpyxl / python-pptx missing: office files stay with the Reader
+    office_files = None
+try:
+    import office_editor_bridge
+except Exception:
+    office_editor_bridge = None
+
+EDITOR_OFFICE_EXTS = {'.docx', '.xlsx', '.pptx'}
+_OFFICE_EDITOR_COMPONENT = {'loaded': False, 'component': None, 'reason': ''}
+
+
+def editor_office_kind(path) -> str:
+    """'docx' / 'xlsx' / 'pptx' for an office file the editor handles, else ''."""
+    if office_files is None:
+        return ''
+    try:
+        return office_files.office_kind(path)
+    except Exception:
+        return ''
+
+
+def office_editor_folder() -> str:
+    """The bundled office-editing component's folder (manifest.json + site/), or ''."""
+    folders = []
+    meipass = str(getattr(sys, '_MEIPASS', '') or '')
+    if meipass:
+        folders.append(os.path.join(meipass, 'office_editor'))
+    folders += [
+        os.path.join(BUNDLED_RESOURCES_DIR, 'office_editor'),
+        os.path.join(os.path.dirname(BUNDLED_RESOURCES_DIR), 'Frameworks', 'office_editor'),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'office_editor'),
+    ]
+    for folder in folders:
+        if os.path.isfile(os.path.join(folder, 'manifest.json')):
+            return folder
+    return ''
+
+
+def office_editor_component():
+    """The office-editing component (office_editor_bridge.OfficeComponent), or None when this copy
+    of Broccoli has none / it cannot be used. Looked up once."""
+    state = _OFFICE_EDITOR_COMPONENT
+    if not state['loaded']:
+        state['loaded'] = True
+        if office_editor_bridge is None or office_files is None:
+            state['reason'] = 'the office support modules are missing'
+        else:
+            folder = office_editor_folder()
+            if not folder:
+                state['reason'] = 'no office_editor folder'
+            else:
+                try:
+                    state['component'], state['reason'] = office_editor_bridge.load_component(folder)
+                except Exception as exc:
+                    state['component'], state['reason'] = None, str(exc)
+    return state['component']
+
+
+def editor_office_lock_owner(path) -> str:
+    """'' — or the name of the lock file Word / Excel / PowerPoint keeps beside a document it has
+    open ("~$name.docx"): writing under such a program loses either its changes or ours."""
+    try:
+        folder, name = os.path.split(os.path.abspath(str(path)))
+        stem = os.path.splitext(name)[0]
+        candidates = {'~$' + name}
+        if len(stem) > 7:
+            candidates.add('~$' + name[2:])
+        elif len(stem) == 7:
+            candidates.add('~$' + name[1:])
+        for candidate in candidates:
+            if os.path.isfile(os.path.join(folder, candidate)):
+                return candidate
+    except Exception:
+        pass
+    return ''
+
+
+OFFICE_DOCUMENT_TOOL_NAME = 'broccoli_office_document'
+OFFICE_SCRIPT_WAIT_SECONDS = 900          # a changing script waits for the user's decision
+OFFICE_SCRIPT_IMAGE_EXTS = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+                            '.bmp': 'image/bmp', '.webp': 'image/webp', '.svg': 'image/svg+xml'}
+OFFICE_SCRIPT_IMAGE_MAX_BYTES = 12 * 1024 * 1024
+
+
+def office_document_tool_definition(paths):
+    """The tool with which a model looks at and changes everything of an office file open in the
+    editor that the text view does not hold (pictures, shapes, positions, fills, charts, formats,
+    page setup, sheets): by a script in the editing component's own scripting language. None when
+    no office file is open or the component runs no scripts."""
+    component = office_editor_component() if office_files is not None else None
+    if component is None:
+        return None
+    kinds, names = [], []
+    for path in paths or []:
+        kind = editor_office_kind(path)
+        if kind:
+            names.append(os.path.basename(str(path)))
+            if kind not in kinds:
+                kinds.append(kind)
+    common = component.adapter.script_guide()
+    if not common or not kinds:
+        return None
+    starts = '\n'.join('In a .%s file: %s' % (kind, component.adapter.script_start(kind)) for kind in kinds)
+    return {
+        'type': 'function',
+        'function': {
+            'name': OFFICE_DOCUMENT_TOOL_NAME,
+            'description': (
+                'Look at and change an office file that is open in the Broccoli Editor, beyond its words: pictures, '
+                'backgrounds, shapes, positions and sizes, colours and fonts, charts, tables, page setup, sheets, '
+                'slides — everything the editor\'s own toolbar can do. (To change only words, cell values or formulas, '
+                'use editor_edit on the text view instead: it is checked letter by letter.) Open office files: '
+                + ', '.join(names) + '.\n'
+                'action "layout": what is in the document besides its words — slides and their objects with name, '
+                'kind, position and size; a Word file\'s page setup and body elements; a workbook\'s sheets. Read it '
+                'before you move or restyle anything.\n'
+                'action "script": run a script on the document. ' + common + '\n' + starts + '\n'
+                'A script that changes the document is first run on the open document without saving; the user is '
+                'shown before and after and decides; only then the file is written. Put everything of one request '
+                'into ONE script. If the script fails you get the error message and nothing is changed: correct it and '
+                'call again. Pictures: list local image files in "images"; inside the script Images[0], Images[1] … '
+                'are their data, usable wherever the API takes an image URL.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'file': {'type': 'string', 'description': 'Which open office file (basename or absolute path).'},
+                    'action': {'type': 'string', 'enum': ['layout', 'script']},
+                    'page': {'type': 'integer', 'description': 'For layout: only this slide / sheet (1-based).'},
+                    'script': {'type': 'string', 'description': 'For script: the body of a JavaScript function using Api.'},
+                    'summary': {'type': 'string', 'description': 'For a changing script: one sentence, in the user\'s '
+                                                                 'language, saying what it changes (shown in the approval).'},
+                    'images': {'type': 'array', 'items': {'type': 'string'},
+                               'description': 'Absolute paths of local image files the script uses as Images[i].'},
+                },
+                'required': ['file', 'action'],
+                'additionalProperties': False,
+            },
+        },
+    }
+
+
+def office_script_image_prelude(paths) -> tuple:
+    """('var Images = [...];' , '') for a script — the listed image files as data URLs — or
+    ('', why it cannot be done)."""
+    urls = []
+    for path in paths or []:
+        full = os.path.abspath(os.path.expanduser(str(path)))
+        mime = OFFICE_SCRIPT_IMAGE_EXTS.get(os.path.splitext(full)[1].lower())
+        if not mime:
+            return '', 'not an image file the document can take: %s' % path
+        try:
+            if os.path.getsize(full) > OFFICE_SCRIPT_IMAGE_MAX_BYTES:
+                return '', 'the image is larger than %d MB: %s' % (OFFICE_SCRIPT_IMAGE_MAX_BYTES // (1024 * 1024), path)
+            with open(full, 'rb') as handle:
+                urls.append('data:%s;base64,%s' % (mime, base64.b64encode(handle.read()).decode('ascii')))
+        except OSError as exc:
+            return '', 'the image cannot be read (%s): %s' % (exc.strerror or exc, path)
+    return 'var Images = %s;\n' % json.dumps(urls), ''
+
+
+def editor_office_text_guide_for(paths) -> str:
+    """Instructions for the model on how the text view of the open office files is written."""
+    kinds = []
+    for path in paths or []:
+        kind = editor_office_kind(path)
+        if kind and kind not in kinds:
+            kinds.append(kind)
+    if not kinds or office_files is None:
+        return ''
+    lines = ['OFFICE FILES: an open .docx / .xlsx / .pptx file is shown to you as its TEXT VIEW, not as the file '
+             'itself. You edit it with editor_edit exactly like a text file (line_replace / find_replace on the text '
+             'view); Broccoli writes your changed lines back into the real document and keeps all other formatting. '
+             'An edit whose lines cannot be written into the document is rejected with the reason. Never write these '
+             'files with shell commands or code. For everything the text view does not hold — pictures, backgrounds, '
+             'shapes, positions, colours and fonts, charts, page setup, sheets — use the %s tool (when it is offered): '
+             'it lists the layout and runs a script on the open document; the user sees before / after and '
+             'approves.' % OFFICE_DOCUMENT_TOOL_NAME]
+    for kind in kinds:
+        lines.append('- ' + office_files.office_text_guide(kind))
+    return '\n'.join(lines)
+
+
 def editor_supported_file(path):
-    # A file the editor can open: an existing plain-text-ish file on disk.
+    # A file the editor can open: an existing plain-text-ish file on disk — or a Word / Excel /
+    # PowerPoint file when the office-editing component is there.
     try:
         if not path or not os.path.isfile(path):
             return False
         ext = os.path.splitext(path)[1].lower()
+        if ext in EDITOR_OFFICE_EXTS:
+            return bool(editor_office_kind(path)) and office_editor_component() is not None
         if ext in EDITOR_TEXT_EXTS:
             return True
         with open(path, 'rb') as f:
@@ -134927,6 +145364,12 @@ def editor_set_kind_override(store, override):
 
 
 def editor_file_text_sample(path, max_chars=24000):
+    if editor_office_kind(path):
+        try:
+            store = EditorStore.for_path(path)
+            return (store.read_disk() if store is not None else '')[:int(max_chars)]
+        except Exception:
+            return ''
     try:
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
             return f.read(int(max_chars))
@@ -135301,8 +145744,14 @@ def editor_write_file(parent, store, text, unattended=False, **write_options) ->
     say why — and when only its encoding cannot hold the new text, offer UTF-8 instead.
     write_options: passed to write_disk (file_format / expect). unattended (approve-all mode):
     nothing waits for a click — UTF-8 is taken (the file's own bytes are in the history), and
-    a failure is a notification, not a dialog."""
-    if store.write_disk(text, **write_options):
+    a failure is a notification, not a dialog. office_bytes: an office file's new bytes (from its
+    editing view, or a history version) — written instead of `text`."""
+    office_bytes = write_options.pop('office_bytes', None)
+    if office_bytes is not None:
+        written = store.write_office_bytes(office_bytes, expect=write_options.get('expect'))
+    else:
+        written = store.write_disk(text, **write_options)
+    if written:
         return True
     error = getattr(store, 'last_write_error', None)
     if not error:
@@ -135362,6 +145811,10 @@ class EditorStore:
         self._format = None          # the file's encoding / BOM / line ending as last read or written
         self._read_cache = None      # ((mtime_ns, size), text, format)
         self.last_write_error = None  # ('encoding', name, chars) / ('read_only', why) / ('failed', why)
+        # 'docx' / 'xlsx' / 'pptx': the store's text is the file's text view (office_files), a
+        # history version also keeps the file's bytes, and writes go through _write_office
+        self.office_kind = editor_office_kind(abs_path)
+        self.last_read_error = ''
         try:
             os.makedirs(self.versions_dir, exist_ok=True)
         except Exception:
@@ -135413,6 +145866,8 @@ class EditorStore:
         return data
 
     def file_kind(self):
+        if self.office_kind:
+            return 'text-article'    # a document, never code (and never sniffed from its bytes)
         override = editor_kind_override_for_key(self.file_key)
         if override:
             return override
@@ -135460,7 +145915,7 @@ class EditorStore:
             self._write_json(self._versions_index_path(), data)
         return data
 
-    def save_version(self, content, trigger, conversation_id='', turn=-1, note='', file_format=None):
+    def save_version(self, content, trigger, conversation_id='', turn=-1, note='', file_format=None, binary=None):
         """Keep a copy of `content` (a history version) — on disk, with its fingerprint and the
         file's encoding / BOM / line ending, BEFORE returning its number; -1 when it could not be
         kept. Every write to the user's file is preceded by one (the file is written in place, so
@@ -135514,6 +145969,22 @@ class EditorStore:
         fmt = _editor_format_record(file_format if file_format is not None else self._format)
         if fmt:
             entry['format'] = fmt
+        if self.office_kind:
+            # an office file's version is the file itself (its bytes); the text is its text view.
+            # Kept when the text IS what the file holds now — a version of text that was never
+            # written (none today) would be restored through the text.
+            if binary is None:
+                current = self._office_disk_bytes()
+                if current is not None and self._office_text_of(current) == text:
+                    binary = current
+            if binary is not None:
+                if not self._write_version_bytes(n, binary):
+                    try:
+                        os.remove(final)
+                    except Exception:
+                        pass
+                    return -1
+                entry['bsha'] = hashlib.sha256(binary).hexdigest()
         versions.append(entry)
         data['versions'] = versions
         if not self._write_json(self._versions_index_path(), data, durable=True):
@@ -135557,6 +146028,23 @@ class EditorStore:
 
     def disk_state_backed_up(self, text, file_format=None):
         """Is this disk state (text + encoding / line ending) already kept as a version?"""
+        if self.office_kind:
+            # the same text view can come from different files (only formatting changed in Word):
+            # an office file is kept when its very bytes are
+            current = self._office_disk_bytes()
+            if current is None:
+                return False
+            if self._office_text_of(current) != text:
+                return self.version_with_text(text) is not None    # a state that is not the disk's
+            bsha = hashlib.sha256(current).hexdigest()
+            for v in self._load_versions_index().get('versions') or []:
+                try:
+                    if isinstance(v, dict) and v.get('bsha') == bsha and os.path.isfile(
+                            self._version_bytes_path(int(v.get('n')))):
+                        return True
+                except Exception:
+                    continue
+            return False
         sha = editor_text_fingerprint(text)
         fmt = _editor_format_record(file_format if file_format is not None else self._format)
         data = self._load_versions_index()
@@ -135685,8 +146173,125 @@ class EditorStore:
         self._read_cache = (key, text, file_format) if key is not None else None
         return text, file_format
 
+    # ── office files: bytes on disk, text view in the editor (2026-11-11) ──
+    def _office_disk_bytes(self):
+        try:
+            with open(self.path, 'rb') as f:
+                return f.read()
+        except Exception:
+            return None
+
+    def _office_text_of(self, data):
+        """The text view of these bytes ('' when they cannot be read as this kind of file)."""
+        if data is None:
+            return ''
+        sha = hashlib.sha256(data).hexdigest()
+        cached = self.__dict__.get('_office_text_cache')
+        if cached is not None and cached[0] == sha:
+            return cached[1]
+        try:
+            text = office_files.office_text(data, self.office_kind)
+            self.last_read_error = ''
+        except Exception as exc:
+            text = ''
+            self.last_read_error = str(exc)
+        self._office_text_cache = (sha, text)
+        return text
+
+    def _version_bytes_path(self, n):
+        return os.path.join(self.versions_dir, 'v%04d.bin' % int(n))
+
+    def _write_version_bytes(self, n, data) -> bool:
+        final = self._version_bytes_path(n)
+        tmp = final + '.tmp'
+        try:
+            with open(tmp, 'wb') as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, final)
+            return True
+        except Exception:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+            return False
+
+    def version_bytes(self, n):
+        """The file as version n kept it (an office file's version) — None when there is no such
+        copy or it is damaged (its hash no longer matches)."""
+        try:
+            entry = self.version_entry(n) or {}
+            with open(self._version_bytes_path(n), 'rb') as f:
+                data = f.read()
+        except Exception:
+            return None
+        if entry.get('bsha') and hashlib.sha256(data).hexdigest() != entry.get('bsha'):
+            return None
+        return data
+
+    def adopt_disk_bytes(self, text):
+        """The file was written again with the same text view (an Excel file handed back with its
+        formulas calculated): the newest version with that text now keeps these bytes, so the disk
+        state counts as kept and no "changed outside" version appears for it."""
+        data = self._office_disk_bytes()
+        if data is None or self._office_text_of(data) != text:
+            return False
+        sha = editor_text_fingerprint(text)
+        for v in reversed(self.list_versions()):
+            if v.get('sha') == sha:
+                try:
+                    n = int(v.get('n'))
+                except Exception:
+                    return False
+                if not self._write_version_bytes(n, data):
+                    return False
+                return bool(self.update_version(n, bsha=hashlib.sha256(data).hexdigest()))
+        return False
+
+    def version_with_text(self, text):
+        """The newest history version that holds exactly this text view AND the file's bytes:
+        its number, else None. Restoring that text restores that very file."""
+        sha = editor_text_fingerprint(text)
+        for v in reversed(self.list_versions()):
+            try:
+                if v.get('sha') == sha and v.get('bsha') and os.path.isfile(self._version_bytes_path(int(v.get('n')))):
+                    return int(v.get('n'))
+            except Exception:
+                continue
+        return None
+
+    def _office_restore_bytes(self, text):
+        """write gate hook: the bytes of a kept version with exactly this text, or None."""
+        n = self.version_with_text(text)
+        data = self.version_bytes(n) if n is not None else None
+        if data is not None and self._office_text_of(data) == text:
+            return data
+        return None
+
+    def _write_office(self, text=None, data=None, expect=None):
+        """Write an office file: `data` (the file the editing component returned) or `text` (a text
+        view: a kept version with that very text is put back as it was, otherwise the changed lines
+        are written into the document — office_files.office_apply_text). Through the write gate,
+        like every write. False with last_write_error when it fails."""
+        self.last_write_error = None
+        ok, error, after = write_gate().write_office_file(
+            self.path, self.office_kind, text=text, data=data, expect=expect, restore=self._office_restore_bytes)
+        if not ok:
+            self.last_write_error = error or ('failed', '')
+            return False
+        self._format = dict(EDITOR_DEFAULT_FILE_FORMAT)
+        self._read_cache = None
+        self._last_own_mtime = self.disk_mtime()
+        return True
+
+    def write_office_bytes(self, data, expect=None):
+        return self._write_office(data=data, expect=expect)
+
     def read_disk(self):
-        """The file's text (line ends as \\n), decoded from its own encoding."""
+        """The file's text (line ends as \\n), decoded from its own encoding. An office file: its
+        text view."""
         try:
             stat = os.stat(self.path)
             key = (stat.st_mtime_ns, stat.st_size)
@@ -135696,6 +146301,11 @@ class EditorStore:
                 return cached[1]
             with open(self.path, 'rb') as f:
                 data = f.read()
+            if self.office_kind:
+                text = self._office_text_of(data)
+                self._format = dict(EDITOR_DEFAULT_FILE_FORMAT)
+                self._read_cache = (key, text, self._format)
+                return text
             text, self._format = self._decoded(data, key)
             return text
         except Exception:
@@ -135718,6 +146328,8 @@ class EditorStore:
         gate, which locks the file, writes it (write_gate_write_in_place — the code that used to be
         here), records the change and tells the others; who asked for it comes from
         write_gate_context (an approved AI edit sets it; otherwise it is the user's own save)."""
+        if self.office_kind:
+            return self._write_office(text='' if text is None else str(text), expect=expect)
         self.last_write_error = None
         ok, error, used = write_gate().write_text_file(
             self.path, '' if text is None else str(text), encoding=encoding, file_format=file_format,
@@ -135749,7 +146361,10 @@ class EditorStore:
 
     def _lexicon_skeleton(self):
         kind = self.file_kind()
-        if kind == 'text-article':
+        if self.office_kind:
+            # an office document's parts (headings / slides / sheets and formulas), not paragraphs
+            categories = list(office_files.OUTLINE_CATEGORIES.get(self.office_kind) or ['Paragraph', 'Person', 'Concept'])
+        elif kind == 'text-article':
             categories = ['Paragraph', 'Person', 'Concept']
         else:
             categories = ['Variable', 'Function', 'Class', 'Signal', 'Other']
@@ -136385,6 +147000,7 @@ class EditorActionBar(QWidget):
     """Bottom capsule bar (Open In / Reveal in Finder / Save / Re-dock / Re-parse)."""
     save_requested = pyqtSignal()
     reparse_requested = pyqtSignal()
+    region_requested = pyqtSignal()
 
     def __init__(self, window, parent=None):
         super().__init__(parent)
@@ -136407,6 +147023,14 @@ class EditorActionBar(QWidget):
         self.save_btn.clicked.connect(self.save_requested)
         self.type_btn = EditorCapsuleButton(_tr('Type'), self)
         self.type_btn.clicked.connect(self._show_type_menu)
+        # Office files only (style book 5.11): freeze the picture of the document, circle a part of
+        # it, write a note, and both go to the Agent
+        # It stands where "Type" stands for a text file (an office file has no code / article
+        # choice), and its label is as short as "Type", so the bar still fits the narrowest window.
+        self.region_btn = EditorCapsuleButton(_tr('Mark'), self)
+        self.region_btn.setToolTip(_tr('Circle a part of the document and ask about it'))
+        self.region_btn.clicked.connect(self.region_requested)
+        self.region_btn.hide()
         self.redock_btn = EditorCapsuleButton(_tr('Re-dock'), self)
         self.redock_btn.clicked.connect(self._redock)
         self.reparse_btn = EditorCapsuleButton(_tr('Re-parse'), self)
@@ -136416,6 +147040,7 @@ class EditorActionBar(QWidget):
         hbox.addWidget(self.reveal_btn)
         hbox.addWidget(self.save_btn)
         hbox.addWidget(self.type_btn)
+        hbox.addWidget(self.region_btn)
         hbox.addStretch(1)
         hbox.addWidget(self.redock_btn)
         hbox.addWidget(self.reparse_btn)
@@ -136505,7 +147130,7 @@ class EditorActionBar(QWidget):
 
     def set_theme(self, dark_mode):
         for btn in (self.open_in_btn, self.reveal_btn, self.save_btn,
-                    self.type_btn, self.redock_btn, self.reparse_btn):
+                    self.type_btn, self.region_btn, self.redock_btn, self.reparse_btn):
             btn.apply_capsule_theme(dark_mode)
         self.update()
 
@@ -136683,6 +147308,28 @@ class EditorPage(QWidget):
         self.editor.customContextMenuRequested.connect(self._show_editor_menu)
         self.editor.textChanged.connect(self._on_text_changed)
         lay.addWidget(self.editor)
+        # ---- Office files (2026-11-11): a Word / Excel / PowerPoint file is shown and edited in
+        # the bundled office component, one view per open file, in place of the text editor. The
+        # text editor (hidden then) keeps holding the file's text view, so everything that reads
+        # "the editor's text" (AI context, compare, logic map) keeps working. ----
+        self._office_views = {}          # path -> office_editor_bridge view
+        self._office_loaded = {}         # path -> sha256 of the bytes its view was given / returned
+        self._office_recalc = set()      # paths whose view should hand its file back once opened
+        self._office_trials = {}         # path -> a script's result shown in the view, not written yet
+        self._office_host = QStackedWidget(self)
+        self._office_status = QLabel('', self._office_host)
+        self._office_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._office_status.setWordWrap(True)
+        self._office_host.addWidget(self._office_status)
+        # "Mark Region": the frozen picture of the document, drawn on like an image output
+        self._office_region = AnnotatableImageLabel(self._office_host)
+        self._office_region._force_dark = False
+        self._office_region.annotation_created.connect(self._on_office_region_marked)
+        self._office_host.addWidget(self._office_region)
+        self._office_region_path = None      # the file whose picture is frozen, else None
+        self._office_region_selection = {}
+        self._office_host.hide()
+        lay.addWidget(self._office_host, 1)
         # re-run the active search when the text changes (debounced for big files)
         self._search_retimer = QTimer(self)
         self._search_retimer.setSingleShot(True)
@@ -136732,6 +147379,7 @@ class EditorPage(QWidget):
         st_bg = 'rgba(255,159,10,46)' if dark_mode else 'rgba(255,159,10,36)'
         self._preview_banner.setStyleSheet(banner_css % ('editorPreviewBanner', pv_bg, fg, link))
         self._stale_banner.setStyleSheet(banner_css % ('editorStaleBanner', st_bg, fg, link))
+        self._office_status.setStyleSheet(f'color: {dim}; font-size: 13px; background: transparent;')
         try:
             self.version_combo._update_style()
         except Exception:
@@ -136749,6 +147397,7 @@ class EditorPage(QWidget):
             self._live_stash_modified = False
             self.editor.setReadOnly(False)
             self._preview_banner.hide()
+            self._office_show_disk(self._path)     # an office view was showing that version
             # M3 (defect 4a): a just-closed file must not resurrect its buffer
             if self._path and live_modified and self._path in win.session.open_files:
                 self._buffers[self._path] = live
@@ -136815,6 +147464,623 @@ class EditorPage(QWidget):
         except Exception:
             stale = False
         self._stale_banner.setVisible(stale)
+        self._office_sync_current()
+
+    # ---- Office files (2026-11-11): the view of the current file ----
+    def _office_store(self, path=None):
+        """The store of an office file (the current one by default), else None."""
+        path = path or self._path
+        if not path or not editor_office_kind(path):
+            return None
+        try:
+            return self._win.session.store(path)
+        except Exception:
+            return None
+
+    def is_office_path(self, path=None) -> bool:
+        return self._office_store(path) is not None
+
+    def _office_language(self) -> str:
+        """The interface language for the component: the first language of Settings › Languages."""
+        try:
+            first = str((load_language_items() or [''])[0]).strip().lower()
+        except Exception:
+            first = ''
+        names = {'zh-CN': ('chinese', '中文', '简体', '繁體', '汉语', 'zh'), 'ja': ('japanese', '日本語', 'ja'),
+                 'ko': ('korean', '한국어', 'ko'), 'de': ('german', 'deutsch', 'de'),
+                 'es': ('spanish', 'español', 'es')}
+        for code, words in names.items():
+            if any(first == word or (len(word) > 2 and word in first) for word in words):
+                return code
+        return 'en'
+
+    def _office_view_for(self, path, create=True):
+        view = self._office_views.get(path)
+        if view is not None or not create:
+            return view
+        component = office_editor_component()
+        if component is None:
+            return None
+        try:
+            view = office_editor_bridge.OfficeEditorView(
+                component, language=self._office_language(),
+                dark=bool(getattr(self._win, '_dark_mode', False)), parent=self._office_host)
+        except Exception:
+            logging.exception('The office editing view could not be created.')
+            return None
+        view.dirtyChanged.connect(lambda flag, p=path: self._on_office_dirty(p, flag))
+        view.opened.connect(lambda p=path: self._on_office_opened(p))
+        view.failed.connect(lambda message, p=path: self._on_office_failed(p, message))
+        view.menuAction.connect(lambda item, selection, p=path: self._on_office_menu(p, item, selection))
+        view.set_menu_items(self._office_menu_items())
+        self._office_views[path] = view
+        self._office_host.addWidget(view)
+        return view
+
+    def _office_load_bytes(self, path, data, readonly=False):
+        """Hand `data` to the path's view (creating it). The status line shows until it is open."""
+        view = self._office_view_for(path)
+        if view is None:
+            return None
+        view.setProperty('office_opened', False)
+        self._office_loaded[path] = hashlib.sha256(data).hexdigest() if not readonly else ''
+        view.open_bytes(os.path.basename(path), data, readonly=readonly)
+        return view
+
+    def _office_show_disk(self, path):
+        """Bring the path's view (if any) back to what the file holds now, editable."""
+        store = self._office_store(path)
+        if store is None or path not in self._office_views:
+            return
+        data = store._office_disk_bytes()
+        if data is not None:
+            self._office_load_bytes(path, data)
+        if path == self._path:
+            self._office_raise(path)
+
+    def _office_raise(self, path):
+        """Show the path's view once it has its document, the status line until then."""
+        view = self._office_views.get(path)
+        if view is not None and view.property('office_opened'):
+            self._office_host.setCurrentWidget(view)
+        else:
+            self._office_status.setText(_tr('Opening “{name}”…').format(name=os.path.basename(path or '')))
+            self._office_host.setCurrentWidget(self._office_status)
+
+    def _office_sync_current(self):
+        """After a file became current: show the office view for an office file (loading the file
+        into it, or again when the file changed on disk meanwhile and the view has no unsaved
+        changes), the text editor for every other file."""
+        path = self._path
+        store = self._office_store(path)
+        is_office = store is not None
+        self._office_region_stop(raise_view=False)
+        try:
+            self._win.action_bar.region_btn.setVisible(is_office)
+            self._win.action_bar.type_btn.setVisible(not is_office)
+        except Exception:
+            pass
+        self._office_host.setVisible(is_office)
+        self.editor.setVisible(not is_office)
+        self.search_field.setVisible(not is_office)      # the component has its own search
+        self.search_count_lbl.setVisible(not is_office)
+        if not is_office:
+            return
+        data = store._office_disk_bytes()
+        view = self._office_views.get(path)
+        if data is None:
+            self._office_status.setText(_tr('“{name}” could not be read.').format(name=os.path.basename(path)))
+            self._office_host.setCurrentWidget(self._office_status)
+            return
+        sha = hashlib.sha256(data).hexdigest()
+        if view is None or (self._office_loaded.get(path) != sha and not view.is_dirty()):
+            view = self._office_load_bytes(path, data)
+        if view is None:
+            self._office_status.setText(_tr('The office editing component is not available.'))
+            self._office_host.setCurrentWidget(self._office_status)
+            return
+        self._office_raise(path)
+
+    def _on_office_opened(self, path):
+        view = self._office_views.get(path)
+        if view is None:
+            return
+        view.setProperty('office_opened', True)
+        if path == self._path:
+            self._office_host.setCurrentWidget(view)
+        if path in self._office_recalc:
+            self._office_recalc.discard(path)
+            QTimer.singleShot(0, lambda p=path: self._office_store_recalculated(p))
+
+    @staticmethod
+    def _office_reason(message) -> str:
+        """What the component's bridge reports (English), in the user's language where known."""
+        known = {
+            'the document did not open in time': _tr('the document did not open in time'),
+            'the edited file did not come back in time': _tr('the edited document did not come back in time'),
+            'the component returned an empty file': _tr('the editing component returned an empty document'),
+        }
+        return known.get(str(message or ''), str(message or '')[:200])
+
+    @staticmethod
+    def _office_write_reason(error) -> str:
+        """Why a write failed (EditorStore.last_write_error), as a short phrase."""
+        kind = str((error or ('failed', ''))[0])
+        detail = str(error[1]) if error and len(error) > 1 else ''
+        if kind == 'changed':
+            return _tr('another program changed the file a moment ago')
+        if kind in ('busy', 'reserved'):
+            return _tr('a running task is changing it right now')
+        if kind == 'read_only':
+            return _tr('the file is read-only')
+        return detail or kind
+
+    def _on_office_failed(self, path, message):
+        logging.warning('Office view of %s: %s', path, message)
+        view = self._office_views.get(path)
+        if path == self._path and (view is None or not view.property('office_opened')):
+            self._office_status.setText(_tr('“{name}” could not be opened here: {reason}').format(
+                name=os.path.basename(path), reason=self._office_reason(message)))
+            self._office_host.setCurrentWidget(self._office_status)
+
+    def _on_office_dirty(self, path, flag):
+        if self._previewing is not None and path == self._path:
+            return
+        win = self._window()
+        if flag:
+            self._dirty_paths.add(path)
+        else:
+            self._dirty_paths.discard(path)
+        try:
+            win.file_bar.set_dirty(path, bool(flag))
+            if path == self._path:
+                win.action_bar.save_btn.setEnabled(bool(flag))
+        except Exception:
+            pass
+
+    def _office_fetch(self, path, timeout_ms=90000):
+        """(bytes, '') — the document as the path's view holds it now — or (None, why). Waits for
+        the component (it hands the file over within a second or so); clicks and keys wait too."""
+        view = self._office_views.get(path)
+        if view is None:
+            return None, _tr('The document is not open.')
+        from PyQt6.QtCore import QEventLoop
+        loop = QEventLoop(self)
+        result = {}
+
+        def got(data):
+            result['data'] = bytes(data)
+            loop.quit()
+
+        def bad(message):
+            result['error'] = str(message or '')
+            loop.quit()
+        view.saved.connect(got)
+        view.saveFailed.connect(bad)
+        try:
+            if not view.save():
+                return None, _tr('The document is still opening. Try again in a moment.')
+            QTimer.singleShot(int(timeout_ms), loop.quit)
+            loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        finally:
+            try:
+                view.saved.disconnect(got)
+                view.saveFailed.disconnect(bad)
+            except Exception:
+                pass
+        if 'data' in result:
+            return result['data'], ''
+        return None, (self._office_reason(result['error']) if result.get('error')
+                      else _tr('The document did not come back in time.'))
+
+    def _office_set_text(self, text):
+        """The hidden text editor follows the file's text view."""
+        self._loading = True
+        try:
+            self.editor.setPlainText(text)
+            self.editor.document().setModified(False)
+        finally:
+            self._loading = False
+
+    def flush_office_edits(self, path) -> str:
+        """Before anything reads or replaces an office file: write the changes the user made in its
+        view (if any) to the file, as a normal save. '' when the file now holds everything, else why
+        it could not be saved (nothing was lost: the view still has the changes)."""
+        store = self._office_store(path)
+        view = self._office_views.get(path)
+        if store is None or view is None or not view.is_dirty():
+            return ''
+        if self._previewing is not None and path == self._path:
+            return ''
+        if path in self._office_trials:
+            return ''      # what the view holds is a script's trial, waiting for the user's decision
+        return self._office_save(path, quiet=True)
+
+    def _office_save(self, path, quiet=False) -> str:
+        """Save the path's view into its file ('' = saved). quiet: no message box, the reason is
+        returned."""
+        store = self._office_store(path)
+        if store is None:
+            return 'not an office file'
+        name = os.path.basename(path)
+
+        def fail(message):
+            if not quiet:
+                show_broccoli_message(self, _tr('Not saved'), message)
+            return message
+        if editor_office_lock_owner(path):
+            return fail(_tr('“{name}” is open in another app (Word, Excel or PowerPoint) right now, so it was not '
+                            'saved. Close it there first.').format(name=name))
+        data, why = self._office_fetch(path)
+        if data is None:
+            return fail(_tr('“{name}” could not be saved: {reason}').format(name=name, reason=why))
+        if store.backup_disk_state('external_change') == -1:
+            return fail(_tr('The backup copy of “{name}” could not be saved, so the file was not overwritten. '
+                            'Nothing was changed.').format(name=name))
+        if not editor_write_file(self, store, '', unattended=quiet, office_bytes=data):
+            return self._office_write_reason(getattr(store, 'last_write_error', None))
+        text = store.read_disk()
+        saved_n = store.save_version(text, 'manual_save')
+        if saved_n > 0:
+            store.note_disk_state(text, saved_n)
+        self._office_loaded[path] = hashlib.sha256(data).hexdigest()
+        if path == self._path:
+            self._office_set_text(text)
+        self._buffers.pop(path, None)
+        self._dirty_paths.discard(path)
+        win = self._window()
+        try:
+            win.file_bar.set_dirty(path, False)
+            win.file_bar.set_stale(path, False)
+            if path == self._path:
+                win.action_bar.save_btn.setEnabled(False)
+                self._stale_banner.hide()
+            win.note_disk_seen(path)
+        except Exception:
+            pass
+        if path == self._path:
+            self.refresh_versions()
+        try:
+            win.snapshot_page.refresh_lists()
+        except Exception:
+            pass
+        try:
+            win.note_version_saved(path, 'manual_save')
+        except Exception:
+            pass
+        return ''
+
+    def office_recalculate_after_write(self, path):
+        """Broccoli just wrote an Excel file itself (an approved AI edit): the stored results of its
+        formulas were dropped. When its view has opened the new file — the component calculates on
+        opening — take the file back once and store it, so the file on disk holds the results."""
+        store = self._office_store(path)
+        if store is not None and store.office_kind == 'xlsx' and path in self._office_views:
+            self._office_recalc.add(path)
+
+    def _office_store_recalculated(self, path):
+        store = self._office_store(path)
+        view = self._office_views.get(path)
+        if store is None or view is None or view.is_dirty() or path not in self._win.session.open_files:
+            return
+        text = store.read_disk()
+        data, _why = self._office_fetch(path, timeout_ms=30000)
+        if data is None or store._office_text_of(data) != text:
+            return        # only the same content with results filled in is taken
+        if not store.write_office_bytes(data, expect=text):
+            return
+        store.adopt_disk_bytes(text)
+        self._office_loaded[path] = hashlib.sha256(data).hexdigest()
+        try:
+            self._win.note_disk_seen(path)
+        except Exception:
+            pass
+
+    # ---- Office files: Broccoli's entries in the component's right-click menu, Mark Region,
+    # and "show this text-view line in the document" (2026-11-11, style book 5.11) ----
+    @staticmethod
+    def _office_menu_items() -> list:
+        # the same actions as the text editor's right-click menu; the component keeps its own
+        # entries (cut / copy / paste / table …) above these
+        return [
+            {'separator': True},
+            {'id': 'explain', 'text': _tr('Explain This')},
+            {'id': 'flow', 'text': _tr('Explain Flow')},
+            {'id': 'change', 'text': _tr('Ask AI to Change This')},
+            {'separator': True},
+            {'id': 'append_current', 'text': _tr('Append to current chat')},
+            {'id': 'ask_web', 'text': _tr('Ask Web')},
+            {'id': 'ask_localhost', 'text': _tr('Ask Localhost')},
+        ]
+
+    @staticmethod
+    def _office_place_label(kind, selection) -> str:
+        """Where the selection is, in words: 'Slide 2', 'Sheet “销售”, B2:C5', 'Page 3'."""
+        selection = selection if isinstance(selection, dict) else {}
+        if kind == 'xlsx':
+            sheet = str(selection.get('sheet') or '')
+            cells = str(selection.get('range') or selection.get('cell') or '')
+            if sheet and cells:
+                return _tr('Sheet “{sheet}”, {cells}').format(sheet=sheet, cells=cells)
+            return _tr('Sheet “{sheet}”').format(sheet=sheet) if sheet else ''
+        try:
+            page = int(selection.get('page') or 0)
+        except (TypeError, ValueError):
+            page = 0
+        if page <= 0:
+            return ''
+        return (_tr('Slide {n}') if kind == 'pptx' else _tr('Page {n}')).format(n=page)
+
+    def office_selection_info(self, path, selection) -> dict:
+        """What the user selected in an office document, as the rest of the editor understands a
+        selection: {'path', 'text', 'line_start', 'line_end'} over the file's text view, plus
+        'place' (in words), 'picked' (the selected words as the component gave them) and 'lines'.
+        'text' is the text-view lines of the selection — the form in which a model can also change
+        them — or the selected words when no line could be matched."""
+        store = self._office_store(path)
+        kind = store.office_kind if store is not None else ''
+        selection = selection if isinstance(selection, dict) else {}
+        picked = str(selection.get('text') or '').replace('\r\n', '\n').replace('\r', '\n').strip()
+        text_view = ''
+        if store is not None:
+            try:
+                text_view = self.editor.toPlainText() if path == self._path else store.read_disk()
+            except Exception:
+                text_view = ''
+        try:
+            numbers = office_files.office_selection_lines(kind, text_view, selection)
+        except Exception:
+            numbers = []
+        all_lines = text_view.split('\n')
+        excerpt = '\n'.join(all_lines[n - 1] for n in numbers if 0 < n <= len(all_lines))
+        return {'path': path, 'text': excerpt or picked, 'picked': picked, 'lines': numbers,
+                'line_start': numbers[0] if numbers else 0, 'line_end': numbers[-1] if numbers else 0,
+                'place': self._office_place_label(kind, selection),
+                'drawings': int(selection.get('drawings') or 0)}
+
+    @staticmethod
+    def _office_reference(info) -> str:
+        """The selection as text for a prompt: which file, which place, which text-view lines."""
+        name = os.path.basename(str(info.get('path') or ''))
+        head = '“%s”' % name
+        if info.get('place'):
+            head += ' · ' + str(info['place'])
+        if info.get('lines'):
+            first, last = info['line_start'], info['line_end']
+            head += ' · ' + (_tr('text view line {n}').format(n=first) if first == last
+                             else _tr('text view lines {a}–{b}').format(a=first, b=last))
+        body = str(info.get('text') or '').strip()
+        return head + ('\n' + body if body else '')
+
+    def _on_office_menu(self, path, item, selection):
+        if path != self._path or self._previewing is not None and item == 'change':
+            return
+        info = self.office_selection_info(path, selection)
+        if not str(info.get('text') or '').strip():
+            show_broccoli_message(self, _tr('Nothing selected'),
+                                  _tr('Select some text or cells in the document first. For a picture, a chart '
+                                      'or the layout, use “Mark” in the bar below.'))
+            return
+        if item in ('explain', 'flow'):
+            self.card_request.emit(item, {key: info[key] for key in ('path', 'text', 'line_start', 'line_end')})
+            return
+        main = getattr(self._win, '_main', None)
+        if main is None:
+            return
+        reference = self._office_reference(info)
+        try:
+            if item == 'change':
+                main._route_text_to_api_prompt(
+                    reference + '\n\n' + _tr('Change this part of the open document as follows: '), append=True)
+            elif item in ('append_current', 'ask_web', 'ask_localhost'):
+                main._execute_selection_ask_action(item, reference)
+        except Exception:
+            logging.exception('Office right-click action failed.')
+
+    def office_go_to_line(self, line):
+        """Show the place of text-view line `line` in the current office document."""
+        path = self._path
+        store = self._office_store(path)
+        view = self._office_views.get(path)
+        if store is None or view is None or not view.property('office_opened'):
+            return
+        self._office_region_stop()
+        try:
+            target = office_files.office_line_target(store.office_kind, self.editor.toPlainText(), line)
+        except Exception:
+            target = {}
+        if target:
+            view.go_to(target)
+            view.setFocus()
+
+    def office_region_toggle(self):
+        """The bar's "Mark Region": freeze the picture of the document so that a part of it can be
+        circled; a second click (or switching file) goes back to the document."""
+        if self._office_region_path is not None:
+            self._office_region_stop()
+            return
+        path = self._path
+        view = self._office_views.get(path)
+        if self._office_store(path) is None or view is None or not view.property('office_opened'):
+            return
+        if self._office_host.currentWidget() is not view:
+            return
+        picture = view.grab()
+        if picture.isNull():
+            return
+        picture.setDevicePixelRatio(1.0)     # the circle is drawn in the picture's own pixels
+
+        def start(selection, p=path, shot=picture):
+            if p != self._path or self._office_region_path is not None:
+                return
+            self._office_region_path = p
+            self._office_region_selection = dict(selection or {})
+            self._office_region._force_dark = bool(getattr(self._win, '_dark_mode', False))
+            self._office_region.set_annotations([])
+            self._office_region.set_pixmap(shot)
+            self._office_host.setCurrentWidget(self._office_region)
+            self._office_region.setCursor(Qt.CursorShape.CrossCursor)
+            try:
+                self._win.action_bar.region_btn.setText(_tr('Back'))
+            except Exception:
+                pass
+        view.fetch_selection(start)
+
+    def _office_region_stop(self, raise_view=True):
+        if self._office_region_path is None:
+            return
+        path = self._office_region_path
+        self._office_region_path = None
+        self._office_region_selection = {}
+        self._office_region.set_annotations([])
+        self._office_region.set_pixmap(QPixmap())
+        try:
+            self._win.action_bar.region_btn.setText(_tr('Mark'))
+        except Exception:
+            pass
+        if raise_view and path == self._path:
+            self._office_raise(path)
+
+    def _on_office_region_marked(self, annotation):
+        """A part of the frozen picture was circled and a note written: the picture with the circle
+        becomes an attachment of the Agent prompt, the note and the place become its text."""
+        path = self._office_region_path
+        if path is None or not isinstance(annotation, dict):
+            return
+        self._office_region.set_annotations([annotation])
+        picture = self._office_region.composited_pixmap()
+        selection = dict(self._office_region_selection)
+        selection['text'] = ''            # the circle says what is meant, not the old text selection
+        store = self._office_store(path)
+        if store is not None and store.office_kind == 'docx':
+            info = {'path': path, 'text': '', 'lines': [], 'place': self._office_place_label('docx', selection)}
+        else:
+            info = self.office_selection_info(path, selection)
+        self._office_region_stop()
+        main = getattr(self._win, '_main', None)
+        if main is None or picture.isNull():
+            return
+        try:
+            points = annotation.get('points') or []
+            # the number goes at the top-most point of the drawn line
+            anchor = min(points, key=lambda point: point[1]) if points else None
+            main._editor_send_marked_region(picture, self._office_reference(info),
+                                            str(annotation.get('comment') or ''), anchor=anchor)
+        except Exception:
+            logging.exception('The marked region could not be handed to the Agent.')
+
+    # ---- Office files: a model's script, tried on the open document (2026-11-11) ----
+    def _office_run_script(self, path, source, timeout_ms=40000) -> dict:
+        """Run a script in the path's view and wait for it: {'ok', 'value', 'error', 'changed'}."""
+        view = self._office_views.get(path)
+        if view is None:
+            return {'ok': False, 'value': '', 'error': 'the document is not open', 'changed': False}
+        from PyQt6.QtCore import QEventLoop
+        loop = QEventLoop(self)
+        result = {}
+
+        def got(data):
+            result.update(data)
+            loop.quit()
+        view.run_script(source, got, timeout_ms=timeout_ms)
+        if not result:
+            QTimer.singleShot(int(timeout_ms) + 2000, loop.quit)
+            loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        if not result:
+            return {'ok': False, 'value': '', 'error': 'the script did not finish in time', 'changed': True}
+        return result
+
+    def _office_settle(self, ms=450):
+        """Let the view draw what a script changed before its picture is taken."""
+        from PyQt6.QtCore import QEventLoop
+        loop = QEventLoop(self)
+        QTimer.singleShot(int(ms), loop.quit)
+        loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+    def office_script_trial(self, path, source, prelude='') -> dict:
+        """Try a model's script on the open document without writing the file.
+        {'ok': False, 'error'}: it failed (the view shows the file again).
+        {'ok': True, 'changed': False, 'value'}: it only read something.
+        {'ok': True, 'changed': True, 'value', 'before', 'after' (pictures), 'text_before',
+        'text_after', 'parts'}: the view now shows the result; office_script_discard() puts the
+        file back, MyWidget._editor_commit_office_script() writes it."""
+        def fail(message):
+            return {'ok': False, 'error': str(message)}
+        store = self._office_store(path)
+        if store is None:
+            return fail('not an office file open in the editor')
+        if path in self._office_trials:
+            return fail('another scripted change of this file is waiting for the user\'s decision; '
+                        'call again after it is decided')
+        if self._previewing is not None and path == self._path:
+            return fail('the editor shows an old version of this file right now (read-only); the user has to go '
+                        'back to the current version first')
+        if editor_office_lock_owner(path):
+            return fail('the file is open in another app (Word, Excel or PowerPoint) right now')
+        why = self.flush_office_edits(path)
+        if why:
+            return fail('the file has unsaved changes that could not be saved first (%s)' % why)
+        if path != self._path:
+            try:
+                self._win.session.select_file(path)
+            except Exception:
+                pass
+        view = self._office_views.get(path)
+        deadline = time.time() + 60
+        while (view is None or not view.property('office_opened') or view.is_busy()) and time.time() < deadline:
+            self._office_settle(200)
+            view = self._office_views.get(path)
+        if view is None or not view.property('office_opened') or path != self._path:
+            return fail('the document is still opening; try again in a moment')
+        self._office_region_stop()
+        text_before = store.read_disk()
+        # a script run touches a few things by itself the first time (field values): run an empty
+        # one first, so that the comparison below sees only what the model's script does
+        self._office_run_script(path, 'return 0;', timeout_ms=15000)
+        base, why = self._office_fetch(path, timeout_ms=60000)
+        if base is None:
+            return fail('the document could not be read from its view (%s)' % why)
+        before = view.grab()
+        result = self._office_run_script(path, str(prelude or '') + str(source or ''))
+        self._office_settle()
+        after_bytes, why = self._office_fetch(path, timeout_ms=60000)
+        parts = office_files.office_package_changes(base, after_bytes) if after_bytes is not None else ['?']
+        if not result.get('ok') or after_bytes is None:
+            if parts:
+                self._office_show_disk(path)      # a script that failed half-way: the file again
+            return fail(result.get('error') or ('the changed document could not be read back (%s)' % why))
+        value = str(result.get('value') or '')
+        if not parts:
+            return {'ok': True, 'changed': False, 'value': value}
+        try:
+            text_after = store._office_text_of(after_bytes)
+        except Exception as exc:
+            self._office_show_disk(path)
+            return fail('the result is not a document Broccoli can read (%s)' % exc)
+        self._office_settle(250)
+        self._office_trials[path] = {'bytes': after_bytes, 'text_before': text_before, 'text_after': text_after}
+        return {'ok': True, 'changed': True, 'value': value, 'before': before, 'after': view.grab(),
+                'text_before': text_before, 'text_after': text_after, 'parts': parts}
+
+    def office_script_discard(self, path):
+        """The user declined a script's result (or it could not be written): the view shows the
+        file again."""
+        if self._office_trials.pop(path, None) is not None:
+            self._office_show_disk(path)
+
+    def _office_drop_view(self, path):
+        self._office_trials.pop(path, None)
+        view = self._office_views.pop(path, None)
+        self._office_loaded.pop(path, None)
+        self._office_recalc.discard(path)
+        if view is None:
+            return
+        try:
+            self._office_host.removeWidget(view)
+            view.shutdown()
+            view.deleteLater()
+        except Exception:
+            pass
 
     def selection_info(self):
         cur = self.editor.textCursor()
@@ -136901,6 +148167,14 @@ class EditorPage(QWidget):
             self._reset_combo_to_current()
             self._exit_preview()
             return
+        office_view = self._office_views.get(self._path) if (store is not None and store.office_kind) else None
+        if office_view is not None and self._previewing is None and office_view.is_dirty():
+            # the view would have to give up its unsaved changes to show another version
+            self._reset_combo_to_current()
+            show_broccoli_message(self, _tr('Unsaved changes'), _tr(
+                'Save “{name}” first (or reload it) to look at an earlier version.').format(
+                    name=os.path.basename(self._path)))
+            return
         if self._previewing is None:
             # park the live buffer — it must survive the preview round-trip
             self._live_stash = self.editor.toPlainText()
@@ -136914,6 +148188,16 @@ class EditorPage(QWidget):
         self.editor.setReadOnly(True)
         self._preview_lbl.setText(_tr('Viewing v%d (read-only)') % int(n))
         self._preview_banner.show()
+        if store is not None and store.office_kind:
+            # the version as a document when its file was kept, else its text view
+            data = store.version_bytes(n)
+            if data is not None and self._office_load_bytes(self._path, data, readonly=True) is not None:
+                self._office_host.show()
+                self.editor.hide()
+                self._office_raise(self._path)
+            else:
+                self._office_host.hide()
+                self.editor.show()
         self._refresh_search()
 
     def _exit_preview(self):
@@ -136932,6 +148216,9 @@ class EditorPage(QWidget):
             self.editor.document().setModified(modified)
         finally:
             self._loading = False
+        if self.is_office_path():
+            self._office_show_disk(self._path)
+            self._office_sync_current()
         self._refresh_search()
 
     def _back_to_current(self):
@@ -136973,6 +148260,9 @@ class EditorPage(QWidget):
         path = self._path
         store = self._store()
         if not path or store is None:
+            return
+        if store.office_kind:
+            self._office_save(path)      # the document comes from its view, not from the text editor
             return
         text = self.editor.toPlainText()
         # another program may have changed the file since it was loaded (the stale banner):
@@ -137031,6 +148321,13 @@ class EditorPage(QWidget):
             self.editor.document().setModified(False)
         finally:
             self._loading = False
+        if store.office_kind:
+            # the view takes the file as it is on disk now (its unsaved changes are dropped, like
+            # the text editor's)
+            data = store._office_disk_bytes()
+            if data is not None:
+                self._office_load_bytes(path, data)
+            self._office_sync_current()
         self._buffers.pop(path, None)
         self._dirty_paths.discard(path)
         win = self._window()
@@ -137058,6 +148355,9 @@ class EditorPage(QWidget):
             if p not in keep:
                 self._buffers.pop(p, None)
         self._dirty_paths &= keep
+        for p in list(self._office_views.keys()):
+            if p not in keep:
+                self._office_drop_view(p)     # closing a file drops its view (and unsaved changes)
 
     # ---- M2: live search ----
     def _on_search_text_changed(self, text):
@@ -138098,6 +149398,18 @@ class EditorSnapshotPage(QWidget):
         except Exception:
             return False
         parent = win if isinstance(win, QWidget) else None
+        if store.office_kind:
+            # what the user changed in the document's view goes to the file first (so the backup
+            # below holds it)
+            try:
+                why = win.editor_page.flush_office_edits(path)
+            except Exception as exc:
+                why = str(exc)
+            if why:
+                show_broccoli_message(parent, _tr('Not restored'), _tr(
+                    'The unsaved changes of “{name}” could not be saved first ({reason}), so nothing was '
+                    'restored.').format(name=os.path.basename(path), reason=why))
+                return False
         target_text = store.read_version(n)
         if target_text is None:
             # missing, or damaged (its fingerprint no longer matches) — abort before touching anything
@@ -138117,7 +149429,12 @@ class EditorSnapshotPage(QWidget):
             return False
         # back to the version's own bytes: its encoding / BOM / line ending as they were then
         target_format = store.version_file_format(n)
-        if not editor_write_file(parent, store, target_text, file_format=target_format):
+        version_bytes = store.version_bytes(n) if store.office_kind else None
+        if version_bytes is not None:
+            # an office file: that version's own file, byte for byte
+            if not editor_write_file(parent, store, target_text, office_bytes=version_bytes):
+                return False
+        elif not editor_write_file(parent, store, target_text, file_format=target_format):
             return False
         store.note_disk_state(target_text, n, store.file_format())
         newer = []
@@ -139754,6 +151071,10 @@ class _EditorIdentifierVisitor(_editor_ast.NodeVisitor):
 def editor_extract_identifiers(text, kind):
     text = str(text or '')
     kind = str(kind or '')
+    if kind.startswith('office-'):
+        # a Word / Excel / PowerPoint file: `text` is its text view; the entries are the document's
+        # own parts, each anchored to a text-view line (a click shows that place in the document)
+        return office_files.office_outline(kind[len('office-'):], text)
     if kind == 'code-python':
         try:
             tree = _editor_ast.parse(text)
@@ -140905,6 +152226,16 @@ class EditorLexiconPage(QWidget):
         else:
             text = store.read_disk()
         kind = store.file_kind()
+        if getattr(store, 'office_kind', ''):
+            kind = 'office-' + store.office_kind
+            try:    # a lexicon kept from before office files had their own categories
+                lex = store.load_lexicon()
+                wanted = store._lexicon_skeleton().get('categories')
+                if isinstance(lex, dict) and lex.get('categories') != wanted:
+                    lex['categories'] = wanted
+                    store.save_lexicon(lex)
+            except Exception:
+                pass
         self._parse_serial += 1
         serial = self._parse_serial
         worker = _EditorParseWorker(text, kind, serial, self)
@@ -142722,6 +154053,12 @@ def editor_build_context_block(main_window):
         'REQUIRED in the editor_edit (a JSON object, never a string) unless the edit truly does not change '
         'the flow — REUSE the listed node ids for unchanged steps so the popup can color added/removed/changed steps.'
     )
+    try:
+        office_guide = editor_office_text_guide_for(list(editor.session.open_files))
+    except Exception:
+        office_guide = ''
+    if office_guide:
+        rules_text += '\n5. ' + office_guide
     lines.append(rules_text)
     text = '\n'.join(str(x) for x in lines if str(x or '').strip()).strip()
     if len(text) <= 4000:
@@ -142820,6 +154157,12 @@ def editor_external_edit_tail(main_window, target_kind: str = 'web', texts=None)
                     'exact text, ask the user one short question instead of guessing.'
                 )
 
+    office_guide = editor_office_text_guide_for(open_files or ([current_path] if current_path else []))
+    if office_guide:
+        lines.append(office_guide)
+        lines.append('The text view of such a file is what you are given (inline, or as the attached snapshot '
+                     '"<name>.txt"); never open the .docx / .xlsx / .pptx file itself. In the editor_edit, "file" '
+                     'is the document\'s own name (e.g. report.docx).')
     lines.append(
         'EDIT FORMAT — include EXACTLY this block in your answer, wrapped in the '
         '<broccoli-output type="editor_edit"> tag (Broccoli parses the JSON out of the '
@@ -142996,6 +154339,11 @@ def editor_external_mount_files(main_window, max_files: int = 4, texts=None) -> 
         if not text:
             continue
         base = os.path.basename(origin) or 'file.txt'
+        if editor_office_kind(origin):
+            # what is sent is the document's text view, not a Word / Excel / PowerPoint file: a
+            # ".docx" holding plain text would be rejected by whoever receives it. An editor_edit
+            # naming "<name>.txt" still resolves to the open file (_editor_resolve_open_file).
+            base += '.txt'
         # Same basename from another directory: KEEP the original basename (the
         # returned editor_edit's `file` must resolve to an open file — a renamed
         # <name>_N snapshot would not) and disambiguate with a nested subdir instead.
@@ -143436,6 +154784,11 @@ class EditorEditPermissionPanel(SmoothPanelWidget):
             warnings.append(ui_text('editor.rebased'))
         if self.proposal.get('dirty'):
             warnings.append(ui_text('editor.warn_dirty'))
+        if isinstance(self.proposal.get('review'), dict):
+            # approve-all mode, and the review found something the user must decide: why
+            note = approval_review_note(self.proposal['review']).strip()
+            if note:
+                warnings.append(note)
         self.warning_lbl = QLabel('\n'.join(warnings), self)
         self.warning_lbl.setWordWrap(True)
 
@@ -143940,6 +155293,7 @@ class EditorWindow(QWidget):
         self.session.file_selected.connect(self.snapshot_page.on_session_file_selected)
         # ---- M4: explain cards ----
         self.editor_page.card_request.connect(self._on_card_request)
+        self.action_bar.region_requested.connect(self.editor_page.office_region_toggle)
         # ---- FIX-38: debug tab follows the current file ----
         self.session.file_selected.connect(self.debug_page.on_session_file_selected)
         self.session.files_changed.connect(self.debug_page.refresh_lists)
@@ -144481,6 +155835,9 @@ class EditorWindow(QWidget):
             self.nav.select(0)
         except Exception:
             pass
+        if self.editor_page.is_office_path():
+            self.editor_page.office_go_to_line(line)     # the place in the document itself
+            return
         doc = self.editor_page.editor.document()
         block = doc.findBlockByNumber(line - 1)
         if not block.isValid():
@@ -145509,7 +156866,7 @@ class ReaderDocument:
         try:
             fpage = self._fitz_doc.load_page(page.index)
             zoom = max(0.1, float(width_px) / max(1.0, page.size[0]))
-            import fitz as _fitz
+            import pymupdf as _fitz
             pix = fpage.get_pixmap(matrix=_fitz.Matrix(zoom, zoom), alpha=False)
             fmt = QImage.Format.Format_RGB888
             img = QImage(pix.samples, pix.width, pix.height, pix.stride, fmt)
@@ -145642,7 +156999,7 @@ def _reader_load_text(path):
 
 def _reader_load_pdf(path):
     try:
-        import fitz
+        import pymupdf as fitz
     except Exception:
         return _reader_error_document(path, _tr('PDF support unavailable (PyMuPDF missing).'))
     try:
@@ -147834,7 +159191,8 @@ def _install_liquid_glass_surfaces():
     # the card (fit_dialog_window_to_card): the glass's shadow lies wholly outside and the system
     # shadow — drawn outside the window, never cut — fades out naturally.
     for cls in (BroccoliMessageDialog, AgentTerminalCommandApprovalDialog, ExperienceRuleDialog, MemoryEditDialog,
-                ExternalMcpHttpDialog, ExternalMcpStdioDialog, ComputerUseApprovalDialog, TerminalFavoriteEditDialog,
+                ExternalMcpHttpDialog, ExternalMcpStdioDialog, ModelProfilesPickDialog, ComputerUseApprovalDialog,
+                TerminalFavoriteEditDialog,
                 AppleNotesPickerDialog, CustomServicesDialog, ShareTextDialog, OnlineMemoryStatusDialog,
                 MoveAndSendDeviceDialog, ConversationGroupDialog, ShortcutPickerDialog):
         install_dialog_fit_to_card(cls)
@@ -147979,6 +159337,9 @@ if __name__ == '__main__':
     hotkey_manager.edge_toggle_pressed.connect(w3._toggle_edge_hide)
     hotkey_manager.ai_tasks_pressed.connect(w3.toggle_ai_task_overlay)
     hotkey_manager.collapsed_circle_pressed.connect(w3.toggle_collapsed_circle_with_main)
+    hotkey_manager.grid_layer_pressed.connect(w3.toggle_collapsed_launcher_layer)
+    hotkey_manager.escape_pressed.connect(w3._circle_scan.cancel)
+    hotkey_manager.copy_pressed.connect(lambda: w3._circle_answer._card is not None and w3._circle_answer._card.copy_if_pointed())
     app.aboutToQuit.connect(hotkey_manager.stop)
     hotkey_manager.start()
     # w3.btn0_2.clicked.connect(w3.transferview)

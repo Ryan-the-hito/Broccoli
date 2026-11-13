@@ -1,0 +1,2 @@
+import{o as e}from"./component-DkBrsfH0-CiYcmBjh.js";var t=e({default:()=>n}),n=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2 16.1A5 5 0 0 1 5.9 20"/><path d="M2 12.05A9 9 0 0 1 9.95 20"/><path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6"/></g><circle cx="2" cy="20" r="1.1" fill="currentColor" stroke="none"/></svg>
+`;export{t as n};

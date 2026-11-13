@@ -1,0 +1,634 @@
+/* Shared styles for the SEO satellite pages (/offline-document-editor,
+   /no-signup-document-editor, /open/*, /convert/*, and their /zh-CN/
+   mirrors). Utilitarian document layout, but on the same design system as the
+   homepage: every value comes from the ranui token layer (/ran-tokens.css,
+   loaded before this file), the chrome is real ranui components registered by
+   the /ranui-iife/<name>.iife.js bundles (<r-button>), and the visual language
+   mirrors home.css — hairline rules, mono type for machine facts, blue spent only on
+   the primary action. Dark mode comes from the token layer for free. */
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--ran-color-bg);
+  color: var(--ran-color-text);
+  font-family: var(--ran-font-family);
+  font-size: var(--ran-text-copy-1);
+  line-height: 1.65;
+  /* A run with no break opportunity wider than the column pushes the page
+     sideways -- on a phone that is a horizontal scrollbar on a text page.
+     Korean copy hit it with "Word(DOCX), Excel(XLSX), PowerPoint(PPTX)":
+     CJK breaks anywhere, Latin words do not. Only breaks what cannot fit. */
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+a {
+  color: var(--ran-color-link);
+}
+a:focus-visible {
+  outline: 2px solid var(--ran-color-link);
+  outline-offset: 2px;
+}
+
+/* ---------- top bar (mirrors the homepage bar) ---------- */
+header.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ran-space-4);
+  padding: var(--ran-space-4) clamp(20px, 5vw, 56px);
+  border-bottom: 1px solid var(--ran-color-border);
+}
+header.bar .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ran-space-2);
+  font-weight: 700;
+  font-size: var(--ran-text-copy-1);
+  letter-spacing: -0.01em;
+  color: var(--ran-color-text);
+  text-decoration: none;
+}
+header.bar nav {
+  display: flex;
+  align-items: center;
+  gap: var(--ran-space-1);
+}
+header.bar nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ran-space-2);
+  padding: var(--ran-space-2) var(--ran-space-3);
+  border-radius: var(--ran-radius-sm);
+  font-size: var(--ran-text-copy-2);
+  /* One height for every item in the bar. Without this the links inherit the
+     body's prose leading (1.65 -> 23.1px) while the language trigger sets its
+     own line-height: the two hover pills came out 39px and 31px, visibly
+     different boxes in one row. 22px matches the theme switch beside them. */
+  line-height: 22px;
+  color: var(--ran-color-text-secondary);
+  text-decoration: none;
+}
+header.bar nav a:hover {
+  color: var(--ran-color-text);
+  background: var(--ran-color-bg-hover);
+}
+/* ---------- language switcher ----------
+   A disclosure button over a list of links (see bin/build-pages.mjs for why
+   links rather than a listbox). The trigger is shaped exactly like the nav
+   links beside it, because it is one more item in the same bar -- the previous
+   <r-select> was a bordered form field standing in a row of bare links, and its
+   fixed width left ~70px of dead space between the label and the caret. */
+.lang-menu {
+  /* The r-popover host is `display: block`; in the nav's flex row that stretches
+     it. Shrink it to its trigger. */
+  display: inline-flex;
+  /* Panel padding: r-popover reads this off the host and hands it to the panel. */
+  --ran-popover-content-padding: var(--ran-space-1);
+}
+/* The face of the control. The button itself is the r-popover host (it carries
+   the role, the name and the state); this is the row of things inside it. */
+.lang-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ran-space-2);
+  padding: var(--ran-space-2) var(--ran-space-3);
+  border-radius: var(--ran-radius-sm);
+  font-size: var(--ran-text-copy-2);
+  /* Same 22px as the nav links beside it -- see header.bar nav a. On a phone
+     the label is hidden and only the two icons are left, so the line box no
+     longer sets the height: hold it from below instead, or the pill shrinks to
+     31px next to a 38px GitHub link. */
+  line-height: 22px;
+  min-height: calc(22px + var(--ran-space-2) * 2);
+  color: var(--ran-color-text-secondary);
+  cursor: pointer;
+}
+.lang-menu:hover .lang-trigger,
+.lang-menu[open] .lang-trigger {
+  color: var(--ran-color-text);
+  background: var(--ran-color-bg-hover);
+}
+/* Focus is on the host, so the ring is drawn around the face inside it. */
+.lang-menu:focus-visible {
+  outline: none;
+}
+.lang-menu:focus-visible .lang-trigger {
+  outline: 2px solid var(--ran-color-link);
+  outline-offset: 2px;
+}
+.langmark {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.lang-caret {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  opacity: 0.75;
+}
+.lang-list {
+  display: flex;
+  flex-direction: column;
+  /* Sized by its longest row, not by a guessed number. The first attempt set
+     152px, which was 84px wider than the longest endonym actually needs -- the
+     panel hung far past the trigger on one side and carried a column of empty
+     space on the other. */
+  width: max-content;
+}
+.lang-option {
+  display: flex;
+  align-items: center;
+  gap: var(--ran-space-1);
+  padding: calc(var(--ran-space-3) / 2) calc(var(--ran-space-4) / 2 + var(--ran-space-1) / 2);
+  border-radius: var(--ran-radius-sm);
+  font-size: var(--ran-text-copy-2);
+  color: var(--ran-color-text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.lang-option::before {
+  /* A fixed gutter on every row, so the labels line up whether or not the row
+     carries the check. Sized to the tick and no wider: on a panel this narrow a
+     generous gutter is most of the left half of it. */
+  content: '';
+  width: 11px;
+  flex: none;
+  font-size: var(--ran-text-label-3);
+  line-height: 1;
+  color: var(--ran-color-text-secondary);
+}
+.lang-option.is-current::before {
+  content: '✓';
+}
+.lang-option:hover {
+  /* Hover is the moving highlight; the current language is marked by the check
+     and the weight. Giving the current row a background of its own would put
+     two near-identical greys in one menu, and the reader has to tell them
+     apart at a glance. */
+  background: var(--ran-color-bg-hover);
+}
+.lang-option.is-current {
+  font-weight: 600;
+}
+
+/* ---------- language menu panel (ranui r-dropdown) ----------
+   The site's own palette applied to the component's variables. The panel is
+   portalled to <body>, so these have to be declared at the root: scoped to the
+   trigger they would style the trigger and never reach the menu.
+
+   Kept byte-identical in home.css and landing.css (the homepage does not load
+   landing.css); test/unit/design-contract.test.ts compares the two blocks. */
+:root {
+  /* The panel uses the same corner role as other elevated surfaces. */
+  --ran-dropdown-border-radius: var(--ran-radius-md);
+  --ran-dropdown-box-shadow:
+    0 0 0 1px var(--ran-color-border), 0 8px 24px -6px color-mix(in srgb, var(--ran-color-text) 18%, transparent);
+}
+
+/* r-popover always points an arrow back at its trigger, which is right for the
+   tooltip it was built for and wrong for a navigation menu -- a menu hangs off
+   its button, it does not annotate it. The class is r-popover's own name for
+   the panel it portals to <body>; the language switcher is the only popover on
+   the site, so scoping it there keeps a future tooltip's arrow intact. */
+.ran-popover-dropdown {
+  --ran-dropdown-arrow-display: none;
+}
+
+@media (max-width: 620px) {
+  /* Keep the visible brand and all app controls on one 390px row. Narrower
+     viewports can wrap navigation without giving the home destination up. */
+  header.bar {
+    gap: var(--ran-space-1);
+  }
+  /* Phone: the trigger keeps the globe and the caret and drops the language
+     name, which is the part that costs width. The globe is the international
+     sign for this control, and the panel names every language in full anyway.
+     GitHub can stay now -- it used to be dropped to make room for a trigger
+     wide enough to hold "Português". */
+  .lang-current {
+    display: none;
+  }
+  /* Keep a readable home destination; text can elide before navigation overflows. */
+  header.bar .brand {
+    min-width: 0;
+    flex: 0 0 auto;
+    max-width: 8ch;
+  }
+  header.bar .wordmark {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  header.bar nav {
+    row-gap: calc(var(--ran-space-1) / 2);
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  header.bar nav a {
+    padding-inline: var(--ran-space-2);
+  }
+}
+
+/* ---------- article column ---------- */
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--ran-space-6) clamp(20px, 5vw, 56px) var(--ran-space-10);
+}
+
+/* ---------- two-column page frame (article + sticky sidebar) ----------
+   The reading column stays at 720px / ~66 characters -- that is the number the
+   typography wants and widening it would trade readability for filled pixels.
+   What a wide viewport gets instead is a second column, the way documentation
+   sites do it (Stripe, Vercel, MDN all keep a ~700px article and put an "on this
+   page" rail beside it): the call to action stops disappearing after the first
+   screen, the page's own sections stay reachable, and the sibling pages get a
+   real internal link rather than only a footer row.
+
+   Mobile-first: below the breakpoint this is a plain block and the rail is not
+   rendered at all -- the CTA is already on screen there, and a table of contents
+   on a phone is a list of links between the reader and the text. */
+.side {
+  display: none;
+}
+/* Below the breakpoint the footer keeps the article's own column and gutters;
+   the media query below widens it to the frame. Order matters -- both rules
+   have the same specificity, so the wide one has to come second. */
+.page-foot {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 clamp(20px, 5vw, 56px) var(--ran-space-10);
+}
+/* The ONLYOFFICE trademark notice. Section 7(e) of the vendor's AGPL terms
+   declines to grant any rights under trademark law, so every page states whose
+   mark it is and that this site is not their product. Muted and last: it is a
+   legal notice, not navigation. */
+.page-foot .tm {
+  margin: var(--ran-space-4) 0 0;
+  max-width: 72ch;
+  color: var(--ran-color-text-secondary);
+  font-size: var(--ran-text-label-3);
+  line-height: 1.6;
+}
+@media (min-width: 1081px) {
+  .page {
+    display: grid;
+    /* 660, not 720: the old single-column page was a 720px box with 56px
+       gutters inside it, so the text itself was ~608px / 66 characters. Handing
+       the column the full 720 would have pushed the measure to 77 -- past the
+       45-75 band the rest of the site is tuned to. 660 lands at 71, the same
+       measure the homepage reads at. */
+    grid-template-columns: minmax(0, 660px) minmax(0, 284px);
+    justify-content: center;
+    gap: clamp(40px, 5vw, 96px);
+    max-width: 1152px;
+    margin: 0 auto;
+    padding-inline: clamp(20px, 5vw, 56px);
+  }
+  /* the frame owns the horizontal padding now; the column keeps its own top
+     and bottom rhythm */
+  .page > .wrap {
+    padding-inline: 0;
+  }
+  .side {
+    display: block;
+    position: sticky;
+    /* clears the top bar and leaves the same air the article has */
+    top: var(--ran-space-8);
+    align-self: start;
+    padding-top: var(--ran-space-6);
+    /* /help lists nine sections; a rail taller than the viewport would clip
+       its last links with no way to reach them. */
+    max-height: calc(100vh - var(--ran-space-16));
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+  .page-foot {
+    max-width: 1152px;
+    margin-inline: auto;
+    padding-inline: clamp(20px, 5vw, 56px);
+  }
+}
+/* The rail is rules and type, like the rest of the site -- no panel, no fill. */
+.side-cta .cta {
+  display: block;
+  margin: 0;
+}
+/* Full-bleed pill: the width has to reach the exported parts too. Sizing only
+   the host leaves the shadow it paints as a rectangle behind a rounded button
+   -- a straight line poking out past both ends (same trap as the homepage CTA). */
+.side-cta r-button {
+  display: block;
+  width: 100%;
+}
+.side-cta r-button::part(button),
+.side-cta r-button::part(content) {
+  width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+}
+.side-note {
+  display: block;
+  margin-top: var(--ran-space-3);
+  font-size: var(--ran-text-label-3);
+  line-height: 1.5;
+  color: var(--ran-color-text-secondary);
+}
+.side-block {
+  display: block;
+  margin-top: var(--ran-space-6);
+  padding-top: var(--ran-space-4);
+  border-top: 1px solid var(--ran-color-border);
+}
+.side-label {
+  display: block;
+  margin-bottom: var(--ran-space-2);
+  font: 600 var(--ran-text-label-3)/1 var(--ran-font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ran-color-text-secondary);
+}
+.side-block a {
+  display: block;
+  padding: var(--ran-space-1) 0;
+  font-size: var(--ran-text-copy-2);
+  line-height: 1.45;
+  color: var(--ran-color-text-secondary);
+  text-decoration: none;
+}
+.side-block a:hover {
+  color: var(--ran-color-text);
+}
+.eyebrow {
+  margin: var(--ran-space-8) 0 0;
+  font: 600 var(--ran-text-label-3)/1 var(--ran-font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  /* gray mono label — blue is reserved for links */
+  color: var(--ran-color-text-secondary);
+}
+h1 {
+  font-size: clamp(28px, 5vw, 40px);
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  margin: var(--ran-space-3) 0 var(--ran-space-3);
+  text-wrap: balance;
+}
+h2 {
+  font-size: var(--ran-text-heading-3);
+  letter-spacing: -0.02em;
+  margin: var(--ran-space-10) 0 var(--ran-space-4);
+  padding-bottom: var(--ran-space-3);
+  border-bottom: 1px solid var(--ran-color-border);
+}
+p {
+  margin: var(--ran-space-3) 0;
+}
+.lead {
+  font-size: var(--ran-text-heading-3);
+  color: var(--ran-color-text-secondary);
+  margin: 0 0 var(--ran-space-4);
+}
+
+/* CTA: a real <r-button> wrapped in a link (static pages navigate, not script) */
+.cta {
+  display: inline-block;
+  margin: var(--ran-space-4) 0 var(--ran-space-4);
+  text-decoration: none;
+}
+/* r-button exports parts "button" (container) and "content" (padding/border/
+   typography). The :not(:defined) fallback below must stay pixel-identical to
+   these values or the custom-element upgrade flashes on load. */
+/* The raised shadow ranui paints sits on the HOST element, while the radius
+   below only reaches the exported parts inside the shadow DOM. The host keeps
+   its own radius (ranui does not set one), so a pill ends up wrapped in a
+   rectangular shadow: a straight line under the button, poking out past both
+   rounded ends. Barely visible at ranui's 6px default, obvious at --ran-radius-full.
+   Give the host the same radius as the thing it wraps. */
+.cta r-button,
+.cta r-button::part(button) {
+  border-radius: var(--ran-radius-full);
+}
+.cta r-button::part(content) {
+  border-radius: var(--ran-radius-full);
+  padding: 0 var(--ran-space-6);
+  min-height: max(var(--app-control-page), var(--app-control-height));
+  box-sizing: border-box;
+  line-height: 1.5;
+  font-size: var(--ran-text-copy-2);
+  font-weight: 600;
+}
+/* pre-upgrade fallback so the CTA is a styled, clickable button even before
+   (or without) the /ranui-iife/*.iife.js bundles — same progressive-enhancement
+   idea as the static-page fallbacks on the homepage. Mirrors type="primary". */
+.cta r-button:not(:defined) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--ran-space-6);
+  min-height: max(var(--app-control-page), var(--app-control-height));
+  box-sizing: border-box;
+  line-height: 1.5;
+  border-radius: var(--ran-radius-full);
+  border: 1px solid var(--ran-color-primary);
+  background: var(--ran-color-primary);
+  color: var(--ran-color-primary-text);
+  font-weight: 600;
+  font-size: var(--ran-text-copy-2);
+}
+
+ul {
+  padding-left: calc(var(--ran-space-4) + var(--ran-space-1));
+  margin: var(--ran-space-4) 0;
+}
+li {
+  margin: var(--ran-space-2) 0;
+}
+li::marker {
+  color: var(--ran-color-border-hover);
+}
+
+/* ---------- open-source note ----------
+   An aside inside the article, so it is bounded by a rule down its left edge
+   rather than by a card. A filled, bordered box interrupts the reading column
+   and reads as a different kind of content; this one is still prose, just set
+   apart -- and it keeps the satellite pages free of card chrome, like the
+   homepage. */
+.oss {
+  margin: var(--ran-space-8) 0;
+  padding-left: var(--ran-space-4);
+  border-left: 2px solid var(--ran-color-border);
+  font-size: var(--ran-text-copy-2);
+  color: var(--ran-color-text-secondary);
+}
+.oss strong {
+  color: var(--ran-color-text);
+}
+.oss a {
+  font-weight: 600;
+}
+
+/* ---------- faq: hairline per question (mirrors homepage FAQ) ---------- */
+.faq h3 {
+  font-size: var(--ran-text-copy-1);
+  letter-spacing: -0.01em;
+  margin: 0;
+  padding: var(--ran-space-4) 0 0;
+  border-top: 1px solid var(--ran-color-border);
+}
+.faq h3:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.faq p {
+  margin: var(--ran-space-1) 0 var(--ran-space-4);
+  color: var(--ran-color-text-secondary);
+  font-size: var(--ran-text-copy-2);
+}
+h2.faq {
+  border-bottom: 1px solid var(--ran-color-border);
+}
+
+/* ---------- footer ---------- */
+footer {
+  margin-top: var(--ran-space-16);
+  padding-top: var(--ran-space-4);
+  border-top: 1px solid var(--ran-color-border);
+  color: var(--ran-color-text-secondary);
+  font-size: var(--ran-text-copy-2);
+}
+footer a {
+  color: var(--ran-color-text-secondary);
+  text-decoration: none;
+  margin-right: var(--ran-space-4);
+}
+footer a:hover {
+  color: var(--ran-color-text);
+}
+
+/* ---------- theme switch (footer) ----------
+   Real ranui <r-theme-switch>. The pre-upgrade fallback reserves the pill's
+   exact footprint (3×28px buttons + gaps + padding + border) — no shift. */
+r-theme-switch.theme-switch {
+  vertical-align: middle;
+}
+r-theme-switch.theme-switch:not(:defined) {
+  display: inline-block;
+  width: 94px;
+  height: 34px;
+  border: 1px solid var(--ran-color-border);
+  border-radius: var(--ran-radius-full);
+}
+/* footer rows on the satellites are plain text; give the pill its own line spacing */
+footer .theme-switch {
+  margin-top: var(--ran-space-4);
+}
+
+/* ---------- generated markdown pages (/help, /changelog; bin/build-pages.mjs) ----------
+   Same column and type as the satellites; these rules only add what markdown
+   emits that the hand-written pages never did: h3 sections, code, tables,
+   quotes, a small table of contents. All values from the token layer. */
+.doc article h3 {
+  font-size: var(--ran-text-copy-1);
+  letter-spacing: -0.01em;
+  margin: var(--ran-space-6) 0 var(--ran-space-2);
+}
+.doc article h4 {
+  font-size: var(--ran-text-copy-2);
+  margin: var(--ran-space-4) 0 var(--ran-space-2);
+}
+.doc article :is(h2, h3, h4) a {
+  color: inherit;
+  text-decoration: none;
+}
+.doc code,
+.wrap article code {
+  font-family: var(--ran-font-mono);
+  font-size: 0.9em;
+  padding: 1px var(--ran-space-1);
+  border-radius: var(--ran-radius-sm);
+  background: var(--ran-color-bg-subtle);
+  border: 1px solid var(--ran-color-border);
+}
+.doc pre,
+.wrap article pre {
+  margin: var(--ran-space-4) 0;
+  padding: var(--ran-space-4);
+  overflow-x: auto;
+  border-radius: var(--ran-radius-md);
+  background: var(--ran-color-bg-subtle);
+  border: 1px solid var(--ran-color-border);
+  font-size: var(--ran-text-label-2);
+  line-height: 1.55;
+}
+.doc pre code,
+.wrap article pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+}
+.doc table,
+.wrap article table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--ran-space-4) 0;
+  font-size: var(--ran-text-copy-2);
+  display: block;
+  overflow-x: auto;
+}
+.doc th,
+.doc td,
+.wrap article th,
+.wrap article td {
+  text-align: start;
+  vertical-align: top;
+  padding: var(--ran-space-2) var(--ran-space-3);
+  border-bottom: 1px solid var(--ran-color-border);
+}
+.doc th,
+.wrap article th {
+  font-weight: 600;
+  color: var(--ran-color-text-secondary);
+  font-size: var(--ran-text-label-2);
+  letter-spacing: 0.02em;
+}
+.doc blockquote {
+  margin: var(--ran-space-4) 0;
+  padding: var(--ran-space-2) var(--ran-space-4);
+  border-inline-start: 3px solid var(--ran-color-border-hover);
+  color: var(--ran-color-text-secondary);
+}
+.doc ol {
+  padding-inline-start: var(--ran-space-6);
+  margin: var(--ran-space-4) 0;
+}
+.doc hr {
+  border: 0;
+  border-top: 1px solid var(--ran-color-border);
+  margin: var(--ran-space-8) 0;
+}
+.doc img {
+  max-width: 100%;
+  height: auto;
+}
+.doc .notice {
+  padding: var(--ran-space-2) var(--ran-space-3);
+  border-radius: var(--ran-radius-sm);
+  background: var(--ran-color-bg-subtle);
+  border: 1px solid var(--ran-color-border);
+  color: var(--ran-color-text-secondary);
+  font-size: var(--ran-text-copy-2);
+}
+.doc .source {
+  margin-top: var(--ran-space-8);
+  font-family: var(--ran-font-mono);
+  font-size: var(--ran-text-label-3);
+  color: var(--ran-color-text-secondary);
+}
