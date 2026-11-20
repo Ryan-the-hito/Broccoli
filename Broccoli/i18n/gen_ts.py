@@ -557,6 +557,8 @@ TRANSLATIONS = {
         '冻结倒计时，让你可以从容编辑或调整步骤顺序；按"继续"或"立即执行"恢复', 'カウントダウンを凍結してステップの編集や並べ替えをゆっくり行えます。「再開」または「今すぐ実行」で続行'),
     'Start the counting-down step immediately': ('不等倒计时，立刻执行这个步骤', 'カウントダウンを待たずにこのステップをすぐ実行'),
     'Share login cookies with parallel browser sessions': ('并行浏览器会话共享登录 Cookie', '並列ブラウザセッションでログイン Cookie を共有'),
+    'Give each parallel browser step its own Chrome': ('每个并行的浏览器步骤单独开一个 Chrome', '並列のブラウザステップごとに別の Chrome を起動'),
+    'Off: parallel browser steps work in the same Browser Use Chrome, each in its own window, so you sign in once. On: each step starts a separate Chrome with its own profile folder.': ('关：并行的浏览器步骤在同一个 Browser Use Chrome 里进行，各用各的窗口，只需登录一次。开：每个步骤另开一个 Chrome，各用各的配置文件夹。', 'オフ：並列のブラウザステップは同じ Browser Use Chrome の中で、それぞれ専用のウインドウを使います。ログインは一度で済みます。オン：ステップごとに専用のプロファイルフォルダで別の Chrome を起動します。'),
     "Copies the managed profile's cookies and local storage into each isolated parallel Chrome, so logged-in sites can be searched by several parallel steps. Turn on after verifying on your machine.": (
         '把受管配置档的 Cookie 和本地存储复制进每个隔离的并行 Chrome，让已登录站点也能由多个并行步骤同时检索。请在本机验证通过后再开启。',
         '管理プロファイルの Cookie とローカルストレージを各独立並列 Chrome にコピーし、ログイン済みサイトを複数の並列ステップで検索できるようにします。お使いの Mac で検証してから有効にしてください。'),
@@ -773,6 +775,8 @@ TRANSLATIONS = {
     'Check release:': ('查看发布页：', 'リリースを確認:'),
     'Choose API history...': ('选择 API 历史…', 'API 履歴を選択…'),
     'Choose Application…': ('选择应用程序…', 'アプリケーションを選択…'),
+    'VS Code (space-free path)': ('VS Code（无空格路径）', 'VS Code（空白なしのパス）'),
+    'Other links': ('其他链接', 'その他のリンク'),
     'Choose a non-default model profile for Compare.': (
         '请为对比选择一个非默认的模型配置。', 'Compare には既定以外のモデルプロファイルを選んでください。'),
     'Choose a non-default model profile for Verify.': (
@@ -1287,6 +1291,8 @@ TRANSLATIONS = {
     '🆕 Check for Updates': ('🆕 检查更新', '🆕 アップデートを確認'),
     '👀 Show/Hide dock icon': ('👀 显示/隐藏 Dock 图标', '👀 Dock アイコンを表示/非表示'),
     '👁 Show hidden @target page': ('👁 显示隐藏的 @target 页面', '👁 非表示の @target ページを表示'),
+    '🌐 Browser Use in background': ('🌐 Browser Use 在后台运行', '🌐 Browser Use をバックグラウンドで実行'),
+    'Browser Use needs you': ('Browser Use 需要你来操作', 'Browser Use があなたの操作を待っています'),
     '🔺 Send': ('🔺 发送', '🔺 送信'),
     '🛠️ Start on login': ('🛠️ 登录时启动', '🛠️ ログイン時に起動'),
     '🥦 Start Broccoli!': ('🥦 启动 Broccoli！', '🥦 Broccoli を起動！'),
@@ -1488,6 +1494,7 @@ TRANSLATIONS = {
     'after ai edit': ('AI 编辑后', 'AI 編集後'),
     'unsaved edits': ('未保存的修改', '未保存の変更'),
     'changed outside': ('外部改动', '外部での変更'),
+    'before Open In': ('用别的软件打开之前', '他のアプリで開く前'),
     'not applied': ('未生效', '未適用'),
     'Editor edit not applied': ('AI 的修改没有写入', 'AI の編集は適用されませんでした'),
     'Not restored': ('没有还原', '復元されませんでした'),
@@ -1654,6 +1661,11 @@ for _feature_path in sorted(glob.glob(os.path.join(HERE, 'translations_feature_*
         TRANSLATIONS.setdefault(_source, _pair)
     EXTRA_SOURCE_STRINGS += [s for s in getattr(_feature_module, 'FEATURE_EXTRA_SOURCE_STRINGS', [])
                              if s not in EXTRA_SOURCE_STRINGS]
+
+# The review of 2026-11-16 (translations_review_20261116.py): its entries REPLACE the ones above.
+from translations_review_20261116 import REVIEW_TRANSLATIONS, REVIEW_EXTRA_SOURCE_STRINGS
+TRANSLATIONS.update(REVIEW_TRANSLATIONS)
+EXTRA_SOURCE_STRINGS += [s for s in REVIEW_EXTRA_SOURCE_STRINGS if s not in EXTRA_SOURCE_STRINGS]
 
 
 def _feature_flag_spec_strings(tree):

@@ -74,7 +74,7 @@ FEATURE_TRANSLATIONS = {
     'Map': ('地图', '地図'), 'Cart': ('购物车', 'カート'), 'Card': ('银行卡', 'カード'), 'Chart': ('图表', 'グラフ'),
     'Book': ('书', '本'), 'Study': ('学习', '学習'), 'Idea': ('灯泡', 'アイデア'), 'Magic': ('魔法棒', '魔法'),
     'Sparkles': ('闪光', 'きらめき'), 'Gear': ('齿轮', '歯車'), 'Home': ('房子', '家'), 'Person': ('人', '人'),
-    'Cloud': ('云', '雲'), 'Sun': ('太阳', '太陽'), 'Moon': ('月亮', '月'), 'Flag': ('旗子', '旗'),
+    'Cloud': ('云', '雲'), 'Sunny': ('太阳', '太陽'), 'Moon': ('月亮', '月'), 'Flag': ('旗子', '旗'),
     'Bookmark': ('书签', 'ブックマーク'), 'Tag': ('标签', 'タグ'), 'Send': ('纸飞机', '紙飛行機'), 'Trash': ('废纸篓', 'ゴミ箱'),
     'Lock': ('锁', '鍵'), 'Key': ('钥匙', 'キー'), 'Wi-Fi': ('Wi-Fi', 'Wi-Fi'), 'Computer': ('电脑', 'コンピュータ'),
     'Keyboard': ('键盘', 'キーボード'), 'Printer': ('打印机', 'プリンタ'), 'Game': ('游戏', 'ゲーム'), 'Coffee': ('咖啡', 'コーヒー'),
@@ -86,6 +86,6 @@ FEATURE_EXTRA_SOURCE_STRINGS = [
     'Ask the Agent', 'AppleScript', 'Shell script',
     'Bolt', 'Star', 'Heart', 'Globe', 'News', 'Search', 'Mail', 'Calendar', 'Clock', 'Document', 'Folder', 'Terminal',
     'Code', 'Music', 'Photo', 'Camera', 'Video', 'Microphone', 'Chat', 'Phone', 'Map', 'Cart', 'Card', 'Chart', 'Book',
-    'Study', 'Idea', 'Magic', 'Sparkles', 'Gear', 'Home', 'Person', 'Cloud', 'Sun', 'Moon', 'Flag', 'Bookmark', 'Tag',
+    'Study', 'Idea', 'Magic', 'Sparkles', 'Gear', 'Home', 'Person', 'Cloud', 'Sunny', 'Moon', 'Flag', 'Bookmark', 'Tag',
     'Send', 'Trash', 'Lock', 'Key', 'Wi-Fi', 'Computer', 'Keyboard', 'Printer', 'Game', 'Coffee', 'Travel', 'Tools',
 ]

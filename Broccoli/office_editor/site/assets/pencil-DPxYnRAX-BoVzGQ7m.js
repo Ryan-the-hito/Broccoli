@@ -1,2 +1,0 @@
-import{o as e}from"./component-DkBrsfH0-CiYcmBjh.js";var t=e({default:()=>n}),n=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L20 8a2.83 2.83 0 0 0-4-4L4 16z"/><path d="M14.5 5.5 18.5 9.5"/></g></svg>
-`;export{t as n};

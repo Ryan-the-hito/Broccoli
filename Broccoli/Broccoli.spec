@@ -15,10 +15,11 @@
 #   the editor — see "Office editor" below),
 #   cli_proxy/ (2026-11-12: CLIProxyAPI for subscription sign-ins — Settings › Models › Subscriptions).
 # A missing one stops the build (REQUIRED below) instead of shipping an app without it.
-# (Last synced from the source folder 2026-11-13, Broccoli_26new-464 = 2.0.18; Open Connector v1.10.0,
-#  CodexBar v0.84.0, agentsview v0.47.0, CLIProxyAPI v8.0.69, Office editor v0.0.9 — all the latest
-#  releases on 2026-11-13; claude-agent-sdk 0.2.181 (Claude Code 2.1.323), openai-codex-cli-bin 0.169.0
-#  (Codex 0.169.0). Built with
+# (Last synced from the source folder 2026-11-19, Broccoli_26new-537 = 2.0.20;
+#  browser-use 0.13.14, checked at build time below. Before that: 2026-11-17, Broccoli_26new-524; Open Connector v1.10.0,
+#  CodexBar v0.84.0, agentsview v0.47.0, CLIProxyAPI v8.0.76, Office editor v0.0.9 — all the latest
+#  releases on 2026-11-17; claude-agent-sdk 0.2.183 (Claude Code 2.1.326), openai 3.52.0,
+#  openai-codex-cli-bin 0.169.0 (Codex 0.169.0). Built with
 #  PyInstaller 6.22.3 + hooks-contrib 2026.10: PyMuPDF 2.x and charset-normalizer 3.5 need its hooks.)
 #
 # BroccoliPython (2026-11-12): a fourth program in Contents/MacOS, built from broccoli_python.py like
@@ -67,6 +68,17 @@
 #         dist/Broccoli.app/Contents/Frameworks/cli_proxy/cli-proxy-api
 # Its settings and sign-ins live in the user's data folder (CLIProxy/).
 #
+# Voice input and local models (2026-11-16): voice_input/BroccoliVoice is Broccoli's own helper for
+# dictation and for the Mac's own models (Apple's speech recognizer and language model; Swift;
+# rebuild with voice_input/build.sh after changing voice_input_helper.swift — needs the macOS 26
+# SDK). It goes into Contents/Frameworks/voice_input and is the program that opens the microphone,
+# so it must be signed WITH entitlements.plist (com.apple.security.device.audio-input):
+#     codesign --force --options runtime --timestamp --entitlements entitlements.plist \
+#         --sign "Developer ID Application: <your name> (<team id>)" \
+#         dist/Broccoli.app/Contents/Frameworks/voice_input/BroccoliVoice
+# Not tried yet with a real Developer ID build: whether macOS asks for the microphone in Broccoli's
+# name (it should: Broccoli starts the helper) is to be checked on the first signed build.
+#
 # Office editor (2026-11-11): office_editor/ is the bundled office-editing component (ranuts/document
 # = the ONLYOFFICE web editors + their converter as WebAssembly, AGPL-3.0, ~530 MB of static files).
 # It is refreshed as a whole with the source folder's external_update.py (update office_editor
@@ -108,7 +120,7 @@
 import os
 import re
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 SPEC_DIR = Path(SPECPATH)
 
@@ -164,8 +176,15 @@ REQUIRED = [
     'agentsview/agentsview', 'agentsview/manifest.json', 'agentsview/LICENSE.txt',
     # 2026-11-12: CLIProxyAPI (subscription sign-ins), what it was taken from and its licence (MIT)
     'cli_proxy/cli-proxy-api', 'cli_proxy/manifest.json', 'cli_proxy/LICENSE.txt',
+    # 2026-11-16: voice input — the module and the dictation helper (built by voice_input/build.sh
+    # from voice_input/voice_input_helper.swift; Apple's on-device recognizer, macOS 26+)
+    'voice_input.py', 'voice_input/BroccoliVoice',
+    # 2026-11-16: the models on this Mac as ordinary profiles (a small local server answered by BroccoliVoice)
+    'local_models.py',
+    # 2026-11-16: the speech models Broccoli downloads and runs itself (runtime: sherpa-onnx, pip)
+    'local_speech.py',
     # 2026-11-10: the bundled Codex's licence (Apache-2.0) and notice, from openai/codex rust-v0.167.0
-    # (2026-11-13: byte-identical in rust-v0.169.0, the bundled version now)
+    # (2026-11-19: byte-identical in rust-v0.170.0, the bundled version now)
     'codex_cli/LICENSE.txt', 'codex_cli/NOTICE.txt',
     # 2026-11-11: Word / Excel / PowerPoint in the editor — the two modules, the component, what it
     # was taken from and its licence (AGPL-3.0) and notice
@@ -194,6 +213,19 @@ def folder_datas(folder, target=None, skip=(), only_suffixes=None):
             out.append((str(Path(root) / name), str(target / rel)))
     return out
 
+
+# browser_use_worker.py is written for the browser-use 0.13 series (0.13.14 is its last release).
+# 1.0 is a different program and most of the worker's calls do not exist there, so a build made
+# with any other series would ship a Browser Use that cannot run a single step. Stop here instead.
+# (Ryan, 2026-11-19: stay on the old version until the new one is adapted on purpose. The same
+# series is named in browser_use_worker.py SUPPORTED_LIBRARY_SERIES and pinned for pip in the
+# source folder's pip-constraints.txt.)
+from importlib.metadata import version as _installed_version
+BROWSER_USE_SERIES = '0.13.'
+BROWSER_USE_VERSION = _installed_version('browser-use')
+if not BROWSER_USE_VERSION.startswith(BROWSER_USE_SERIES):
+    raise SystemExit(f'browser-use {BROWSER_USE_VERSION} is installed in the build environment, but Broccoli '
+                     f'works with {BROWSER_USE_SERIES}x only. Put it back: pip install "browser-use==0.13.14"')
 
 browser_automation_hiddenimports = (
     collect_submodules('browser_use')
@@ -273,7 +305,7 @@ common_hiddenimports = [
     *collect_submodules('claude_agent_sdk'),
     'codex_cli_bin',             # 2026-11-10: finds the bundled Codex (bundled_codex_path)
     # 2026-11-11: office files in the editor (imported inside try blocks in Broccoli.py)
-    'office_files', 'office_editor_bridge', 'docx', 'pptx', 'openpyxl', 'lxml.etree',
+    'voice_input', 'local_models', 'local_speech', 'sherpa_onnx', 'office_files', 'office_editor_bridge', 'docx', 'pptx', 'openpyxl', 'lxml.etree',
     'openpyxl.formula.translate', 'openpyxl.styles.numbers', 'openpyxl.utils.datetime',
     *collect_submodules('mcp'),
     *browser_automation_hiddenimports,
@@ -394,6 +426,14 @@ agentsview_binaries = [(str(SPEC_DIR / 'agentsview' / AGENTSVIEW_BINARY), 'agent
 # sys._MEIPASS/cli_proxy (cli_proxy_binary_path); not UPX-compressed
 CLI_PROXY_BINARY = 'cli-proxy-api'
 cli_proxy_binaries = [(str(SPEC_DIR / 'cli_proxy' / CLI_PROXY_BINARY), 'cli_proxy')]
+# Voice input (2026-11-16): the dictation helper, an executable in sys._MEIPASS/voice_input
+# (voice_helper_path); it opens the microphone, so entitlements.plist carries
+# com.apple.security.device.audio-input and Info.plist says why (NSMicrophoneUsageDescription)
+voice_input_binaries = [(str(SPEC_DIR / 'voice_input' / 'BroccoliVoice'), 'voice_input')]
+# The downloadable speech models' runtime (2026-11-16): sherpa-onnx carries its own onnxruntime and
+# C libraries in sherpa_onnx/lib (the onnxruntime Python package stays excluded below: not needed).
+# The models themselves are never packaged: the user downloads them (Settings › Models › Local models).
+sherpa_onnx_binaries = collect_dynamic_libs('sherpa_onnx')
 
 
 # QtWebEngine's stray "version" in the BUILD environment (2026-11-09; the build failed with
@@ -433,7 +473,7 @@ a = Analysis(
     ['Broccoli.py', 'browser_use_worker.py', 'computer_use_worker.py', 'broccoli_python.py'],
     pathex=[str(SPEC_DIR)],
     binaries=(claude_cli_binaries + codex_cli_binaries + open_connector_binaries + codexbar_binaries
-              + agentsview_binaries + cli_proxy_binaries),
+              + agentsview_binaries + cli_proxy_binaries + voice_input_binaries + sherpa_onnx_binaries),
     datas=resource_datas + codex_cli_datas,
     hiddenimports=common_hiddenimports,
     hookspath=[],
@@ -569,6 +609,11 @@ app = BUNDLE(
         'LSMinimumSystemVersion': QT_MINIMUM_MACOS,
         # Apple Notes and other apps are driven through osascript (macOS asks the user once)
         'NSAppleEventsUsageDescription': 'Broccoli reads and writes your Apple Notes and Reminders and controls other apps when you ask it to.',
+        # voice input (2026-11-16): the microphone buttons of the prompt bars; recognized on this Mac
+        'NSMicrophoneUsageDescription': 'Broccoli listens through the microphone when you use voice input, and turns what you say into text on this Mac.',
+        # a kept recording also listens to what this Mac plays (2026-11-19: the other side of an online
+        # meeting). Without this sentence macOS does not ask the user and the helper records silence.
+        'NSAudioCaptureUsageDescription': 'Broccoli records the sound this Mac plays while you make a recording, so the other side of an online meeting is written down too.',
     },
 )
 

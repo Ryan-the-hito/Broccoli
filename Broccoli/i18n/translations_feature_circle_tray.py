@@ -9,4 +9,8 @@ FEATURE_TRANSLATIONS = {
     'Copy Path': ('拷贝路径', 'パスをコピー'),
     'Copy Link': ('拷贝链接', 'リンクをコピー'),
     'Remove All': ('全部移除', 'すべて削除'),
+    # 2026-11-13: several chosen with ⌘-click / ⇧-click (Finder / Quick Look wording)
+    'Remove Selected': ('移除所选项', '選択項目を削除'),
+    'Select All': ('全选', 'すべてを選択'),
+    'Deselect All': ('取消全选', 'すべての選択を解除'),
 }

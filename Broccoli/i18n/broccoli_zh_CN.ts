@@ -181,7 +181,7 @@ It will not use the AI model open in this web page.</source>
     </message>
     <message>
         <source>0 outputs</source>
-        <translation>0 个输出</translation>
+        <translation>0 个成品</translation>
     </message>
     <message>
         <source>1+ year old</source>
@@ -252,6 +252,14 @@ It will not use the AI model open in this web page.</source>
         <translation>任务胶囊正在生成中。</translation>
     </message>
     <message>
+        <source>A daily report every night (23:30)</source>
+        <translation>每天晚上写日报（23:30）</translation>
+    </message>
+    <message>
+        <source>A downloaded speech model listens instead of the one built into macOS when its profile comes first in the “Speech to text” row of the Model roles page. Downloads come from the model runtime's release page and can be stopped and gone on with later.</source>
+        <translation>下载的语音模型，只要它的配置排在“模型分工”页“语音转文字”那一行的第一个，就由它代替 macOS 自带的来听。模型从运行库的发布页下载，可以中途停下、以后接着下。</translation>
+    </message>
+    <message>
         <source>A file of this conversation is missing: {name}</source>
         <translation>这段对话缺少一个文件：{name}</translation>
     </message>
@@ -260,12 +268,20 @@ It will not use the AI model open in this web page.</source>
         <translation>一个位置由一个或多个地址组成：网络的公网 IP（Broccoli 会不时向 api.ipify.org 查询），或这台 Mac 的局域网地址——可以写完整地址、用 *（192.168.3.*）或网段（10.0.0.0/8）。匹配到某个位置时，勾选的模型一律不用：每次选模型都改用下一个允许的；一个都不剩时，任务会直接说明，而不会去用被屏蔽的模型。</translation>
     </message>
     <message>
+        <source>A monthly report at the end of the month</source>
+        <translation>月底写月报</translation>
+    </message>
+    <message>
+        <source>A new language or tone, e.g. 日本語（上司向け、丁寧語）</source>
+        <translation>新的语言或语气，比如：日本語（上司向け、丁寧語）</translation>
+    </message>
+    <message>
         <source>A provider has the same color here as on the usage bars. Green, grey, orange and red are kept for a task’s state and for a nearly used-up bar.</source>
         <translation>同一家供应商在这里和用量条上是同一个颜色。绿、灰、橙、红留给任务的状态和快用完的用量条。</translation>
     </message>
     <message>
         <source>A script runs at once, without the AI. A question goes to the Agent as a new conversation; its answer comes out of the collapsed button. New commands go to layer 2 of its grid: rest the pointer on the collapsed button, then scroll in the grid or click its page dots.</source>
-        <translation>脚本直接运行，不经过 AI。问题会作为一个新对话交给 Agent，回答从最小化圆按钮里出来。新指令放在九宫格第 2 层：鼠标停在最小化圆按钮上，再在九宫格里滚动或点页点。</translation>
+        <translation>脚本直接运行，不经过 AI。问题会作为一个新对话交给智能体，回答从最小化圆按钮里出来。新指令放在九宫格第 2 层：鼠标停在最小化圆按钮上，再在九宫格里滚动或点翻页的小点。</translation>
     </message>
     <message>
         <source>A task that is not finished and has said nothing for that long gets one reminder in the Reminders app, so your iPhone and Apple Watch ring too. It is ticked off when the task moves again. The same goes for a task that has waited {m} minutes for your approval or your answer.</source>
@@ -274,6 +290,10 @@ It will not use the AI model open in this web page.</source>
     <message>
         <source>A translation is already running</source>
         <translation>已有一个翻译正在进行</translation>
+    </message>
+    <message>
+        <source>A weekly report on Sunday night</source>
+        <translation>周日晚上写周报</translation>
     </message>
     <message>
         <source>A whole conversation — history, branches, files — moves to the device that will run it, and can move back later. (M4b · BROCCOLI_M4B_MIGRATION)</source>
@@ -365,7 +385,11 @@ It will not use the AI model open in this web page.</source>
     </message>
     <message>
         <source>Add a reminder in Reminders when an agent finishes</source>
-        <translation>Agent 完成时在"提醒事项"里加一条</translation>
+        <translation>智能体完成时在“提醒事项”里加一条</translation>
+    </message>
+    <message>
+        <source>Add as profile</source>
+        <translation>添加为配置</translation>
     </message>
     <message>
         <source>Add comment</source>
@@ -409,7 +433,7 @@ It will not use the AI model open in this web page.</source>
     </message>
     <message>
         <source>Add selection to Generated outputs</source>
-        <translation>把所选内容加入生成输出</translation>
+        <translation>把所选内容加入成品</translation>
     </message>
     <message>
         <source>Add selection to Terminal favorites</source>
@@ -477,7 +501,7 @@ It will not use the AI model open in this web page.</source>
     </message>
     <message>
         <source>Adds “🎛️ Move to” to the Send menu: a brand-new conversation starts and runs on the device you pick. (M4a · BROCCOLI_M4A_MOVE_SEND)</source>
-        <translation>在发送菜单里加入"🎛️ Move to"：新对话会在你选的设备上开始并运行。（M4a · BROCCOLI_M4A_MOVE_SEND）</translation>
+        <translation>在发送菜单里加入「🎛️ 换设备」：新对话会在你选的设备上开始并运行。（M4a · BROCCOLI_M4A_MOVE_SEND）</translation>
     </message>
     <message>
         <source>Adopt &amp; Save</source>
@@ -499,7 +523,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>After an answer finishes, one short extra request to the same model guesses what you will ask next. It shows in grey in the Agent box: press Return to fill it in, Command+Return to send.</source>
-        <translation>回答结束后，向同一个模型多发一次简短请求，猜你下一句会问什么。它以灰字显示在 Agent 输入框里：按回车填入，按 Command+回车发送。</translation>
+        <translation>回答结束后，向同一个模型多发一次简短请求，猜你下一句会问什么。它以灰字显示在智能体输入框里：按回车填入，按 Command+回车发送。</translation>
     </message>
     <message>
         <source>After round completion</source>
@@ -523,7 +547,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Agent Command</source>
-        <translation>Agent 命令</translation>
+        <translation>智能体命令</translation>
     </message>
     <message>
         <source>Agent conversation</source>
@@ -531,27 +555,27 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Agent cursor: Broccoli shows a separate labelled virtual cursor; it does not move your physical mouse.</source>
-        <translation>Agent 光标：Broccoli 会显示一个带标签的独立虚拟光标，不会移动你的实体鼠标。</translation>
+        <translation>智能体光标：Broccoli 会显示一个带标签的独立虚拟光标，不会移动你的实体鼠标。</translation>
     </message>
     <message>
         <source>Agent plan</source>
-        <translation>Agent 计划</translation>
+        <translation>智能体计划</translation>
     </message>
     <message>
         <source>Agent queue</source>
-        <translation>Agent 队列</translation>
+        <translation>智能体队列</translation>
     </message>
     <message>
         <source>Agent run failed — {title}</source>
-        <translation>Agent 运行失败 — {title}</translation>
+        <translation>智能体运行失败 — {title}</translation>
     </message>
     <message>
         <source>Agent saved comments</source>
-        <translation>Agent 已存评论</translation>
+        <translation>智能体常用评论</translation>
     </message>
     <message>
         <source>Agent task</source>
-        <translation>Agent 任务</translation>
+        <translation>智能体任务</translation>
     </message>
     <message>
         <source>Aggressive - discard long-idle hidden pages</source>
@@ -598,8 +622,16 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
         <translation>又叫：{names}</translation>
     </message>
     <message>
+        <source>Also copy what the circle heard to the clipboard</source>
+        <translation>小圆点听到的内容同时复制到剪贴板</translation>
+    </message>
+    <message>
         <source>Also does: {steps}</source>
         <translation>也做：{steps}</translation>
+    </message>
+    <message>
+        <source>Also put each report in Apple Notes (folder “Broccoli Reports”)</source>
+        <translation>同时把报告存进备忘录（「Broccoli Reports」文件夹）</translation>
     </message>
     <message>
         <source>Always</source>
@@ -624,6 +656,10 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     <message>
         <source>Another move of this conversation is already in progress.</source>
         <translation>这段对话已经有另一次迁移在进行。</translation>
+    </message>
+    <message>
+        <source>Another report is being written. Try again in a moment.</source>
+        <translation>正在写另一份报告，请稍等再试。</translation>
     </message>
     <message>
         <source>Answer</source>
@@ -659,7 +695,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Append to current API history</source>
-        <translation>追加到当前 API 历史</translation>
+        <translation>追加到当前智能体对话</translation>
     </message>
     <message>
         <source>Append to current chat</source>
@@ -676,6 +712,10 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     <message>
         <source>Append to terminal input</source>
         <translation>追加到终端输入框</translation>
+    </message>
+    <message>
+        <source>Apple Intelligence is turned off in System Settings</source>
+        <translation>Apple 智能在系统设置里没有打开</translation>
     </message>
     <message>
         <source>Apple Notes</source>
@@ -746,6 +786,10 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
         <translation>已归档。在「归档与彻底删除历史」里恢复后会重新使用。</translation>
     </message>
     <message>
+        <source>Archiving…</source>
+        <translation>正在归档…</translation>
+    </message>
+    <message>
         <source>Args</source>
         <translation>参数</translation>
     </message>
@@ -771,7 +815,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Ask Localhost</source>
-        <translation>问 Localhost</translation>
+        <translation>问本地服务</translation>
     </message>
     <message>
         <source>Ask Terminal</source>
@@ -779,7 +823,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Ask Web</source>
-        <translation>问 Web</translation>
+        <translation>问网页</translation>
     </message>
     <message>
         <source>Ask a follow-up</source>
@@ -791,7 +835,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Ask the Agent</source>
-        <translation>问 Agent</translation>
+        <translation>问智能体</translation>
     </message>
     <message>
         <source>Ask {device} to move the conversation back here. It moves as soon as nothing is running there; a typed question then runs here.</source>
@@ -838,10 +882,6 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
         <translation>附件 / 抓取的网页</translation>
     </message>
     <message>
-        <source>Attachments cannot be sent to a shared Mac yet. Send the question without them.</source>
-        <translation>附件暂时还不能发到别人共享给你的 Mac。请先不带附件发送问题。</translation>
-    </message>
-    <message>
         <source>Attachments:</source>
         <translation>附件：</translation>
     </message>
@@ -859,7 +899,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Auto click Send after filling Web / Localhost prompts</source>
-        <translation>填入 Web / Localhost 提示词后自动点击发送</translation>
+        <translation>填入网页 / 本地服务提示词后自动点击发送</translation>
     </message>
     <message>
         <source>Auto found a focused context_query with missing terms ({coverage:.0%} covered).</source>
@@ -875,11 +915,11 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Auto quality</source>
-        <translation>自动质量</translation>
+        <translation>自动评分</translation>
     </message>
     <message>
         <source>Auto quality comes from per-step reviews (goal met / total). Edit the Notes column to record traits; saved immediately.</source>
-        <translation>自动质量分来自每步复盘（达成目标数 / 总数）。可在备注列记录模型特点，编辑后立即保存。</translation>
+        <translation>自动评分来自每步复盘（达成目标数 / 总数）。可在备注列记录模型特点，编辑后立即保存。</translation>
     </message>
     <message>
         <source>Auto send skipped</source>
@@ -919,11 +959,11 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Auto-open last Web / Localhost URLs on launch</source>
-        <translation>启动时自动打开上次的 Web / Localhost 网址</translation>
+        <translation>启动时自动打开上次的网页 / 本地服务网址</translation>
     </message>
     <message>
         <source>Auto-start Codex / Claude Code tabs on launch</source>
-        <translation>启动时自动开启 Codex / Claude Code 标签页</translation>
+        <translation>启动时自动启动 Codex / Claude Code 标签页</translation>
     </message>
     <message>
         <source>Auto-translate New Pages</source>
@@ -971,7 +1011,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Available after the diagram milestone</source>
-        <translation>图表里程碑完成后可用</translation>
+        <translation>示意图里程碑完成后可用</translation>
     </message>
     <message>
         <source>Available once sharing with other people is built.</source>
@@ -983,7 +1023,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Back</source>
-        <translation>后退</translation>
+        <translation>返回</translation>
     </message>
     <message>
         <source>Back to Current</source>
@@ -1098,6 +1138,10 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
         <translation>书签</translation>
     </message>
     <message>
+        <source>Brings the main window out from the screen edge it hides at, or sends it back.</source>
+        <translation>把藏在屏幕边上的主窗口叫出来，或者送回去。</translation>
+    </message>
+    <message>
         <source>Broccoli</source>
         <translation>Broccoli</translation>
     </message>
@@ -1111,7 +1155,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Broccoli Note</source>
-        <translation>Broccoli 笔记</translation>
+        <translation>Broccoli 备忘录</translation>
     </message>
     <message>
         <source>Broccoli Reader</source>
@@ -1127,7 +1171,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Broccoli agent</source>
-        <translation>Broccoli 的 Agent</translation>
+        <translation>Broccoli 智能体</translation>
     </message>
     <message>
         <source>Broccoli closes and opens again as {name}, with {name}'s own settings, memory and conversations.</source>
@@ -1147,7 +1191,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Broccoli is not allowed to use Reminders, so finished agents get no reminder. Allow it in System Settings → Privacy &amp; Security → Automation, or turn the reminder off in Settings → Completion alerts.</source>
-        <translation>Broccoli 没有权限使用"提醒事项"，所以 Agent 完成时不会加提醒。请在 系统设置 → 隐私与安全性 → 自动化 里允许，或者在 设置 → 完成提醒 里关掉这个提醒。</translation>
+        <translation>Broccoli 没有权限使用“提醒事项”，所以智能体完成时不会加提醒。请在 系统设置 → 隐私与安全性 → 自动化 里允许，或者在 设置 → 完成提醒 里关掉这个提醒。</translation>
     </message>
     <message>
         <source>Broccoli is not allowed to use Reminders, so the iPhone gets no reminder when an answer is ready. The Notes still arrive. Allow it in System Settings → Privacy &amp; Security → Automation, then restart Broccoli, or turn the reminder off in Settings.</source>
@@ -1155,11 +1199,19 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Broccoli is not allowed to use Reminders.</source>
-        <translation>Broccoli 没有权限使用"提醒事项"。</translation>
+        <translation>Broccoli 没有权限使用“提醒事项”。</translation>
     </message>
     <message>
         <source>Broccoli is not running from an installed app</source>
         <translation>Broccoli 不是从已安装的 App 运行的</translation>
+    </message>
+    <message>
+        <source>Broccoli may not record the sound this Mac plays. Allow it in System Settings → Privacy &amp; Security → Screen &amp; System Audio Recording (“System Audio Recording Only”).</source>
+        <translation>Broccoli 没有权限录这台 Mac 播放的声音。请在 系统设置 → 隐私与安全性 → 屏幕与系统音频录制 里的“仅系统音频录制”中允许它。</translation>
+    </message>
+    <message>
+        <source>Broccoli may not use the microphone. Allow it in System Settings → Privacy &amp; Security → Microphone.</source>
+        <translation>Broccoli 没有使用麦克风的权限。请在 系统设置 → 隐私与安全性 → 麦克风 里允许。</translation>
     </message>
     <message>
         <source>Broccoli model profiles (*.{ext});;All files (*)</source>
@@ -1175,7 +1227,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Broccoli runs a small proxy on this Mac only. Sign in to a subscription in your browser, and its models can be added as ordinary profiles. The sign-in stays on this Mac. Providers may not allow their subscriptions to be used this way: an account can be limited or closed for it.</source>
-        <translation>Broccoli 只在这台 Mac 上运行一个小代理。在浏览器里登录订阅后，它的模型就能加成普通的配置。登录信息只留在这台 Mac 上。各家服务不一定允许这样使用订阅：账号可能因此被限制或停用。</translation>
+        <translation>Broccoli 只在这台 Mac 上运行一个小代理。在浏览器里登录订阅后，它的模型就能添加为普通的配置。登录信息只留在这台 Mac 上。各家服务不一定允许这样使用订阅：账号可能因此被限制或停用。</translation>
     </message>
     <message>
         <source>Broccoli terminal</source>
@@ -1200,6 +1252,10 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     <message>
         <source>Broccoli wrote {n} change(s); Codex is checking them…</source>
         <translation>Broccoli 写好了 {n} 处修改，Codex 正在检查…</translation>
+    </message>
+    <message>
+        <source>Broccoli's own</source>
+        <translation>Broccoli 自带的</translation>
     </message>
     <message>
         <source>Broccoli’s coordinator added a request from “{title}”.</source>
@@ -1234,6 +1290,10 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
         <translation>Browser Use 需要安装 Google Chrome。请检查 Chrome 可执行文件路径。</translation>
     </message>
     <message>
+        <source>Browser Use needs you</source>
+        <translation>Browser Use 需要你来操作</translation>
+    </message>
+    <message>
         <source>Browser automation complete</source>
         <translation>浏览器自动化完成</translation>
     </message>
@@ -1247,7 +1307,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Browser userscripts (Web / Localhost)</source>
-        <translation>浏览器用户脚本（Web / Localhost）</translation>
+        <translation>浏览器用户脚本（网页 / 本地服务）</translation>
     </message>
     <message>
         <source>Browser worker starting</source>
@@ -1371,7 +1431,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Change this part of the open document as follows: </source>
-        <translation>请把打开的文档里这一部分改成：</translation>
+        <translation>请按下面的要求修改打开的文档里的这一部分：</translation>
     </message>
     <message>
         <source>Change “{name}”?</source>
@@ -1379,7 +1439,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Changed at {time} by {who}</source>
-        <translation>{time} 由{who}修改</translation>
+        <translation>{time} 修改，修改者：{who}</translation>
     </message>
     <message>
         <source>Changes apply immediately. A BROCCOLI_* environment variable overrides its switch.</source>
@@ -1419,7 +1479,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Checking access to Reminders…</source>
-        <translation>正在确认能否使用"提醒事项"…</translation>
+        <translation>正在确认能否使用“提醒事项”…</translation>
     </message>
     <message>
         <source>Checking the developer signature…</source>
@@ -1427,7 +1487,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Checking the result against the task contract (round {n})</source>
-        <translation>正在按任务合同核对结果（第 {n} 轮）</translation>
+        <translation>正在按任务的验收标准核对结果（第 {n} 轮）</translation>
     </message>
     <message>
         <source>Checking…</source>
@@ -1439,7 +1499,7 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Choose API history...</source>
-        <translation>选择 API 历史…</translation>
+        <translation>选择智能体对话…</translation>
     </message>
     <message>
         <source>Choose Application</source>
@@ -1491,11 +1551,11 @@ Authorization 与只读相关请求头会由上方字段自动生成。</transla
     </message>
     <message>
         <source>Choose the device that will own and run this new conversation.</source>
-        <translation>选择将拥有并运行这段新对话的设备。</translation>
+        <translation>选择这个新对话放在哪台设备上、由哪台设备运行。</translation>
     </message>
     <message>
         <source>Choose what to share from the current Agent conversation.</source>
-        <translation>选择要从当前 Agent 对话分享的内容。</translation>
+        <translation>选择要从当前智能体对话分享的内容。</translation>
     </message>
     <message>
         <source>Choose what to share from the current Terminal session.</source>
@@ -1609,7 +1669,11 @@ Broccoli 会用这个配置启动一个单独的 Chrome 窗口。在里面登录
     </message>
     <message>
         <source>Click Discover to read tools, resources, and prompts from this MCP endpoint.</source>
-        <translation>点击“发现”读取此 MCP 端点的工具、资源和提示词。</translation>
+        <translation>点击“检测”读取此 MCP 端点的工具、资源和提示词。</translation>
+    </message>
+    <message>
+        <source>Click the microphone at the right of a prompt box and speak; click again to stop. What you say is turned into text on this Mac, in one language at a time. “Automatic” listens in the first language of Settings → Languages.</source>
+        <translation>点输入框右边的麦克风就可以说话，再点一下停止。你说的话在这台 Mac 上转成文字，一次只听一种语言。“自动”听的是 设置 → Languages 里排第一的语言。</translation>
     </message>
     <message>
         <source>Clipboard: only if this task performs a real Copy command, your current system clipboard may be overwritten. Broccoli announces that before the command and records only before/after hashes and lengths, never the clipboard text. Newly copied plain text is kept only in this task for exact AX insertion; AX-first text transfer does not touch the clipboard.</source>
@@ -1697,7 +1761,7 @@ Broccoli 会用这个配置启动一个单独的 Chrome 窗口。在里面登录
     </message>
     <message>
         <source>Collision-proof conversation IDs</source>
-        <translation>防撞车的对话 ID</translation>
+        <translation>不会重复的对话 ID</translation>
     </message>
     <message>
         <source>Color</source>
@@ -1848,6 +1912,10 @@ Broccoli 会用这个配置启动一个单独的 Chrome 窗口。在里面登录
         <translation>对话已迁移到 {device}，之后都在那台设备上保存和运行。</translation>
     </message>
     <message>
+        <source>Conversations</source>
+        <translation>对话</translation>
+    </message>
+    <message>
         <source>Converted repeated web_search request into conflict arbitration.
 Reason: {reason}</source>
         <translation>已将重复的 web_search 请求改为冲突仲裁。
@@ -1866,12 +1934,20 @@ Reason: {reason}</source>
         <translation>总调度记录</translation>
     </message>
     <message>
+        <source>Copied: paste with ⌘V.</source>
+        <translation>已复制，按 ⌘V 粘贴。</translation>
+    </message>
+    <message>
         <source>Copies the managed profile's cookies and local storage into each isolated parallel Chrome, so logged-in sites can be searched by several parallel steps. Turn on after verifying on your machine.</source>
         <translation>把受管配置档的 Cookie 和本地存储复制进每个隔离的并行 Chrome，让已登录站点也能由多个并行步骤同时检索。请在本机验证通过后再开启。</translation>
     </message>
     <message>
         <source>Copy</source>
         <translation>复制</translation>
+    </message>
+    <message>
+        <source>Copy (drag it to put the whole text somewhere)</source>
+        <translation>复制（按住拖出去 = 把整段文字拖到别处）</translation>
     </message>
     <message>
         <source>Copy All</source>
@@ -1946,6 +2022,10 @@ Reason: {reason}</source>
         <translation>无法列出快捷指令：{msg}</translation>
     </message>
     <message>
+        <source>Could not look for sources. Reports use the Agent conversations.</source>
+        <translation>没能查找来源，报告只用智能体对话。</translation>
+    </message>
+    <message>
         <source>Could not make the file: {error}</source>
         <translation>无法生成文件：{error}</translation>
     </message>
@@ -1987,7 +2067,7 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Could not rasterize the page</source>
-        <translation>无法栅格化该页面</translation>
+        <translation>无法把这一页转成图片</translation>
     </message>
     <message>
         <source>Could not reach the shared folder: {error}</source>
@@ -2023,7 +2103,7 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Could not run the quick command “{name}”.</source>
-        <translation>快捷指令“{name}”没能运行。</translation>
+        <translation>快捷命令“{name}”没能运行。</translation>
     </message>
     <message>
         <source>Could not run the shortcut “{name}”.</source>
@@ -2031,7 +2111,11 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Could not save the diagram.</source>
-        <translation>无法保存该图表。</translation>
+        <translation>无法保存该示意图。</translation>
+    </message>
+    <message>
+        <source>Could not save the file: {error}</source>
+        <translation>无法保存文件：{error}</translation>
     </message>
     <message>
         <source>Could not save the flow.</source>
@@ -2044,6 +2128,10 @@ Reason: {reason}</source>
     <message>
         <source>Could not start (check API settings)</source>
         <translation>无法启动（请检查 API 设置）</translation>
+    </message>
+    <message>
+        <source>Could not type into {app}. Copied: paste with ⌘V.</source>
+        <translation>没能填进 {app}。已复制，按 ⌘V 粘贴。</translation>
     </message>
     <message>
         <source>Could not write to iCloud Drive: {detail}</source>
@@ -2059,7 +2147,7 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Crash-safe conversation saves</source>
-        <translation>防崩溃的对话保存</translation>
+        <translation>崩溃时也安全的对话保存</translation>
     </message>
     <message>
         <source>Create and edit your API accounts (endpoint, key, model) here. This page does not select which model to use — choose the default chat, planner, embedding and other roles on the Models page.</source>
@@ -2083,7 +2171,7 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Current Agent answer is still running. Stop it before auto-sending another screenshot.</source>
-        <translation>当前 Agent 回答仍在生成。请先停止，再自动发送新的截图。</translation>
+        <translation>当前智能体回答仍在生成。请先停止，再自动发送新的截图。</translation>
     </message>
     <message>
         <source>Current state</source>
@@ -2130,8 +2218,28 @@ Reason: {reason}</source>
         <translation>剪切</translation>
     </message>
     <message>
+        <source>Daily</source>
+        <translation>日报</translation>
+    </message>
+    <message>
+        <source>Daily report</source>
+        <translation>日报</translation>
+    </message>
+    <message>
+        <source>Daily, weekly and monthly reports of what you did, from your own templates.</source>
+        <translation>按你自己的模板，把做过的事写成日报、周报、月报。</translation>
+    </message>
+    <message>
         <source>Date</source>
         <translation>日期</translation>
+    </message>
+    <message>
+        <source>Days in a row</source>
+        <translation>连续天数</translation>
+    </message>
+    <message>
+        <source>Days used this month</source>
+        <translation>本月用了几天</translation>
     </message>
     <message>
         <source>Debug</source>
@@ -2147,11 +2255,11 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Default Profile is running on the target device.</source>
-        <translation>目标设备正在用默认 Profile 运行。</translation>
+        <translation>目标设备正在用默认配置运行。</translation>
     </message>
     <message>
         <source>Default Profile will be used</source>
-        <translation>将使用默认 Profile</translation>
+        <translation>将使用默认配置</translation>
     </message>
     <message>
         <source>Default active profile</source>
@@ -2163,7 +2271,7 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Default engine for the browser agent's search action. Pick one that is reachable from your network; unreachable engines make search steps hang and fail.</source>
-        <translation>浏览器代理搜索动作的默认引擎。请选择你的网络能访问的引擎；访问不了的引擎会让搜索步骤挂死并失败。</translation>
+        <translation>浏览器智能体搜索动作的默认引擎。请选择你的网络能访问的引擎；访问不了的引擎会让搜索步骤挂死并失败。</translation>
     </message>
     <message>
         <source>Default shell behavior</source>
@@ -2178,12 +2286,24 @@ Reason: {reason}</source>
         <translation>删除评论</translation>
     </message>
     <message>
+        <source>Delete files sent to the iPhone after 30 days</source>
+        <translation>送到 iPhone 的文件 30 天后删除</translation>
+    </message>
+    <message>
         <source>Delete group</source>
         <translation>删除分组</translation>
     </message>
     <message>
+        <source>Delete group, archive conversations</source>
+        <translation>删除分组，对话归档</translation>
+    </message>
+    <message>
+        <source>Delete group, keep conversations</source>
+        <translation>删除分组，保留对话</translation>
+    </message>
+    <message>
         <source>Delete old dynamic memory after</source>
-        <translation>删除动态记忆，早于</translation>
+        <translation>动态记忆超过此时间就删除</translation>
     </message>
     <message>
         <source>Delete permanently</source>
@@ -2202,12 +2322,16 @@ Reason: {reason}</source>
         <translation>永久删除该会话？</translation>
     </message>
     <message>
-        <source>Delete the group “{name}”? Its conversations are kept, in no group.</source>
-        <translation>删除分组“{name}”吗？里面的对话会保留，变成不属于任何分组。</translation>
+        <source>Delete the group “{name}”?</source>
+        <translation>删除分组“{name}”？</translation>
+    </message>
+    <message>
+        <source>Delete the group “{name}”? It has no conversations.</source>
+        <translation>删除分组“{name}”？里面没有对话。</translation>
     </message>
     <message>
         <source>Delete the quick command “{name}”?</source>
-        <translation>删除快捷指令“{name}”？</translation>
+        <translation>删除快捷命令“{name}”？</translation>
     </message>
     <message>
         <source>Delete this conversation permanently?</source>
@@ -2224,6 +2348,10 @@ Reason: {reason}</source>
     <message>
         <source>Delete {n} entries?</source>
         <translation>删除 {n} 条词条？</translation>
+    </message>
+    <message>
+        <source>Delete “{name}” from this Mac? It can be downloaded again.</source>
+        <translation>把“{name}”从这台 Mac 上删除？以后可以重新下载。</translation>
     </message>
     <message>
         <source>Delete, keep backups</source>
@@ -2286,6 +2414,10 @@ Reason: {reason}</source>
         <translation>设备：{name}</translation>
     </message>
     <message>
+        <source>Dictation</source>
+        <translation>听写</translation>
+    </message>
+    <message>
         <source>Disabled</source>
         <translation>已停用</translation>
     </message>
@@ -2295,7 +2427,7 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Discover</source>
-        <translation>发现</translation>
+        <translation>检测</translation>
     </message>
     <message>
         <source>Discovering enabled MCP and Terminal tools</source>
@@ -2303,24 +2435,24 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Discovery</source>
-        <translation>发现</translation>
+        <translation>检测结果</translation>
     </message>
     <message>
         <source>Discovery failed:
 Command is empty.</source>
-        <translation>发现失败：
+        <translation>检测失败：
 命令为空。</translation>
     </message>
     <message>
         <source>Discovery failed:
 Endpoint URL is empty.</source>
-        <translation>发现失败：
+        <translation>检测失败：
 端点 URL 为空。</translation>
     </message>
     <message>
         <source>Discovery failed:
 {error}</source>
-        <translation>发现失败：
+        <translation>检测失败：
 {error}</translation>
     </message>
     <message>
@@ -2361,7 +2493,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Don’t watch</source>
-        <translation>不提醒</translation>
+        <translation>不监视</translation>
     </message>
     <message>
         <source>Dot</source>
@@ -2378,6 +2510,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Down</source>
         <translation>下移</translation>
+    </message>
+    <message>
+        <source>Download</source>
+        <translation>下载</translation>
     </message>
     <message>
         <source>Download canceled.</source>
@@ -2400,12 +2536,24 @@ Endpoint URL is empty.</source>
         <translation>正在从 @target 下载修改...</translation>
     </message>
     <message>
+        <source>Downloading the speech model for this language… {percent}%</source>
+        <translation>正在下载这种语言的语音模型… {percent}%</translation>
+    </message>
+    <message>
         <source>Downloading… {done} / {total} MB</source>
         <translation>下载中… {done} / {total} MB</translation>
     </message>
     <message>
+        <source>Downloading… {percent}%</source>
+        <translation>下载中… {percent}%</translation>
+    </message>
+    <message>
         <source>Driver command</source>
         <translation>驱动命令</translation>
+    </message>
+    <message>
+        <source>Duplicate</source>
+        <translation>复制</translation>
     </message>
     <message>
         <source>Duplicate skill name: {name}</source>
@@ -2437,7 +2585,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Edit Quick Command…</source>
-        <translation>编辑快捷指令…</translation>
+        <translation>编辑快捷命令…</translation>
     </message>
     <message>
         <source>Edit before copying or sending.</source>
@@ -2469,7 +2617,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Edit quick command</source>
-        <translation>编辑快捷指令</translation>
+        <translation>编辑快捷命令</translation>
     </message>
     <message>
         <source>Edit step</source>
@@ -2502,6 +2650,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Edit…</source>
         <translation>编辑…</translation>
+    </message>
+    <message>
+        <source>Either side</source>
+        <translation>左右都行</translation>
     </message>
     <message>
         <source>Embed</source>
@@ -2796,6 +2948,18 @@ Endpoint URL is empty.</source>
         <translation>写入文件失败：{error}</translation>
     </message>
     <message>
+        <source>Files</source>
+        <translation>文件</translation>
+    </message>
+    <message>
+        <source>Files are still being uploaded to iCloud. Send again when they are done.</source>
+        <translation>文件还在往 iCloud 传。传完再发一次。</translation>
+    </message>
+    <message>
+        <source>Files from answers are copied to iCloud Drive › Shortcuts › Broccoli › Answers so the iPhone can open them, and that folder stays downloaded on the iPhone. Copies older than 30 days are deleted there; the files in the conversations on this Mac stay. (M8 · BROCCOLI_M8_PHONE_FILE_CLEANUP)</source>
+        <translation>回答里的文件会复制到 iCloud 云盘 › 快捷指令 › Broccoli › Answers，让 iPhone 能打开；这个文件夹在 iPhone 上一直保持下载。超过 30 天的副本会在那里删掉；这台 Mac 上对话里的文件不受影响。（M8 · BROCCOLI_M8_PHONE_FILE_CLEANUP）</translation>
+    </message>
+    <message>
         <source>Files this task changes: {files}</source>
         <translation>这个任务要改的文件：{files}</translation>
     </message>
@@ -2813,7 +2977,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Finder shows the folder for {name}. Right-click it › Share › Share Folder, choose {name}, set "Only people you invite" and "Can make changes", then send the invitation.</source>
-        <translation>访达里已经选中给 {name} 的文件夹。右键它 › 共享 › 共享文件夹，选 {name}，设成「仅限你邀请的人」和「可以进行更改」，然后发出邀请。</translation>
+        <translation>访达里已经选中给 {name} 的文件夹。右键它 › 共享 › 共享文件夹，选 {name}，设成「仅受邀用户」和「可更改」，然后发出邀请。</translation>
     </message>
     <message>
         <source>Finding apps and actions runs without asking. An action that changes something — sending, creating, deleting — asks you first, and "Always" covers only that one action. Apps that use a key or a token work right away; apps you sign in to on a web page (Gmail, Slack, Google…) need an OAuth app of your own on this self-hosted connector. Needs "MCP tools" to be on (External context &amp; MCP).</source>
@@ -2912,6 +3076,10 @@ Endpoint URL is empty.</source>
         <translation>跟随分组：{model}</translation>
     </message>
     <message>
+        <source>Follow the system</source>
+        <translation>跟随系统</translation>
+    </message>
+    <message>
         <source>For each question from the iPhone, a reminder in the Reminders list “Broccoli” goes off about a minute after its Note is written (✅ answered, ⚠️ not answered, ⏳ waiting for you), and is ticked off by itself a day later. (M6 · BROCCOLI_M6_PHONE_REMINDERS)</source>
         <translation>每个来自 iPhone 的问题，在它的备忘录写好约一分钟后，「提醒事项」里的「Broccoli」列表会响一次提醒（✅ 已回答、⚠️ 没答成、⏳ 等你处理），一天后自动勾掉。（M6 · BROCCOLI_M6_PHONE_REMINDERS）</translation>
     </message>
@@ -2921,7 +3089,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>For tasks that run while nobody is at the screen. What the review below finds fine runs without asking, after a copy of what it changes: Agent commands, what it hands to Codex / Claude Code, MCP tool calls; editor edits and Computer Use too. Always asked: administrator rights (sudo), erasing a disk, system files, sending anything off this Mac.</source>
-        <translation>用于没人看着屏幕时运行的任务。下面的审核认为没问题的，先复制一份它要改动的东西，然后不问你直接运行：Agent 的命令、交给 Codex / Claude Code 的操作、MCP 工具调用；编辑器改动和电脑操作也一样。一定会问你的：管理员权限（sudo）、抹掉磁盘、改系统文件、往这台 Mac 外发送任何东西。</translation>
+        <translation>用于没人看着屏幕时运行的任务。下面的审核认为没问题的，先复制一份它要改动的东西，然后不问你直接运行：智能体的命令、交给 Codex / Claude Code 的操作、MCP 工具调用；编辑器改动和电脑操作也一样。一定会问你的：管理员权限（sudo）、抹掉磁盘、改系统文件、往这台 Mac 外发送任何东西。</translation>
     </message>
     <message>
         <source>Format external answer</source>
@@ -2932,16 +3100,32 @@ Endpoint URL is empty.</source>
         <translation>前进</translation>
     </message>
     <message>
+        <source>Found on this Mac. Reports read the ticked ones.</source>
+        <translation>在这台 Mac 上找到的来源，报告会读勾上的。</translation>
+    </message>
+    <message>
         <source>Freeze the countdown so you can edit or reorder steps; Resume or Run now continues</source>
-        <translation>冻结倒计时，让你可以从容编辑或调整步骤顺序；按"继续"或"立即执行"恢复</translation>
+        <translation>冻结倒计时，让你可以从容编辑或调整步骤顺序；按「继续」或「立即执行」恢复</translation>
+    </message>
+    <message>
+        <source>Fri</source>
+        <translation>五</translation>
     </message>
     <message>
         <source>From</source>
-        <translation>从</translation>
+        <translation>来源</translation>
     </message>
     <message>
         <source>From URL</source>
         <translation>来源 URL</translation>
+    </message>
+    <message>
+        <source>From “{title}”</source>
+        <translation>来自《{title}》</translation>
+    </message>
+    <message>
+        <source>From “{title}” · {date}</source>
+        <translation>来自《{title}》· {date}</translation>
     </message>
     <message>
         <source>From:
@@ -3019,7 +3203,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Generated outputs</source>
-        <translation>生成输出</translation>
+        <translation>生成的成品</translation>
     </message>
     <message>
         <source>Generated via API profile: {profile}. Edit before sending.</source>
@@ -3039,7 +3223,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Generating diagram…</source>
-        <translation>正在生成图表…</translation>
+        <translation>正在生成示意图…</translation>
     </message>
     <message>
         <source>Generating final response</source>
@@ -3080,6 +3264,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Github Page</source>
         <translation>Github 主页</translation>
+    </message>
+    <message>
+        <source>Give each parallel browser step its own Chrome</source>
+        <translation>每个并行的浏览器步骤单独开一个 Chrome</translation>
     </message>
     <message>
         <source>Global keyboard shortcuts, the terminal shell mode and the screenshot annotation pen.</source>
@@ -3146,6 +3334,14 @@ Endpoint URL is empty.</source>
         <translation>客人</translation>
     </message>
     <message>
+        <source>Heading</source>
+        <translation>标题</translation>
+    </message>
+    <message>
+        <source>Headings and what to write under each one</source>
+        <translation>各个标题，以及每个标题下面写什么</translation>
+    </message>
+    <message>
         <source>Heart</source>
         <translation>爱心</translation>
     </message>
@@ -3195,7 +3391,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>History name:</source>
-        <translation>历史名称：</translation>
+        <translation>对话名称：</translation>
     </message>
     <message>
         <source>History steps in memory</source>
@@ -3204,6 +3400,14 @@ Endpoint URL is empty.</source>
     <message>
         <source>Hold</source>
         <translation>暂停</translation>
+    </message>
+    <message>
+        <source>Hold the circle for half a second and speak: what you say is typed into the text box that had the keyboard when you began, in whatever app, even if you have moved on by then. Where an app does not allow that, the words are on the clipboard.</source>
+        <translation>按住小圆点半秒再说话：你说的话会填进开始时正在打字的那个输入框，不管它在哪个软件里，即使这时你已经去做别的了。有的软件不允许这样填，这时内容在剪贴板里。</translation>
+    </message>
+    <message>
+        <source>Hold while speaking, let go to end</source>
+        <translation>按住说话，松手结束</translation>
     </message>
     <message>
         <source>Home</source>
@@ -3219,7 +3423,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>How Broccoli lets you know when an agent finishes.</source>
-        <translation>Agent 跑完时，Broccoli 怎么提醒你。</translation>
+        <translation>智能体跑完时，Broccoli 怎么提醒你。</translation>
     </message>
     <message>
         <source>How background vision results and screenshots are kept, and the prompt it uses.</source>
@@ -3227,11 +3431,11 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>How many conversations the History panel renders (newest first). Nothing is deleted and search always scans every conversation. Far right = All.</source>
-        <translation>历史面板渲染多少条对话（最新在前）。不会删除任何内容，搜索始终扫描全部对话。拖到最右 = 全部。</translation>
+        <translation>历史面板显示多少条对话（最新在前）。不会删除任何内容，搜索始终扫描全部对话。拖到最右 = 全部。</translation>
     </message>
     <message>
         <source>How many recent steps the browser agent keeps in memory. 0 = unlimited; values 1–5 are raised to 6 (library minimum).</source>
-        <translation>浏览器代理记忆中保留的最近步骤数。0 = 不限；1–5 会抬到 6（库的最低值）。</translation>
+        <translation>浏览器智能体记忆中保留的最近步骤数。0 = 不限；1–5 会抬到 6（库的最低值）。</translation>
     </message>
     <message>
         <source>How many steps of a parallel group run at the same time (1-20, default 5). Higher values finish large groups faster but multiply simultaneous model calls (and Chrome windows for browser steps).</source>
@@ -3246,12 +3450,20 @@ Endpoint URL is empty.</source>
         <translation>已存记录要多相似，才会作为上下文加入请求。</translation>
     </message>
     <message>
+        <source>How the dictated text should be rewritten, in your own words. For example: “Turn it into a polite e-mail in Japanese.”</source>
+        <translation>用你自己的话写：听到的文字要怎么改写。例如：“改写成一封礼貌的日文邮件。”</translation>
+    </message>
+    <message>
         <source>How the windows behave and start, and how agent plan steps pause and run in parallel.</source>
-        <translation>窗口的行为与启动方式，以及 Agent 计划步骤的暂停与并行。</translation>
+        <translation>窗口的行为与启动方式，以及智能体计划步骤的暂停与并行。</translation>
+    </message>
+    <message>
+        <source>How the words are tidied when this recording ends</source>
+        <translation>这次录音结束后用哪种方式整理文字</translation>
     </message>
     <message>
         <source>How well each model does on agent steps, used when choosing models.</source>
-        <translation>各模型在 Agent 步骤中的表现，选择模型时参考。</translation>
+        <translation>各模型在智能体步骤中的表现，选择模型时参考。</translation>
     </message>
     <message>
         <source>I will write more interesting apps! 🥳</source>
@@ -3319,7 +3531,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Importing the sign-in for {name}… If macOS asks whether CodexBar may use the browser's saved data, click Always Allow.</source>
-        <translation>正在导入 {name} 的登录… 如果 macOS 问是否允许 CodexBar 使用浏览器保存的数据，点"始终允许"。</translation>
+        <translation>正在导入 {name} 的登录… 如果 macOS 问是否允许 CodexBar 使用浏览器保存的数据，点“始终允许”。</translation>
     </message>
     <message>
         <source>In a group: follow the group; otherwise follow Settings.</source>
@@ -3383,7 +3595,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>It asks for administrator rights (sudo and the like): Broccoli never runs that without you.</source>
-        <translation>它要用管理员权限（sudo 之类）：这种命令 Broccoli 从不在你不在场时运行。</translation>
+        <translation>它要用管理员权限（sudo 之类）：没有你的同意，Broccoli 绝不运行这种命令。</translation>
     </message>
     <message>
         <source>It clicks and types in the background and shows its own cursor. Your mouse moves only when nothing else works, for example a web button that reacts only to a real click.</source>
@@ -3391,7 +3603,19 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>It goes into the list “Broccoli” in iCloud and rings a minute later, so your iPhone, iPad and Watch get it too. It does not ring if you have already looked at the conversation on the Mac, and it is ticked off by itself a day later. Questions sent from the iPhone Shortcut have their own reminder and get no second one.</source>
-        <translation>加到 iCloud 里的"Broccoli"列表，1 分钟后响，iPhone、iPad、手表都会收到。在 Mac 上已经看过这个对话的就不响；一天后自动打勾。从 iPhone 捷径发来的问题另有提醒，不会重复。</translation>
+        <translation>加到 iCloud 里的“Broccoli”列表，1 分钟后响，iPhone、iPad、手表都会收到。在 Mac 上已经看过这个对话的就不响；一天后自动打勾。从 iPhone 捷径发来的问题另有提醒，不会重复。</translation>
+    </message>
+    <message>
+        <source>It has 1 conversation.</source>
+        <translation>里面有 1 个对话。</translation>
+    </message>
+    <message>
+        <source>It has {n} conversations.</source>
+        <translation>里面有 {n} 个对话。</translation>
+    </message>
+    <message>
+        <source>Its shortcut is set on the “Shortcuts &amp; tools” page. Press it to open the column at the pointer; press it again to close it.</source>
+        <translation>它的快捷键在“快捷键与工具”页里设置。按一下在鼠标旁打开任务列，再按一下关闭。</translation>
     </message>
     <message>
         <source>JSON parse failed: {error}</source>
@@ -3426,6 +3650,10 @@ Endpoint URL is empty.</source>
         <translation>保存时保留全部对话字段</translation>
     </message>
     <message>
+        <source>Keep group, archive conversations</source>
+        <translation>保留分组，对话归档</translation>
+    </message>
+    <message>
         <source>Keep the Broccoli iCloud folder downloaded on this Mac</source>
         <translation>让 iCloud 里的 Broccoli 文件夹一直保持下载在这台 Mac 上</translation>
     </message>
@@ -3438,8 +3666,16 @@ Endpoint URL is empty.</source>
         <translation>主窗口始终置顶</translation>
     </message>
     <message>
+        <source>Keep what the circle heard in the history (group “Dictation”)</source>
+        <translation>把小圆点听到的内容留在历史记录里（分组“听写”）</translation>
+    </message>
+    <message>
+        <source>Kept conversations stay in the history, in no group. Archived conversations are hidden, not deleted: you can restore them in Settings › General › Archive &amp; delete history.</source>
+        <translation>保留的对话仍在历史里，只是不属于任何分组。归档的对话只是隐藏，没有删除：可以在 设置 › General › Archive &amp; delete history 里恢复。</translation>
+    </message>
+    <message>
         <source>Key</source>
-        <translation>钥匙</translation>
+        <translation>密钥</translation>
     </message>
     <message>
         <source>Keyboard</source>
@@ -3503,7 +3739,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Launch managed Chrome</source>
-        <translation>启动托管 Chrome</translation>
+        <translation>启动专用 Chrome</translation>
     </message>
     <message>
         <source>Launch system Chrome</source>
@@ -3522,12 +3758,28 @@ Endpoint URL is empty.</source>
         <translation>自动学习</translation>
     </message>
     <message>
+        <source>Learned corrections (heard → meant)</source>
+        <translation>学到的改正（听到的 → 你的意思）</translation>
+    </message>
+    <message>
         <source>Learned output preferences (from your edits; edit or delete freely)</source>
         <translation>成品修改偏好（从你的修改中学到，可直接修改或删除）</translation>
     </message>
     <message>
         <source>Learned {n} preference(s) · Settings → Memory</source>
         <translation>已记住 {n} 条偏好 · 设置 → 记忆</translation>
+    </message>
+    <message>
+        <source>Left only</source>
+        <translation>只认左边</translation>
+    </message>
+    <message>
+        <source>Left {key}</source>
+        <translation>左{key}</translation>
+    </message>
+    <message>
+        <source>Let go and keep speaking, click to end</source>
+        <translation>松手后继续听，再点一下结束</translation>
     </message>
     <message>
         <source>Let my iPhone send questions to this Mac</source>
@@ -3555,11 +3807,11 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Let the agent drive a separate Chrome to open pages, click and fill in forms.</source>
-        <translation>让 Agent 控制一个独立的 Chrome 打开网页、点击和填写表单。</translation>
+        <translation>让智能体控制一个独立的 Chrome 打开网页、点击和填写表单。</translation>
     </message>
     <message>
         <source>Let the agent operate desktop apps through CuaDriver.</source>
-        <translation>让 Agent 通过 CuaDriver 操作桌面应用。</translation>
+        <translation>让智能体通过 CuaDriver 操作桌面应用。</translation>
     </message>
     <message>
         <source>Lexicon entry is not available.</source>
@@ -3576,6 +3828,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Links</source>
         <translation>链接</translation>
+    </message>
+    <message>
+        <source>Listening…</source>
+        <translation>正在听…</translation>
     </message>
     <message>
         <source>Load earlier messages</source>
@@ -3614,6 +3870,10 @@ Endpoint URL is empty.</source>
         <translation>本地文件夹</translation>
     </message>
     <message>
+        <source>Local models</source>
+        <translation>本地模型</translation>
+    </message>
+    <message>
         <source>Local path</source>
         <translation>本地路径</translation>
     </message>
@@ -3623,7 +3883,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Localhost URLs</source>
-        <translation>Localhost 网址</translation>
+        <translation>本地服务网址</translation>
     </message>
     <message>
         <source>Location</source>
@@ -3644,6 +3904,14 @@ Endpoint URL is empty.</source>
     <message>
         <source>Long conversation: writing notes for {total} sections first.</source>
         <translation>对话较长：先分 {total} 段写段落笔记。</translation>
+    </message>
+    <message>
+        <source>Long press on the circle</source>
+        <translation>长按小圆点</translation>
+    </message>
+    <message>
+        <source>Looking for sources on this Mac…</source>
+        <translation>正在这台 Mac 上查找来源…</translation>
     </message>
     <message>
         <source>Lossless WebP</source>
@@ -3671,7 +3939,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>MCP {name}: discovering tools</source>
-        <translation>MCP {name}：正在发现工具</translation>
+        <translation>MCP {name}：正在检测工具</translation>
     </message>
     <message>
         <source>MCP {name}: planning retrieval step {step}</source>
@@ -3715,11 +3983,11 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Manual: always inject · </source>
-        <translation>手动：始终注入 · </translation>
+        <translation>手动：始终带思考强度 · </translation>
     </message>
     <message>
         <source>Manual: never inject · </source>
-        <translation>手动：从不注入 · </translation>
+        <translation>手动：从不带思考强度 · </translation>
     </message>
     <message>
         <source>Map</source>
@@ -3739,11 +4007,15 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Mark as Feature (not a bug)</source>
-        <translation>标记为特性（不是 bug）</translation>
+        <translation>标记为设计如此（不是问题）</translation>
     </message>
     <message>
         <source>Mark {n}</source>
         <translation>标记 {n}</translation>
+    </message>
+    <message>
+        <source>Markdown</source>
+        <translation>Markdown</translation>
     </message>
     <message>
         <source>Master switch: register this device in the shared iCloud folder and exchange tasks, events and files with your other Broccolis. Everything below needs this. (M3 · BROCCOLI_M3_TRANSPORT)</source>
@@ -3774,6 +4046,10 @@ Endpoint URL is empty.</source>
         <translation>最大步数（1–{max}）</translation>
     </message>
     <message>
+        <source>Me:</source>
+        <translation>我：</translation>
+    </message>
+    <message>
         <source>Medium</source>
         <translation>中</translation>
     </message>
@@ -3787,7 +4063,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Memory endpoints</source>
-        <translation>记忆端点</translation>
+        <translation>记忆读写位置</translation>
     </message>
     <message>
         <source>Memory exceeds the input limit; sending in {count} parts...</source>
@@ -3806,6 +4082,10 @@ Endpoint URL is empty.</source>
         <translation>合并</translation>
     </message>
     <message>
+        <source>Merge conversations</source>
+        <translation>合并对话</translation>
+    </message>
+    <message>
         <source>Merge failed, used remote memory.</source>
         <translation>合并失败，改用网页上的记忆。</translation>
     </message>
@@ -3818,12 +4098,24 @@ Endpoint URL is empty.</source>
         <translation>合并提示词</translation>
     </message>
     <message>
+        <source>Merge {n} conversations into one?</source>
+        <translation>把这 {n} 个对话合并成一个？</translation>
+    </message>
+    <message>
+        <source>Merge {n} conversations…</source>
+        <translation>合并 {n} 个对话…</translation>
+    </message>
+    <message>
         <source>Merge {n} entries into “{name}”?</source>
         <translation>把 {n} 条词条合并到“{name}”？</translation>
     </message>
     <message>
         <source>Merging with local memory...</source>
         <translation>正在与本机记忆合并…</translation>
+    </message>
+    <message>
+        <source>Merging…</source>
+        <translation>正在合并…</translation>
     </message>
     <message>
         <source>Mermaid capture failed: %s</source>
@@ -3962,12 +4254,28 @@ Endpoint URL is empty.</source>
         <translation>在家、在公司或其他网络下不能使用的模型。</translation>
     </message>
     <message>
+        <source>Models that run on this Mac: what is there, and their profiles.</source>
+        <translation>在这台 Mac 上运行的模型：有哪些，以及它们的配置。</translation>
+    </message>
+    <message>
         <source>Models…</source>
         <translation>模型…</translation>
     </message>
     <message>
         <source>Modify</source>
         <translation>修改</translation>
+    </message>
+    <message>
+        <source>Mon</source>
+        <translation>一</translation>
+    </message>
+    <message>
+        <source>Monthly</source>
+        <translation>月报</translation>
+    </message>
+    <message>
+        <source>Monthly report</source>
+        <translation>月报</translation>
     </message>
     <message>
         <source>Moon</source>
@@ -4018,6 +4326,10 @@ Endpoint URL is empty.</source>
         <translation>音乐</translation>
     </message>
     <message>
+        <source>My instructions</source>
+        <translation>我的提示词</translation>
+    </message>
+    <message>
         <source>My note</source>
         <translation>我的备注</translation>
     </message>
@@ -4031,7 +4343,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>Name is what the "+" menu on the Web / Localhost pill bar shows. Changes apply after Save.</source>
-        <translation>名称即 Web / Localhost 标签条“+”菜单中显示的内容。保存后生效。</translation>
+        <translation>名称即网页 / 本地服务标签条“+”菜单中显示的内容。保存后生效。</translation>
     </message>
     <message>
         <source>Name of the person who will use Broccoli on this Mac:</source>
@@ -4063,11 +4375,11 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>New</source>
-        <translation>新</translation>
+        <translation>新建</translation>
     </message>
     <message>
         <source>New API history</source>
-        <translation>新建 API 历史</translation>
+        <translation>存为新的智能体对话</translation>
     </message>
     <message>
         <source>New Claude Code</source>
@@ -4091,7 +4403,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>New Quick Command…</source>
-        <translation>新建快捷指令…</translation>
+        <translation>新建快捷命令…</translation>
     </message>
     <message>
         <source>New Tab</source>
@@ -4122,6 +4434,10 @@ Endpoint URL is empty.</source>
         <translation>在“{group}”里新建对话——在这里输入…</translation>
     </message>
     <message>
+        <source>New conversations run on this Mac again, until you pick a device the next time.</source>
+        <translation>新对话回到这台 Mac 上运行，直到你下次再选别的设备。</translation>
+    </message>
+    <message>
         <source>New group</source>
         <translation>新建分组</translation>
     </message>
@@ -4143,7 +4459,11 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>New quick command</source>
-        <translation>新建快捷指令</translation>
+        <translation>新建快捷命令</translation>
+    </message>
+    <message>
+        <source>New template</source>
+        <translation>新模板</translation>
     </message>
     <message>
         <source>New user</source>
@@ -4160,6 +4480,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Next instruction to run after the current answer...</source>
         <translation>当前回答结束后要执行的下一条指示…</translation>
+    </message>
+    <message>
+        <source>Next month</source>
+        <translation>下个月</translation>
     </message>
     <message>
         <source>Next output</source>
@@ -4183,15 +4507,15 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>No Web tab URLs were found.</source>
-        <translation>没有找到 Web 标签页网址。</translation>
+        <translation>没有找到网页标签页的网址。</translation>
     </message>
     <message>
         <source>No active API profile is configured.</source>
-        <translation>没有配置可用的 API 配置。</translation>
+        <translation>还没有设置当前使用的 API 配置。</translation>
     </message>
     <message>
         <source>No active Web, Localhost, or Terminal target is registered as @{alias}.</source>
-        <translation>没有名为 @{alias} 的活动 Web、Localhost 或终端目标。</translation>
+        <translation>没有名为 @{alias} 的活动网页、本地服务或终端目标。</translation>
     </message>
     <message>
         <source>No answer.</source>
@@ -4267,11 +4591,11 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>No generated output for this conversation yet.</source>
-        <translation>此对话还没有生成输出。</translation>
+        <translation>此对话还没有成品。</translation>
     </message>
     <message>
         <source>No generated output yet</source>
-        <translation>还没有生成输出</translation>
+        <translation>还没有成品</translation>
     </message>
     <message>
         <source>No group</source>
@@ -4300,6 +4624,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>No matching settings</source>
         <translation>没有匹配的设置</translation>
+    </message>
+    <message>
+        <source>No model is set up for writing reports.</source>
+        <translation>还没有设置写报告用的模型。</translation>
     </message>
     <message>
         <source>No model is set up yet.</source>
@@ -4346,6 +4674,10 @@ Endpoint URL is empty.</source>
         <translation>还没有读数。</translation>
     </message>
     <message>
+        <source>No report yet. It is written tonight, or now with “Write now”.</source>
+        <translation>还没有报告。今晚会自动写，也可以点「现在写」。</translation>
+    </message>
+    <message>
         <source>No response for {minutes} min. A request will wait up to {limit} min, then expire.</source>
         <translation>已经 {minutes} 分钟没有回应。请求最多等待 {limit} 分钟，之后过期。</translation>
     </message>
@@ -4355,7 +4687,7 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>No running Agent answer to add a note to.</source>
-        <translation>没有正在生成的 Agent 回答可以追加指示。</translation>
+        <translation>没有正在生成的智能体回答可以追加指示。</translation>
     </message>
     <message>
         <source>No saved questions in the current conversation yet.</source>
@@ -4368,6 +4700,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>No shortcuts found. Make one in the Shortcuts app first.</source>
         <translation>没有找到快捷指令。请先在“快捷指令” App 里创建一个。</translation>
+    </message>
+    <message>
+        <source>No speech-to-text model is chosen. Pick one in Settings → Models → Model roles (“Speech to text”).</source>
+        <translation>还没有选语音转文字的模型。请在 设置 → 模型 → 模型分工 的“语音转文字”那一行选一个。</translation>
     </message>
     <message>
         <source>No step-specific context sources are available.</source>
@@ -4391,7 +4727,11 @@ Endpoint URL is empty.</source>
     </message>
     <message>
         <source>No thinking removes the reasoning fields from each step's output. Flash also swaps in a minimal system prompt and shorter page waits (official Fast Agent template).</source>
-        <translation>无思考档会去掉每步输出里的推理字段。极速档还会换用极简系统提示词并缩短页面等待（官方 Fast Agent 模板）。</translation>
+        <translation>无思考档会去掉每步输出里的推理字段。极速档还会换用极简系统提示词并缩短页面等待（官方 Fast 智能体模板）。</translation>
+    </message>
+    <message>
+        <source>No tidy-up</source>
+        <translation>不整理</translation>
     </message>
     <message>
         <source>No valid previous screenshot region.</source>
@@ -4430,6 +4770,14 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     <message>
         <source>Not answered: something went wrong while working on it. Details are in Broccoli on the Mac.</source>
         <translation>没答成：处理时出了问题。详细情况在 Mac 上的 Broccoli 里。</translation>
+    </message>
+    <message>
+        <source>Not available on this Mac</source>
+        <translation>这台 Mac 不支持</translation>
+    </message>
+    <message>
+        <source>Not downloaded</source>
+        <translation>没有下载</translation>
     </message>
     <message>
         <source>Not enough text was detected in the selected tabs.</source>
@@ -4516,6 +4864,14 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>📌 小节里没有对得上的：{text}</translation>
     </message>
     <message>
+        <source>Nothing in this period.</source>
+        <translation>这段时间没有使用记录。</translation>
+    </message>
+    <message>
+        <source>Nothing on this day.</source>
+        <translation>这一天没有使用记录。</translation>
+    </message>
+    <message>
         <source>Nothing open yet</source>
         <translation>还没有打开任何页面</translation>
     </message>
@@ -4526,6 +4882,14 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     <message>
         <source>Nothing to translate</source>
         <translation>没有可翻译的内容</translation>
+    </message>
+    <message>
+        <source>Nothing to write about in this period.</source>
+        <translation>这段时间没有可写的内容。</translation>
+    </message>
+    <message>
+        <source>Nothing was heard.</source>
+        <translation>什么都没听到。</translation>
     </message>
     <message>
         <source>Nothing yet</source>
@@ -4572,6 +4936,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>已关闭。</translation>
     </message>
     <message>
+        <source>Off: parallel browser steps work in the same Browser Use Chrome, each in its own window, so you sign in once. On: each step starts a separate Chrome with its own profile folder.</source>
+        <translation>关：并行的浏览器步骤在同一个 Browser Use Chrome 里进行，各用各的窗口，只需登录一次。开：每个步骤另开一个 Chrome，各用各的配置文件夹。</translation>
+    </message>
+    <message>
         <source>Off: the middle of the grid stays empty while the main window is open. With the main window in the collapsed button, the middle always shows Broccoli.</source>
         <translation>关闭后，主窗口打开时九宫格中间留空。主窗口收进最小化圆按钮后，中间始终显示 Broccoli。</translation>
     </message>
@@ -4589,7 +4957,7 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     </message>
     <message>
         <source>On a Mac with Broccoli: type your question, then choose 🎛️ Move to › {device}. The answer comes back into the same conversation.</source>
-        <translation>在装了 Broccoli 的 Mac 上：输入问题，然后选 🎛️ Move to › {device}。回答会回到同一个对话里。</translation>
+        <translation>在装了 Broccoli 的 Mac 上：输入问题，然后选 🎛️ 换设备 › {device}。回答会回到同一个对话里。</translation>
     </message>
     <message>
         <source>On an iPhone: make a Shortcut with two actions, "Ask for Input" and "Save File". In Save File, turn off "Ask Where to Save" and choose this folder's Questions folder. Run it to ask; the answer appears in the Answers folder under the same name (open it in the Files app).</source>
@@ -4600,8 +4968,16 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>默认开启。编辑器打开期间，其打开的文件（当前内容，含未保存文本）会附加到 @web / @localhost / @terminal 请求中，便于这些目标提出修改。若不希望编辑器文件随无关的 @ 请求外发，请关闭。</translation>
     </message>
     <message>
+        <source>On-device</source>
+        <translation>本机运行</translation>
+    </message>
+    <message>
         <source>On: a single click waits a moment (the system's double-click time) before it shows or hides the main window. Off: a click works at once.</source>
         <translation>开：单击要稍等一下（系统的双击间隔）才显示或收起主窗口。关：单击立即生效。</translation>
+    </message>
+    <message>
+        <source>Once you have sent a conversation to another device, every new conversation starts there without asking again. To come back, choose 🎛️ Move to › This Mac.</source>
+        <translation>把对话发到另一台设备一次之后，之后每个新对话都直接在那台设备上开始，不用再选。想换回来，选「🎛️ 换设备」›「这台 Mac」。</translation>
     </message>
     <message>
         <source>One approval covers this task and may explicitly switch among the applications needed to complete it. Every state-changing action must identify a clear target application. Broccoli itself is always refused.</source>
@@ -4614,6 +4990,18 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     <message>
         <source>One history across all devices</source>
         <translation>所有设备共用一份历史</translation>
+    </message>
+    <message>
+        <source>One of these conversations could not be read.</source>
+        <translation>其中一个对话读取不了。</translation>
+    </message>
+    <message>
+        <source>One of these conversations is still running, has questions waiting or a remote task. Merge them when it has finished.</source>
+        <translation>其中一个对话还在运行、有排队的问题或远程任务。等它结束后再合并。</translation>
+    </message>
+    <message>
+        <source>One of these conversations is still running, has questions waiting or a remote task. Try again when it has finished. Nothing was changed.</source>
+        <translation>其中有对话还在运行、有问题在排队或有远程任务。等它结束后再试。什么都没有改动。</translation>
     </message>
     <message>
         <source>Online Memory Source</source>
@@ -4646,6 +5034,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     <message>
         <source>Only the device that owns this conversation can move it.</source>
         <translation>只有拥有这段对话的设备才能迁移它。</translation>
+    </message>
+    <message>
+        <source>Only the microphone was recorded.</source>
+        <translation>这次只录到了麦克风。</translation>
     </message>
     <message>
         <source>Only this Mac's owner can change this.</source>
@@ -4712,6 +5104,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>在默认浏览器中打开链接</translation>
     </message>
     <message>
+        <source>Open Microphone Settings</source>
+        <translation>打开麦克风设置</translation>
+    </message>
+    <message>
         <source>Open Notes › Broccoli › “{title}”.</source>
         <translation>打开「备忘录」› Broccoli ›「{title}」。</translation>
     </message>
@@ -4764,8 +5160,12 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>在 Mac「{mac}」上的 Broccoli 里查看。</translation>
     </message>
     <message>
+        <source>Open on iPhone</source>
+        <translation>在 iPhone 上打开</translation>
+    </message>
+    <message>
         <source>Open or start an Agent conversation before adding a queued prompt.</source>
-        <translation>请先打开或开始一个 Agent 对话，再添加排队提示词。</translation>
+        <translation>请先打开或开始一个智能体对话，再添加排队提示词。</translation>
     </message>
     <message>
         <source>Open share window</source>
@@ -4782,6 +5182,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     <message>
         <source>Open status</source>
         <translation>打开状态页</translation>
+    </message>
+    <message>
+        <source>Open the folder on iPhone</source>
+        <translation>在 iPhone 上打开这个文件夹</translation>
     </message>
     <message>
         <source>Open with the mouse: hold the right button and move up</source>
@@ -4820,6 +5224,18 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>正在打开“{name}”…</translation>
     </message>
     <message>
+        <source>Opens the column of AI tasks at the pointer; press it again to close it.</source>
+        <translation>在鼠标旁打开 AI 任务列，再按一下关闭。</translation>
+    </message>
+    <message>
+        <source>Opens the screenshot tool to pick a part of the screen.</source>
+        <translation>打开截图工具，框选屏幕的一部分。</translation>
+    </message>
+    <message>
+        <source>Opens this layer of the round button's grid.</source>
+        <translation>打开最小化圆按钮九宫格的这一层。</translation>
+    </message>
+    <message>
         <source>Operational form: {kind} · {status}</source>
         <translation>执行形式：{kind} · {status}</translation>
     </message>
@@ -4841,7 +5257,7 @@ GITHUB_PERSONAL_ACCESS_TOKEN=...</translation>
     </message>
     <message>
         <source>Optional. Leave empty, then click Discover.</source>
-        <translation>可选。留空后点击“发现”。</translation>
+        <translation>可选。留空后点击“检测”。</translation>
     </message>
     <message>
         <source>Orange</source>
@@ -4874,6 +5290,10 @@ GITHUB_PERSONAL_ACCESS_TOKEN=...</translation>
     <message>
         <source>Other color…</source>
         <translation>其他颜色…</translation>
+    </message>
+    <message>
+        <source>Other links</source>
+        <translation>其他链接</translation>
     </message>
     <message>
         <source>Other names, separated by commas</source>
@@ -5000,6 +5420,10 @@ GITHUB_PERSONAL_ACCESS_TOKEN=...</translation>
         <translation>地点</translation>
     </message>
     <message>
+        <source>Plain text</source>
+        <translation>纯文本</translation>
+    </message>
+    <message>
         <source>Plan</source>
         <translation>计划</translation>
     </message>
@@ -5102,8 +5526,16 @@ Goal: {goal}</source>
         <translation>按回车填入：{text}</translation>
     </message>
     <message>
-        <source>Press it to open the column at the pointer; press it again to close it.</source>
-        <translation>按一下在鼠标处打开这一列，再按一下收起。</translation>
+        <source>Press it to start a recording that is kept (sound and text become a conversation of their own) and again to stop. The same as a long press on the microphone mark of the Agent prompt box.</source>
+        <translation>按一下开始一段会保存的录音（声音和文字会成为一条单独的对话），再按一下结束。和长按 Agent 输入框的麦克风标记一样。</translation>
+    </message>
+    <message>
+        <source>Press it to start listening and again to stop. The words go into Broccoli's own prompt box. With no prompt box on screen, the nearest one comes out first: the round button's input box, or the main window.</source>
+        <translation>按一下开始听，再按一下停止。文字写进 Broccoli 自己的输入框。屏幕上没有输入框时，先把最近的那个叫出来：小圆点的输入框，或者主窗口。</translation>
+    </message>
+    <message>
+        <source>Press it to start listening and again to stop. The words go into the text box you are typing in, in any app, by way of the round button.</source>
+        <translation>按一下开始听，再按一下停止。文字填进你正在打字的输入框（任何软件里），通过小圆点完成。</translation>
     </message>
     <message>
         <source>Press shortcut...</source>
@@ -5112,6 +5544,10 @@ Goal: {goal}</source>
     <message>
         <source>Previous command is still running...</source>
         <translation>上一条命令仍在运行…</translation>
+    </message>
+    <message>
+        <source>Previous month</source>
+        <translation>上个月</translation>
     </message>
     <message>
         <source>Previous output</source>
@@ -5157,7 +5593,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Profile: {name}</source>
-        <translation>Profile：{name}</translation>
+        <translation>配置：{name}</translation>
     </message>
     <message>
         <source>Profiles that go through a VibeProxy installed on this Mac (localhost:8317) are pointed at this proxy instead. Sign in to the same subscriptions here first.</source>
@@ -5240,6 +5676,10 @@ Goal: {goal}</source>
         <translation>问题分支</translation>
     </message>
     <message>
+        <source>Questions</source>
+        <translation>提问</translation>
+    </message>
+    <message>
         <source>Questions the iPhone Shortcut “Broccoli” addresses to this Mac are answered here, and each answer, or why there is none, is written into Apple Notes for reading on the phone. (M6 · BROCCOLI_M6_NOTES_SHORTCUTS)</source>
         <translation>iPhone 快捷指令「Broccoli」里选了这台 Mac 的问题由这台 Mac 回答；每个回答，或者没答成的原因，都会写进 Apple 备忘录，方便在手机上阅读。（M6 · BROCCOLI_M6_NOTES_SHORTCUTS）</translation>
     </message>
@@ -5249,11 +5689,11 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Queue depth: {count}</source>
-        <translation>队列深度：{count}</translation>
+        <translation>排队任务：{count}</translation>
     </message>
     <message>
         <source>Queue is available while this Agent conversation is running.</source>
-        <translation>排队功能仅在该 Agent 对话运行时可用。</translation>
+        <translation>排队功能仅在该智能体对话运行时可用。</translation>
     </message>
     <message>
         <source>Queued</source>
@@ -5285,7 +5725,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Quick commands</source>
-        <translation>快捷指令</translation>
+        <translation>快捷命令</translation>
     </message>
     <message>
         <source>Quit</source>
@@ -5381,7 +5821,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Read: {title} ({chars} characters)</source>
-        <translation>已读：{title}（{chars} 字）</translation>
+        <translation>已读取：{title}（{chars} 字）</translation>
     </message>
     <message>
         <source>Reader</source>
@@ -5420,6 +5860,10 @@ Goal: {goal}</source>
         <translation>正在读取文档的版面</translation>
     </message>
     <message>
+        <source>Reading the group's other conversations</source>
+        <translation>正在看同组的其他对话</translation>
+    </message>
+    <message>
         <source>Reading web page: {url}</source>
         <translation>正在读网页：{url}</translation>
     </message>
@@ -5429,7 +5873,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Reading with the CodexBar built into Broccoli ({version}). Turn providers on and sign in under Usage providers, the next page.</source>
-        <translation>正在用 Broccoli 内置的 CodexBar（{version}）读取。开关供应商、登录，在下一页"Usage providers"里。</translation>
+        <translation>正在用 Broccoli 内置的 CodexBar（{version}）读取。开关供应商、登录，在下一页“用量供应商”里。</translation>
     </message>
     <message>
         <source>Reading {i}/{n}: {label}...</source>
@@ -5442,6 +5886,14 @@ Goal: {goal}</source>
     <message>
         <source>Ready</source>
         <translation>就绪</translation>
+    </message>
+    <message>
+        <source>Ready · no profile yet</source>
+        <translation>已就绪 · 还没有配置</translation>
+    </message>
+    <message>
+        <source>Ready · profile “{name}”</source>
+        <translation>已就绪 · 配置“{name}”</translation>
     </message>
     <message>
         <source>Ready.</source>
@@ -5457,7 +5909,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Reasoning effort for planning only; the profile itself is unchanged.</source>
-        <translation>只用于规划的思考强度，档案本身不变。</translation>
+        <translation>只用于规划的思考强度，配置本身不变。</translation>
     </message>
     <message>
         <source>Reasoning effort: {effort}</source>
@@ -5480,6 +5932,10 @@ Goal: {goal}</source>
         <translation>录制 AI 任务快捷键</translation>
     </message>
     <message>
+        <source>Record Circle voice shortcut</source>
+        <translation>录制小圆点语音快捷键</translation>
+    </message>
+    <message>
         <source>Record Collapsed button shortcut</source>
         <translation>录制最小化圆按钮快捷键</translation>
     </message>
@@ -5496,12 +5952,32 @@ Goal: {goal}</source>
         <translation>录制主窗口快捷键</translation>
     </message>
     <message>
+        <source>Record Prompt voice shortcut</source>
+        <translation>录制输入框语音快捷键</translation>
+    </message>
+    <message>
+        <source>Record Recording shortcut</source>
+        <translation>录制长录音快捷键</translation>
+    </message>
+    <message>
         <source>Record Same-position shot shortcut</source>
         <translation>录制同位置截图快捷键</translation>
     </message>
     <message>
         <source>Record Screenshot shortcut</source>
         <translation>录制截图快捷键</translation>
+    </message>
+    <message>
+        <source>Record both</source>
+        <translation>两个都录</translation>
+    </message>
+    <message>
+        <source>Recording</source>
+        <translation>录音</translation>
+    </message>
+    <message>
+        <source>Recording… Click to stop and keep it.</source>
+        <translation>正在录音… 点一下停止并保存。</translation>
     </message>
     <message>
         <source>Red</source>
@@ -5563,11 +6039,11 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Reminders did not answer just now; Broccoli tries again when an agent finishes.</source>
-        <translation>"提醒事项"刚才没有回应；Agent 完成时会再试。</translation>
+        <translation>“提醒事项”刚才没有回应；智能体完成时会再试。</translation>
     </message>
     <message>
         <source>Reminders is ready.</source>
-        <translation>"提醒事项"可以用了。</translation>
+        <translation>“提醒事项”可以用了。</translation>
     </message>
     <message>
         <source>Remote answer synced</source>
@@ -5615,7 +6091,11 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Remove Saved Comment</source>
-        <translation>删除已保存的评论</translation>
+        <translation>删除常用评论</translation>
+    </message>
+    <message>
+        <source>Remove Selected</source>
+        <translation>移除所选项</translation>
     </message>
     <message>
         <source>Remove branch</source>
@@ -5639,7 +6119,7 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Remove this saved comment from the menu</source>
-        <translation>从菜单中移除这条已存评论</translation>
+        <translation>从菜单中移除这条常用评论</translation>
     </message>
     <message>
         <source>Removed from permanent memory: {text}</source>
@@ -5655,7 +6135,7 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Rename history</source>
-        <translation>重命名历史</translation>
+        <translation>重命名对话</translation>
     </message>
     <message>
         <source>Rename-safe conversation identity</source>
@@ -5696,6 +6176,22 @@ Reason: {reason}</source>
     <message>
         <source>Reply **allow / 1 / yes** to run it, or **deny / 2 / no** to skip it.</source>
         <translation>回复 **允许 / 1 / 是** 执行，或 **拒绝 / 2 / 否** 跳过。</translation>
+    </message>
+    <message>
+        <source>Report</source>
+        <translation>报告</translation>
+    </message>
+    <message>
+        <source>Report language</source>
+        <translation>报告语言</translation>
+    </message>
+    <message>
+        <source>Reports</source>
+        <translation>报告</translation>
+    </message>
+    <message>
+        <source>Reports are written with the default model, from the questions and answers of that day. They show under the welcome text on the Agent page.</source>
+        <translation>报告用默认模型、根据当天的提问和回答来写，显示在智能体页欢迎文字的下面。</translation>
     </message>
     <message>
         <source>Request failed.</source>
@@ -5789,11 +6285,11 @@ Query: {query}</source>
     </message>
     <message>
         <source>Reusable comments you can add to a running agent task.</source>
-        <translation>可以添加到正在运行的 Agent 任务中的常用评论。</translation>
+        <translation>可以添加到正在运行的智能体任务中的常用评论。</translation>
     </message>
     <message>
         <source>Reusable instructions the agent can run as a step; each needs a name and a description.</source>
-        <translation>Agent 可以作为步骤运行的可复用指令；每个都需要名称和描述。</translation>
+        <translation>智能体可以作为步骤运行的可复用指令；每个都需要名称和描述。</translation>
     </message>
     <message>
         <source>Reusable prompts you can insert; {text} stands for what you type.</source>
@@ -5840,8 +6336,16 @@ Query: {query}</source>
         <translation>修订</translation>
     </message>
     <message>
+        <source>Right only</source>
+        <translation>只认右边</translation>
+    </message>
+    <message>
+        <source>Right {key}</source>
+        <translation>右{key}</translation>
+    </message>
+    <message>
         <source>Right-drag up could not start: macOS did not let Broccoli listen to the mouse.</source>
-        <translation>右键往上划没能启动：macOS 不允许 Broccoli 监听鼠标。</translation>
+        <translation>“右键往上划”没能启用：macOS 不允许 Broccoli 监听鼠标。</translation>
     </message>
     <message>
         <source>Role: {role} · URL: {url}</source>
@@ -6021,7 +6525,11 @@ Query: {query}</source>
     </message>
     <message>
         <source>Same-position screenshot shortcut must be different from the main window shortcut.</source>
-        <translation>原位截图快捷键必须与主窗口快捷键不同。</translation>
+        <translation>同位置截图快捷键必须与主窗口快捷键不同。</translation>
+    </message>
+    <message>
+        <source>Sat</source>
+        <translation>六</translation>
     </message>
     <message>
         <source>Save</source>
@@ -6041,15 +6549,19 @@ Query: {query}</source>
     </message>
     <message>
         <source>Save Last Question as Quick Command…</source>
-        <translation>把最后一个问题存为快捷指令…</translation>
+        <translation>把最后一个问题存为快捷命令…</translation>
     </message>
     <message>
         <source>Save as UTF-8</source>
         <translation>改用 UTF-8 保存</translation>
     </message>
     <message>
+        <source>Save conversation as</source>
+        <translation>对话另存为</translation>
+    </message>
+    <message>
         <source>Save current page to API history</source>
-        <translation>把当前页面存入 API 历史</translation>
+        <translation>把当前页面存入智能体历史</translation>
     </message>
     <message>
         <source>Save download</source>
@@ -6061,7 +6573,7 @@ Query: {query}</source>
     </message>
     <message>
         <source>Save output as</source>
-        <translation>输出另存为</translation>
+        <translation>成品另存为</translation>
     </message>
     <message>
         <source>Save profile (keep Settings open)</source>
@@ -6093,7 +6605,7 @@ Query: {query}</source>
     </message>
     <message>
         <source>Saved Comments</source>
-        <translation>已存评论</translation>
+        <translation>常用评论</translation>
     </message>
     <message>
         <source>Saved memory</source>
@@ -6301,7 +6813,7 @@ Query: {query}</source>
     </message>
     <message>
         <source>Select some text or cells in the document first. For a picture, a chart or the layout, use “Mark” in the bar below.</source>
-        <translation>请先在文档里选中一些文字或格子。要问图片、图表或版式，请用下面工具栏里的“圈选”。</translation>
+        <translation>请先在文档里选中一些文字或单元格。要问图片、图表或版式，请用下面工具栏里的“圈选”。</translation>
     </message>
     <message>
         <source>Select userscript</source>
@@ -6338,6 +6850,10 @@ Query: {query}</source>
     <message>
         <source>Send a new conversation to another device</source>
         <translation>把新对话发送到另一台设备</translation>
+    </message>
+    <message>
+        <source>Send new conversations to the device I picked last with 🎛️ Move to</source>
+        <translation>新对话自动发到上次用「🎛️ 换设备」选的设备</translation>
     </message>
     <message>
         <source>Send open editor files to @web / @terminal targets</source>
@@ -6384,12 +6900,16 @@ Query: {query}</source>
         <translation>已交给一个新对话</translation>
     </message>
     <message>
+        <source>Sent to {app}. Not there? Paste with ⌘V.</source>
+        <translation>已发给 {app}。没出现的话按 ⌘V 粘贴。</translation>
+    </message>
+    <message>
         <source>Server: {name}</source>
         <translation>服务器：{name}</translation>
     </message>
     <message>
         <source>Set an Agent API profile in Settings before running queued prompts.</source>
-        <translation>运行排队提示词前，请先在设置中指定 Agent 的 API 配置。</translation>
+        <translation>运行排队提示词前，请先在设置中指定智能体的 API 配置。</translation>
     </message>
     <message>
         <source>Set as Default for This File Type</source>
@@ -6410,6 +6930,10 @@ Query: {query}</source>
     <message>
         <source>Several saved lines match "{text}"; nothing was removed. Send {command} with one whole line:</source>
         <translation>有好几条都对得上「{text}」，一条都没删。请用 {command} 加上其中完整的一条：</translation>
+    </message>
+    <message>
+        <source>Shade = questions that day</source>
+        <translation>颜色深浅 = 当天提问数</translation>
     </message>
     <message>
         <source>Share</source>
@@ -6492,10 +7016,6 @@ Query: {query}</source>
         <translation>Shell 脚本：直接运行，不经过 AI</translation>
     </message>
     <message>
-        <source>Shortcut</source>
-        <translation>快捷键</translation>
-    </message>
-    <message>
         <source>Shortcut must contain a non-modifier key.</source>
         <translation>快捷键必须包含一个非修饰键。</translation>
     </message>
@@ -6564,6 +7084,10 @@ Query: {query}</source>
         <translation>显示网页提问框</translation>
     </message>
     <message>
+        <source>Show this Mac’s conversations on the iPhone</source>
+        <translation>在 iPhone 上显示这台 Mac 的对话</translation>
+    </message>
+    <message>
         <source>Show usage bars above the window</source>
         <translation>在窗口上方显示用量条</translation>
     </message>
@@ -6574,6 +7098,14 @@ Query: {query}</source>
     <message>
         <source>Show where you can click when the pointer rests on an edge</source>
         <translation>鼠标停在边缘时提示可以点的地方</translation>
+    </message>
+    <message>
+        <source>Shows Broccoli's main window, or puts it away.</source>
+        <translation>显示或收起 Broccoli 的主窗口。</translation>
+    </message>
+    <message>
+        <source>Shows or hides the round button while the main window is open.</source>
+        <translation>主窗口开着时，显示或隐藏最小化圆按钮。</translation>
     </message>
     <message>
         <source>Sign in</source>
@@ -6667,7 +7199,7 @@ Reason: {reason}</source>
     </message>
     <message>
         <source>Slash task empty</source>
-        <translation>斜杠任务为空</translation>
+        <translation>斜杠命令后面没有内容</translation>
     </message>
     <message>
         <source>Slide %d</source>
@@ -6690,12 +7222,24 @@ Reason: {reason}</source>
         <translation>空闲时暂停隐藏页面</translation>
     </message>
     <message>
+        <source>Some conversations could not be archived, so the group was kept.</source>
+        <translation>有些对话没能归档，所以分组保留了。</translation>
+    </message>
+    <message>
+        <source>Some conversations could not be archived.</source>
+        <translation>有些对话没能归档。</translation>
+    </message>
+    <message>
         <source>Sources</source>
-        <translation>出处</translation>
+        <translation>来源</translation>
     </message>
     <message>
         <source>Sparkles</source>
         <translation>闪光</translation>
+    </message>
+    <message>
+        <source>Speak instead of typing: which microphone listens, and in which language.</source>
+        <translation>用说话代替打字：用哪个麦克风听、听哪种语言。</translation>
     </message>
     <message>
         <source>Specialized pipeline stopped by planner review.</source>
@@ -6755,7 +7299,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Start new Agent conversation first</source>
-        <translation>先开启新的 Agent 对话</translation>
+        <translation>先新建智能体对话</translation>
     </message>
     <message>
         <source>Start on login</source>
@@ -6815,7 +7359,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Step review pause</source>
-        <translation>步骤复核停顿</translation>
+        <translation>每步执行前停顿</translation>
     </message>
     <message>
         <source>Step {n}: {goal}</source>
@@ -6840,6 +7384,10 @@ Goal: {goal}</source>
     <message>
         <source>Stop</source>
         <translation>停止</translation>
+    </message>
+    <message>
+        <source>Stop download</source>
+        <translation>停止下载</translation>
     </message>
     <message>
         <source>Stop edge auto-hide</source>
@@ -6887,7 +7435,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Storage engine: new conversations get unique IDs instead of second-precision timestamps that could collide. Leave ON. (M1a · BROCCOLI_M1A_UUID_IDS)</source>
-        <translation>存储引擎：新对话使用唯一编号，而不是可能撞车的秒级时间戳。请保持开启。（M1a · BROCCOLI_M1A_UUID_IDS）</translation>
+        <translation>存储引擎：新对话使用唯一编号，而不是可能重复的秒级时间戳。请保持开启。（M1a · BROCCOLI_M1A_UUID_IDS）</translation>
     </message>
     <message>
         <source>Storage engine: search/render caches live in their own files, so background work never rewrites a conversation. Leave ON. (M1a · BROCCOLI_M1A_DERIVED_STORAGE)</source>
@@ -6947,6 +7495,10 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Sun</source>
+        <translation>日</translation>
+    </message>
+    <message>
+        <source>Sunny</source>
         <translation>太阳</translation>
     </message>
     <message>
@@ -6986,6 +7538,10 @@ Goal: {goal}</source>
         <translation>正在同步回答…</translation>
     </message>
     <message>
+        <source>System sound only</source>
+        <translation>只录系统声音</translation>
+    </message>
+    <message>
         <source>Tab {n}</source>
         <translation>标签页 {n}</translation>
     </message>
@@ -6996,6 +7552,10 @@ Goal: {goal}</source>
     <message>
         <source>Take screenshot</source>
         <translation>截图</translation>
+    </message>
+    <message>
+        <source>Takes a screenshot of the same place as the last one.</source>
+        <translation>在和上次相同的位置截一张图。</translation>
     </message>
     <message>
         <source>Target display</source>
@@ -7072,6 +7632,14 @@ Goal: {goal}</source>
         <translation>正在告诉总调度接下来要改哪些文件</translation>
     </message>
     <message>
+        <source>Template name</source>
+        <translation>模板名称</translation>
+    </message>
+    <message>
+        <source>Templates</source>
+        <translation>模板</translation>
+    </message>
+    <message>
         <source>Terminal</source>
         <translation>终端</translation>
     </message>
@@ -7112,6 +7680,10 @@ Goal: {goal}</source>
         <translation>终端命令 {status}：{command}</translation>
     </message>
     <message>
+        <source>Terminal commands</source>
+        <translation>终端命令</translation>
+    </message>
+    <message>
         <source>Terminal renderer failed to load</source>
         <translation>终端渲染器加载失败</translation>
     </message>
@@ -7129,7 +7701,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Test capability</source>
-        <translation>测试能力</translation>
+        <translation>测试是否支持</translation>
     </message>
     <message>
         <source>Testing…</source>
@@ -7188,6 +7760,10 @@ Goal: {goal}</source>
         <translation>这串口令打不开这个文件。</translation>
     </message>
     <message>
+        <source>The 30 conversations the iPhone Shortcut “Broccoli” lists can also be read there, as pages in iCloud Drive › Shortcuts › Broccoli › History. Only your own conversations; never those of people you share this Mac with. (M8 · BROCCOLI_M8_PHONE_HISTORY)</source>
+        <translation>iPhone 快捷指令「Broccoli」列出的 30 个对话也能在手机上阅读，以网页形式放在 iCloud 云盘 › 快捷指令 › Broccoli › History。只有你自己的对话；和你共享这台 Mac 的人的对话不会出现。（M8 · BROCCOLI_M8_PHONE_HISTORY）</translation>
+    </message>
+    <message>
         <source>The AI wants to change this document with a script. It was tried on the open document — the file itself is not changed yet. The editor shows the result now.</source>
         <translation>AI 想用一段脚本修改这份文档。脚本已经在打开的文档上试跑过——文件本身还没有改动。编辑器里现在显示的是试跑的结果。</translation>
     </message>
@@ -7217,11 +7793,11 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>The active profile</source>
-        <translation>当前的档案</translation>
+        <translation>当前启用的配置</translation>
     </message>
     <message>
         <source>The agent will control the real local desktop through CuaDriver.</source>
-        <translation>Agent 将通过 CuaDriver 控制本机的真实桌面。</translation>
+        <translation>智能体将通过 CuaDriver 控制本机的真实桌面。</translation>
     </message>
     <message>
         <source>The answer could not be written to Notes. It is in Broccoli on the Mac.</source>
@@ -7288,6 +7864,10 @@ Goal: {goal}</source>
         <translation>你选的那段对话现在在另一台 Mac 上。请在快捷指令里选那台 Mac 再问一次；你的问题在下面。</translation>
     </message>
     <message>
+        <source>The conversations could not be merged. Nothing was changed.</source>
+        <translation>合并没有成功，什么都没有改动。</translation>
+    </message>
+    <message>
         <source>The copy here was not the newest; the device answered on its latest version.</source>
         <translation>这里的副本不是最新的；目标设备是在它最新的内容上回答的。</translation>
     </message>
@@ -7306,6 +7886,10 @@ Goal: {goal}</source>
     <message>
         <source>The document is still opening. Try again in a moment.</source>
         <translation>文档还在打开，请稍后再试。</translation>
+    </message>
+    <message>
+        <source>The download failed. Start it again to go on.</source>
+        <translation>下载失败了。再点一次下载可以接着下。</translation>
     </message>
     <message>
         <source>The download is damaged (checksum mismatch). Please try again.</source>
@@ -7352,8 +7936,16 @@ Goal: {goal}</source>
         <translation>安装包里是更旧的版本（v{v}），没有做任何更改。</translation>
     </message>
     <message>
+        <source>The keyboard has these keys on the left and on the right. This shortcut can answer to both, or only to the ones on one side.</source>
+        <translation>这些键在键盘左边和右边各有一个。这个快捷键可以两边都认，也可以只认其中一边的。</translation>
+    </message>
+    <message>
         <source>The keychain could not be read, so Open Connector was not started.</source>
         <translation>读不到钥匙串，所以没有启动 Open Connector。</translation>
+    </message>
+    <message>
+        <source>The language and tone new reports are written in</source>
+        <translation>新报告用的语言和语气</translation>
     </message>
     <message>
         <source>The language setting will apply after Broccoli restarts.</source>
@@ -7366,6 +7958,10 @@ Goal: {goal}</source>
     <message>
         <source>The main window opens History, Links, Settings and more from strips along its edges. With this on, resting the pointer on one shows the strip in glass and a small label with what it opens.</source>
         <translation>主窗口边缘有几条可以点的地方，点了会打开历史、链接、设置等。打开这一项后，鼠标停在上面会显示一块玻璃长条和一个小标签，写明点了打开什么。</translation>
+    </message>
+    <message>
+        <source>The microphone could not be opened.</source>
+        <translation>麦克风打不开。</translation>
     </message>
     <message>
         <source>The model did not finish in time (limits: {seconds} seconds without any data, {minutes} minutes per request).</source>
@@ -7384,12 +7980,16 @@ Goal: {goal}</source>
         <translation>模型返回了空回答。</translation>
     </message>
     <message>
+        <source>The models on this Mac could not be started.</source>
+        <translation>这台 Mac 上的模型没能启动。</translation>
+    </message>
+    <message>
         <source>The model’s answer could not be read. Tonight’s pass will try again.</source>
         <translation>无法读取模型的回答。今晚的自动整理会再试一次。</translation>
     </message>
     <message>
         <source>The notifications for “answer ready”, “run failed” and “waiting for you” use the system notification sound. Focus modes keep them silent.</source>
-        <translation>"回答已完成""运行失败""等你处理"这三种通知使用系统的通知声音；专注模式下不响。</translation>
+        <translation>“回答已完成”“运行失败”“等你处理”这三种通知使用系统的通知声音；专注模式下不响。</translation>
     </message>
     <message>
         <source>The office editing component is not available.</source>
@@ -7397,7 +7997,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>The pages listed in the "+" menu of the Web / Localhost bar, and their order.</source>
-        <translation>Web / Localhost 栏「+」菜单中列出的页面及其顺序。</translation>
+        <translation>网页 / 本地服务栏「+」菜单中列出的页面及其顺序。</translation>
     </message>
     <message>
         <source>The picture could not be saved: {reason}</source>
@@ -7429,15 +8029,19 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>The question could not be sent. Check the Agent settings.</source>
-        <translation>问题没能发出去。请检查 Agent 的设置。</translation>
+        <translation>问题没能发出去。请检查智能体的设置。</translation>
     </message>
     <message>
         <source>The question the Agent gets every time</source>
-        <translation>每次交给 Agent 的问题</translation>
+        <translation>每次交给智能体的问题</translation>
     </message>
     <message>
         <source>The queued conversation file could not be found.</source>
         <translation>找不到排队对话的文件。</translation>
+    </message>
+    <message>
+        <source>The report could not be written. Try again later.</source>
+        <translation>报告没写成，请稍后再试。</translation>
     </message>
     <message>
         <source>The request expired before {device} picked it up.</source>
@@ -7462,6 +8066,14 @@ Goal: {goal}</source>
     <message>
         <source>The sign-in to {name} did not finish.</source>
         <translation>{name} 的登录没有完成。</translation>
+    </message>
+    <message>
+        <source>The sound this Mac plays could not be recorded.</source>
+        <translation>这台 Mac 播放的声音没能录下来。</translation>
+    </message>
+    <message>
+        <source>The speech model for this language could not be downloaded. Check the network and try again.</source>
+        <translation>这种语言的语音模型没能下载下来。请检查网络后再试。</translation>
     </message>
     <message>
         <source>The spreadsheet has no sheets.</source>
@@ -7521,11 +8133,15 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Their names become other names of “{name}”, and their sources and notes move into it.</source>
-        <translation>它们的名字会变成“{name}”的其他叫法，出处和备注也一起并进去。</translation>
+        <translation>它们的名字会变成“{name}”的其他叫法，来源和备注也一起并进去。</translation>
     </message>
     <message>
         <source>Their tasks use</source>
         <translation>对方的任务用</translation>
+    </message>
+    <message>
+        <source>Them:</source>
+        <translation>对方：</translation>
     </message>
     <message>
         <source>There is no command yet. Ask for one first.</source>
@@ -7541,7 +8157,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>There is no daily quota: providers count a 5-hour window and a weekly one. Automatic shows the fuller of the two, marked 5h or wk. A provider without the chosen window shows the one it has. Without a choice above, the first providers CodexBar has turned on are shown.</source>
-        <translation>没有"每日"额度：各家算的是 5 小时窗口和每周窗口。"自动"显示两个里用得更多的那个，并标上 5h 或"周"。某家没有你选的那种窗口时，显示它有的那个。上面一个都不选时，显示 CodexBar 里开着的前几家。</translation>
+        <translation>没有“每日”额度：各家算的是 5 小时窗口和每周窗口。“自动”显示两个里用得更多的那个，并标上 5h 或“周”。某家没有你选的那种窗口时，显示它有的那个。上面一个都不选时，显示 CodexBar 里开着的前几家。</translation>
     </message>
     <message>
         <source>There is no saved profile to delete.</source>
@@ -7554,6 +8170,22 @@ Goal: {goal}</source>
     <message>
         <source>There is no text to send.</source>
         <translation>没有可发送的文本。</translation>
+    </message>
+    <message>
+        <source>These models run on this Mac: what you say or write to them does not leave it. A model that is ready is used through an ordinary profile — choose it on the Model roles page like any other. The ones built into macOS get their profile by themselves.</source>
+        <translation>这些模型在这台 Mac 上运行：你对它们说的、写的都不会离开这台 Mac。就绪的模型通过一个普通的配置来用，和别的配置一样在“模型分工”页里选。macOS 自带的模型会自动建好配置。</translation>
+    </message>
+    <message>
+        <source>They become one new conversation, in this order (oldest first):
+
+{titles}
+
+The originals are archived, not deleted. You can restore them in Settings › General › Archive &amp; delete history.</source>
+        <translation>它们会变成一个新对话，顺序如下（最早的在前）：
+
+{titles}
+
+原对话只归档、不删除，可以在 设置 › 通用 ›「归档与彻底删除历史」里恢复。</translation>
     </message>
     <message>
         <source>They carry a task through to the end on their own: every action is approved automatically (after a backup), and they stop only for what needs you, such as a password. A conversation's own switch (right-click its tag) wins over this.</source>
@@ -7576,6 +8208,10 @@ Goal: {goal}</source>
         <translation>这段对话已经归这台 Mac。</translation>
     </message>
     <message>
+        <source>This Mac cannot recognize speech on the device.</source>
+        <translation>这台 Mac 不支持在本机识别语音。</translation>
+    </message>
+    <message>
         <source>This Mac now — public: {public} · local: {lan}</source>
         <translation>这台 Mac 现在：公网 {public} · 局域网 {lan}</translation>
     </message>
@@ -7586,6 +8222,20 @@ Goal: {goal}</source>
     <message>
         <source>This Mac · port {port}</source>
         <translation>本机 · 端口 {port}</translation>
+    </message>
+    <message>
+        <source>This Mac’s sound is coming out of its speakers, so the microphone also hears the other side. If both are recorded, some of their words may appear a second time under “Me”.
+
+System sound only: the other side is recorded cleanly; your own voice is not recorded.
+Record both: your voice is recorded too, with some of their words repeated.
+
+With headphones this does not happen.</source>
+        <translation>这台 Mac 的声音正从扬声器放出来，麦克风也会听到对方的声音。两个都录的话，对方的一些话可能会在“我”下面再出现一遍。
+
+只录系统声音：对方的话录得干净，但你自己说的话不会被录下来。
+两个都录：你说的话也会录下来，但对方的话会有一些重复。
+
+戴耳机就不会有这个问题。</translation>
     </message>
     <message>
         <source>This app is open-sourced.</source>
@@ -7605,7 +8255,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>This color is too close to the red that marks a bar at 80 % or more, so it could not tell you when a provider is nearly used up. Choose another one.</source>
-        <translation>这个颜色和"用到 80% 以上"的红色太像，到时候就看不出哪家快用完了。请换一个颜色。</translation>
+        <translation>这个颜色和“用到 80% 以上”的红色太像，到时候就看不出哪家快用完了。请换一个颜色。</translation>
     </message>
     <message>
         <source>This conversation has been deleted.</source>
@@ -7629,11 +8279,11 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>This conversation lives on {device}, so changes here are not saved. Use 🎛️ Move to → This Mac to edit it here, or Copy to this Mac for your own copy.</source>
-        <translation>这段对话在 {device} 上，在这里的修改不会保存。要在这里编辑，请用 🎛️ Move to → 这台 Mac；想要自己的副本，请用"复制到这台 Mac"。</translation>
+        <translation>这段对话在 {device} 上，在这里的修改不会保存。要在这里编辑，请用 🎛️ 换设备 → 这台 Mac；想要自己的副本，请用“复制到这台 Mac”。</translation>
     </message>
     <message>
         <source>This conversation lives on {device}. Turn on iCloud remote tasks in Settings to send it there, or use 🎛️ Move to → Copy to this Mac to continue here.</source>
-        <translation>这段对话在 {device} 上。请在设置里打开 iCloud 远程任务以发送过去，或用 🎛️ Move to → 复制到这台 Mac 在这里继续。</translation>
+        <translation>这段对话在 {device} 上。请在设置里打开 iCloud 远程任务以发送过去，或用 🎛️ 换设备 → 复制到这台 Mac 在这里继续。</translation>
     </message>
     <message>
         <source>This conversation lives on {device}. Where should it live and run?</source>
@@ -7657,7 +8307,11 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>This device has no mapping for the current logical agent; its Default Profile will run.</source>
-        <translation>这台设备没有当前逻辑 Agent 的映射；将使用它的默认 Profile 运行。</translation>
+        <translation>这台设备没有给当前智能体指定对应的配置，将用它的默认配置运行。</translation>
+    </message>
+    <message>
+        <source>This file could not be turned into text.</source>
+        <translation>这个文件没能转成文字。</translation>
     </message>
     <message>
         <source>This file was made by a newer Broccoli. Update Broccoli to open it.</source>
@@ -7700,6 +8354,10 @@ Goal: {goal}</source>
         <translation>这个规划模型不支持设置思考强度。</translation>
     </message>
     <message>
+        <source>This profile is a model on this Mac: it runs on the device.</source>
+        <translation>这个配置是这台 Mac 上的模型：直接在本机运行。</translation>
+    </message>
+    <message>
         <source>This release has no installer package.</source>
         <translation>这个版本没有提供安装包。</translation>
     </message>
@@ -7714,6 +8372,30 @@ Goal: {goal}</source>
     <message>
         <source>This step did not run: no model is set for {label} (Settings › Models).</source>
         <translation>这一步没有执行：{label}没有设置模型（设置 › 模型）。</translation>
+    </message>
+    <message>
+        <source>Thu</source>
+        <translation>四</translation>
+    </message>
+    <message>
+        <source>Tidy instructions (the ticked one is used)</source>
+        <translation>整理用的提示词（用打勾的那一条）</translation>
+    </message>
+    <message>
+        <source>Tidy what was heard with the default chat model</source>
+        <translation>识别完再用默认的对话模型整理一遍</translation>
+    </message>
+    <message>
+        <source>Tidy: {name}</source>
+        <translation>整理：{name}</translation>
+    </message>
+    <message>
+        <source>Tidying what you said…</source>
+        <translation>正在整理你说的话…</translation>
+    </message>
+    <message>
+        <source>Tidying what you said… Click to keep it as it is.</source>
+        <translation>正在整理你说的话… 点一下保持原样。</translation>
     </message>
     <message>
         <source>Time comment</source>
@@ -7749,11 +8431,15 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>To</source>
-        <translation>到</translation>
+        <translation>目标</translation>
     </message>
     <message>
         <source>To URL</source>
         <translation>目标 URL</translation>
+    </message>
+    <message>
+        <source>To text</source>
+        <translation>转成文字</translation>
     </message>
     <message>
         <source>To:
@@ -7782,6 +8468,10 @@ Goal: {goal}</source>
         <translation>工具集</translation>
     </message>
     <message>
+        <source>Transcript</source>
+        <translation>转写</translation>
+    </message>
+    <message>
         <source>Translate</source>
         <translation>翻译</translation>
     </message>
@@ -7796,6 +8486,10 @@ Goal: {goal}</source>
     <message>
         <source>Translating...</source>
         <translation>正在翻译…</translation>
+    </message>
+    <message>
+        <source>Translation</source>
+        <translation>翻译</translation>
     </message>
     <message>
         <source>Translation failed: %s</source>
@@ -7818,8 +8512,16 @@ Goal: {goal}</source>
         <translation>已将提示词从 {before} 字符裁剪到 {after} 字符，以适应 @{alias}（上限 {limit}）。</translation>
     </message>
     <message>
+        <source>Tue</source>
+        <translation>二</translation>
+    </message>
+    <message>
+        <source>Turn each next step into a reminder for the next day</source>
+        <translation>把每一条「接下来做什么」变成第二天的提醒事项</translation>
+    </message>
+    <message>
         <source>Turn it on and sign in under Settings › General › Usage providers.</source>
-        <translation>到 设置 › General ›「Usage providers」里打开它并登录。</translation>
+        <translation>到 设置 › 通用 ›「用量供应商」里打开它并登录。</translation>
     </message>
     <message>
         <source>Turn off</source>
@@ -7832,6 +8534,14 @@ Goal: {goal}</source>
     <message>
         <source>Turn on the providers the usage bars read, and sign them in (built-in CodexBar).</source>
         <translation>打开用量条要读的供应商，并在这里登录（内置 CodexBar）。</translation>
+    </message>
+    <message>
+        <source>Turn what is said in this file into text, as a conversation of its own.</source>
+        <translation>把这个文件里说的话转成文字，单独存成一条对话。</translation>
+    </message>
+    <message>
+        <source>Two shortcuts use the same keys: one for either side and one for one side only. Give them different keys, or different sides.</source>
+        <translation>有两个快捷键用了同样的键：一个左右都认，一个只认一边。请给它们不同的键，或者分到不同的两边。</translation>
     </message>
     <message>
         <source>Type</source>
@@ -7891,7 +8601,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Unfiled</source>
-        <translation>未归档</translation>
+        <translation>未分类</translation>
     </message>
     <message>
         <source>Unknown @ target</source>
@@ -7908,6 +8618,10 @@ Goal: {goal}</source>
     <message>
         <source>Unknown server</source>
         <translation>未知服务器</translation>
+    </message>
+    <message>
+        <source>Unpacking…</source>
+        <translation>解压中…</translation>
     </message>
     <message>
         <source>Unpin window position</source>
@@ -7955,7 +8669,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Update linked API history</source>
-        <translation>更新已关联的 API 历史</translation>
+        <translation>更新已关联的智能体对话</translation>
     </message>
     <message>
         <source>Updated</source>
@@ -7988,6 +8702,10 @@ Goal: {goal}</source>
     <message>
         <source>Uploading {count} attachment(s) to @{alias}...</source>
         <translation>正在向 @{alias} 上传 {count} 个附件...</translation>
+    </message>
+    <message>
+        <source>Uploading {count} file(s), {size}, to iCloud…</source>
+        <translation>正在把 {count} 个文件（{size}）传到 iCloud…</translation>
     </message>
     <message>
         <source>Usage</source>
@@ -8058,12 +8776,16 @@ Goal: {goal}</source>
         <translation>用这个 Chrome 窗口打开页面、登录并准备后台标签页。当“每个任务在新的 Chrome 标签页/窗口中打开”关闭时，Browser Use 会从这个实例继续。</translation>
     </message>
     <message>
+        <source>Used for</source>
+        <translation>用于</translation>
+    </message>
+    <message>
         <source>User</source>
         <translation>用户</translation>
     </message>
     <message>
         <source>User added a note for the next checkpoint.</source>
-        <translation>用户为下一个检查点添加了备注。</translation>
+        <translation>用户为下一个检查点追加了指示。</translation>
     </message>
     <message>
         <source>User added an instruction</source>
@@ -8079,7 +8801,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>User note</source>
-        <translation>用户备注</translation>
+        <translation>用户追加的指示</translation>
     </message>
     <message>
         <source>User-added instruction applied</source>
@@ -8096,6 +8818,10 @@ Goal: {goal}</source>
     <message>
         <source>VS Code</source>
         <translation>VS Code</translation>
+    </message>
+    <message>
+        <source>VS Code (space-free path)</source>
+        <translation>VS Code（无空格路径）</translation>
     </message>
     <message>
         <source>Verification profiles: {profiles}</source>
@@ -8146,6 +8872,26 @@ Goal: {goal}</source>
         <translation>视觉</translation>
     </message>
     <message>
+        <source>Voice input</source>
+        <translation>语音输入</translation>
+    </message>
+    <message>
+        <source>Voice input does not support this language. Put a supported language first in Settings → Languages.</source>
+        <translation>语音输入不支持这种语言。请在 设置 → Languages 里把一种支持的语言放到第一个。</translation>
+    </message>
+    <message>
+        <source>Voice input is not available on this Mac. It needs macOS 26 or later.</source>
+        <translation>这台 Mac 不能用语音输入，需要 macOS 26 或更新的系统。</translation>
+    </message>
+    <message>
+        <source>Voice input shortcut must be different from the other shortcuts.</source>
+        <translation>语音输入快捷键不能和其他快捷键相同。</translation>
+    </message>
+    <message>
+        <source>Voice input stopped because of an error.</source>
+        <translation>语音输入因为出错停止了。</translation>
+    </message>
+    <message>
         <source>Waiting for chat response...</source>
         <translation>正在等对话页回答…</translation>
     </message>
@@ -8191,7 +8937,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Watch</source>
-        <translation>提醒</translation>
+        <translation>监视</translation>
     </message>
     <message>
         <source>Watch a file</source>
@@ -8211,7 +8957,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Watched</source>
-        <translation>提醒</translation>
+        <translation>监视</translation>
     </message>
     <message>
         <source>Watched files</source>
@@ -8223,7 +8969,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Web &amp; Localhost URLs</source>
-        <translation>Web 与 Localhost 网址</translation>
+        <translation>网页与本地服务网址</translation>
     </message>
     <message>
         <source>Web &amp; files</source>
@@ -8231,11 +8977,11 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Web / Localhost energy mode</source>
-        <translation>Web / Localhost 能耗模式</translation>
+        <translation>网页 / 本地服务节能模式</translation>
     </message>
     <message>
         <source>Web / Localhost sending, embeddings for fetched content, downloads, PDF attachments and userscripts.</source>
-        <translation>Web / Localhost 发送、抓取内容的向量化、下载、PDF 附件和用户脚本。</translation>
+        <translation>网页 / 本地服务的发送、抓取内容的向量化、下载、PDF 附件和用户脚本。</translation>
     </message>
     <message>
         <source>Web URL</source>
@@ -8243,7 +8989,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Web URLs</source>
-        <translation>Web 网址</translation>
+        <translation>网页网址</translation>
     </message>
     <message>
         <source>Web conversation is being captured in the background.</source>
@@ -8266,20 +9012,40 @@ Goal: {goal}</source>
         <translation>未设置 WebFetch 下载文件夹。</translation>
     </message>
     <message>
-        <source>Weekly</source>
+        <source>Wed</source>
+        <translation>三</translation>
+    </message>
+    <message>
+        <source>Week</source>
         <translation>每周</translation>
+    </message>
+    <message>
+        <source>Weekly</source>
+        <translation>周报</translation>
+    </message>
+    <message>
+        <source>Weekly report</source>
+        <translation>周报</translation>
     </message>
     <message>
         <source>What to do when it changes</source>
         <translation>它变了之后要做什么</translation>
     </message>
     <message>
+        <source>What to write here</source>
+        <translation>这里写什么</translation>
+    </message>
+    <message>
         <source>What was said</source>
         <translation>说了什么</translation>
     </message>
     <message>
+        <source>When</source>
+        <translation>什么时候写</translation>
+    </message>
+    <message>
         <source>When Claude Code, Codex or another AI tool on this Mac (in VS Code, a terminal or Broccoli) or Broccoli’s own agent finishes a turn, a column of dots appears beside the pointer: grey = still running, green = done, orange = it waits for you, red = it ended on an error. Point at it to see the tasks; click one to go there. The sound is the one under Completion alerts. The built-in agentsview reads the sessions; nothing leaves this Mac.</source>
-        <translation>这台 Mac 上的 Claude Code、Codex 等 AI 工具（在 VS Code、终端或 Broccoli 里）或 Broccoli 自己的 Agent 做完一轮时，鼠标旁会出现一列小圆点：灰色 = 还在进行，绿色 = 做完了，橙色 = 在等你，红色 = 出错结束。鼠标移上去看是哪些任务，点一个就跳过去。声音用「完成提醒」里的设置。会话由内置的 agentsview 读取，数据不离开这台 Mac。</translation>
+        <translation>这台 Mac 上的 Claude Code、Codex 等 AI 工具（在 VS Code、终端或 Broccoli 里）或 Broccoli 自己的智能体做完一轮时，鼠标旁会出现一列小圆点：灰色 = 还在进行，绿色 = 做完了，橙色 = 在等你，红色 = 出错结束。鼠标移上去看是哪些任务，点一个就跳过去。声音用「完成提醒」里的设置。会话由内置的 agentsview 读取，数据不离开这台 Mac。</translation>
     </message>
     <message>
         <source>When a watched file changes, the model reads the change (with the instruction, if you wrote one) and splits it into tasks: each task is its own conversation in this group. They run at the same time unless they change the same files or one needs another's result — then they wait for each other. What the tasks write is not taken as a new change; a change you make while they run is picked up when they are done. Tasks stop at approvals unless Automatic approval is on.</source>
@@ -8290,12 +9056,24 @@ Goal: {goal}</source>
         <translation>鼠标停在蓝条上时</translation>
     </message>
     <message>
+        <source>When you change a dictated word in Broccoli's prompt box before sending, Broccoli remembers the change and makes it by itself next time, in every app, without asking a model. Names from the Wiki and what you asked Broccoli to remember also go along with the tidy-up.</source>
+        <translation>你在 Broccoli 的输入框里把听写出来的词改掉再发送时，Broccoli 会记住这处改动，下次自己改，在所有软件里都生效，不用问模型。整理时还会带上 Wiki 里的名字和你让 Broccoli 记住的内容。</translation>
+    </message>
+    <message>
+        <source>When you stop, the text is sent once to the model selected for chat, which removes filler words and fixes punctuation and obvious mis-hearings; it then replaces what was heard (undo brings that back). With an on-line model the text leaves this Mac; the recording never does.</source>
+        <translation>停下以后，文字会发给当前选中的对话模型一次，由它去掉口头语、改好标点和明显听错的字，然后替换掉刚才听到的内容（撤销可以变回原样）。用联网的模型时，这段文字会离开这台 Mac；录音永远不会。</translation>
+    </message>
+    <message>
         <source>Whether the model may run code, and which runner handles each language.</source>
         <translation>是否允许模型运行代码，以及每种语言由哪个运行器执行。</translation>
     </message>
     <message>
         <source>Which profile handles chat, planning, embeddings and each specialized step.</source>
         <translation>聊天、规划、向量和各类专项步骤分别由哪个配置处理。</translation>
+    </message>
+    <message>
+        <source>Which side of the keyboard counts for {keys}?</source>
+        <translation>这个快捷键里的 {keys} 认键盘的哪一侧？</translation>
     </message>
     <message>
         <source>Wi-Fi</source>
@@ -8311,11 +9089,15 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Window &amp; agent plan</source>
-        <translation>窗口与 Agent 计划</translation>
+        <translation>窗口与智能体计划</translation>
     </message>
     <message>
         <source>Window &amp; startup</source>
         <translation>窗口与启动</translation>
+    </message>
+    <message>
+        <source>Word document</source>
+        <translation>Word 文档</translation>
     </message>
     <message>
         <source>Working</source>
@@ -8354,6 +9136,10 @@ Goal: {goal}</source>
         <translation>写入失败：对话页的发送按钮没有亮起（{reason}）。</translation>
     </message>
     <message>
+        <source>Write now</source>
+        <translation>现在写</translation>
+    </message>
+    <message>
         <source>Write prompt</source>
         <translation>写入提示词</translation>
     </message>
@@ -8386,6 +9172,10 @@ Goal: {goal}</source>
         <translation>正在根据 {total} 段笔记写任务胶囊…</translation>
     </message>
     <message>
+        <source>Writing the report…</source>
+        <translation>正在写报告…</translation>
+    </message>
+    <message>
         <source>Written each night from your conversations. Once you change it, it stays as you wrote it.</source>
         <translation>每晚根据你的对话写出。你改过之后，就一直保持你写的样子。</translation>
     </message>
@@ -8398,8 +9188,24 @@ Goal: {goal}</source>
         <translation>是</translation>
     </message>
     <message>
+        <source>You</source>
+        <translation>你</translation>
+    </message>
+    <message>
         <source>You are using the computer: Computer Use waits until you stop.</source>
-        <translation>你正在使用电脑：电脑操作会等你停下来再开始。</translation>
+        <translation>你正在使用电脑：Computer Use 会等你停下来再开始。</translation>
+    </message>
+    <message>
+        <source>You pressed keys on both sides.</source>
+        <translation>你刚才左右两边的键都按了。</translation>
+    </message>
+    <message>
+        <source>You pressed the left one.</source>
+        <translation>你刚才按的是左边的。</translation>
+    </message>
+    <message>
+        <source>You pressed the right one.</source>
+        <translation>你刚才按的是右边的。</translation>
     </message>
     <message>
         <source>You should set your accounts in Settings.</source>
@@ -8407,7 +9213,11 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>Your own commands for the collapsed button's grid: a script that runs at once, or a question for the Agent.</source>
-        <translation>放在最小化圆按钮九宫格里的自定指令：直接运行的脚本，或交给 Agent 的问题。</translation>
+        <translation>放在最小化圆按钮九宫格里的自定指令：直接运行的脚本，或交给智能体的问题。</translation>
+    </message>
+    <message>
+        <source>Your own instructions replace Broccoli's way of tidying. The dictated text is added after them, and the model is still told to answer with the rewritten text only.</source>
+        <translation>你自己的提示词会代替 Broccoli 自带的整理方式。听到的文字会接在它后面，并且仍然会要求模型只回整理好的文字。</translation>
     </message>
     <message>
         <source>Your own note. Never changed or removed automatically.</source>
@@ -8435,11 +9245,11 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>[Agent command stopped]</source>
-        <translation>[Agent 命令已停止]</translation>
+        <translation>[智能体命令已停止]</translation>
     </message>
     <message>
         <source>[Agent command timed out]</source>
-        <translation>[Agent 命令超时]</translation>
+        <translation>[智能体命令超时]</translation>
     </message>
     <message>
         <source>[Broccoli wrote these files for Claude Code: {files}]</source>
@@ -8452,6 +9262,10 @@ Goal: {goal}</source>
     <message>
         <source>[Command finished with exit code {code}]</source>
         <translation>[命令已结束，退出码 {code}]</translation>
+    </message>
+    <message>
+        <source>[File {name} ({size}) is attached. Its content cannot be read here; it is kept with this conversation and can be sent back as it is.]</source>
+        <translation>[附带了文件 {name}（{size}）。这里读不了它的内容；它和这个对话存在一起，可以原样发回去。]</translation>
     </message>
     <message>
         <source>[Removed]</source>
@@ -8542,6 +9356,10 @@ Goal: {goal}</source>
         <translation>缓存副本删不掉</translation>
     </message>
     <message>
+        <source>a file</source>
+        <translation>一个文件</translation>
+    </message>
+    <message>
         <source>a file arrived damaged</source>
         <translation>有文件传过来时已损坏</translation>
     </message>
@@ -8622,6 +9440,10 @@ Goal: {goal}</source>
         <translation>可用</translation>
     </message>
     <message>
+        <source>before Open In</source>
+        <translation>用别的软件打开之前</translation>
+    </message>
+    <message>
         <source>busy</source>
         <translation>忙碌</translation>
     </message>
@@ -8632,6 +9454,10 @@ Goal: {goal}</source>
     <message>
         <source>checking…</source>
         <translation>查询中…</translation>
+    </message>
+    <message>
+        <source>click the circle to stop</source>
+        <translation>再点一下小圆点结束</translation>
     </message>
     <message>
         <source>cloud newer</source>
@@ -8662,6 +9488,10 @@ Goal: {goal}</source>
         <translation>有冲突</translation>
     </message>
     <message>
+        <source>copy</source>
+        <translation>副本</translation>
+    </message>
+    <message>
         <source>critical</source>
         <translation>严重</translation>
     </message>
@@ -8679,7 +9509,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>discovery failed</source>
-        <translation>发现失败</translation>
+        <translation>检测失败</translation>
     </message>
     <message>
         <source>drop as a duplicate</source>
@@ -8742,8 +9572,12 @@ Goal: {goal}</source>
         <translation>发现于 v%s</translation>
     </message>
     <message>
+        <source>from another app</source>
+        <translation>来自其他软件</translation>
+    </message>
+    <message>
         <source>full page scan ({n} windows)</source>
-        <translation>整页扫描（{n} 个窗口）</translation>
+        <translation>整页扫描（分 {n} 屏）</translation>
     </message>
     <message>
         <source>github_pat_... or ghp_...</source>
@@ -8875,7 +9709,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>macOS asks once whether CodexBar may read the browser's saved sign-ins: click Always Allow. For Safari, Broccoli needs Full Disk Access (System Settings › Privacy &amp; Security).</source>
-        <translation>macOS 会问一次是否允许 CodexBar 读取浏览器保存的登录，点"始终允许"。Safari 的话，要给 Broccoli"完全磁盘访问权限"（系统设置 › 隐私与安全性）。</translation>
+        <translation>macOS 会问一次是否允许 CodexBar 读取浏览器保存的登录，点“始终允许”。Safari 的话，要给 Broccoli“完全磁盘访问权限”（系统设置 › 隐私与安全性）。</translation>
     </message>
     <message>
         <source>macOS has turned off the sound for Broccoli’s notifications.</source>
@@ -8884,6 +9718,10 @@ Goal: {goal}</source>
     <message>
         <source>macOS is running Broccoli from a temporary copy; move it into Applications first</source>
         <translation>macOS 正在从临时副本运行 Broccoli，请先把它移到「应用程序」</translation>
+    </message>
+    <message>
+        <source>macOS is still downloading it</source>
+        <translation>macOS 还在下载它</translation>
     </message>
     <message>
         <source>main display</source>
@@ -8898,8 +9736,12 @@ Goal: {goal}</source>
         <translation>中</translation>
     </message>
     <message>
+        <source>microphone only</source>
+        <translation>只有麦克风</translation>
+    </message>
+    <message>
         <source>missing</source>
-        <translation>缺失</translation>
+        <translation>未找到</translation>
     </message>
     <message>
         <source>missing: {value}</source>
@@ -8954,6 +9796,10 @@ Goal: {goal}</source>
         <translation>还没共享——请打开共享窗口</translation>
     </message>
     <message>
+        <source>not used: your own skill has this name</source>
+        <translation>没有使用：你自己的技能用了这个名字</translation>
+    </message>
+    <message>
         <source>note</source>
         <translation>备注</translation>
     </message>
@@ -8979,7 +9825,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>outside Broccoli</source>
-        <translation>Broccoli 之外</translation>
+        <translation>Broccoli 以外的程序</translation>
     </message>
     <message>
         <source>payload must be an object</source>
@@ -9051,7 +9897,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>reverted</source>
-        <translation>已还原</translation>
+        <translation>已回退</translation>
     </message>
     <message>
         <source>role_action_ban needs 'role'</source>
@@ -9334,6 +10180,10 @@ Goal: {goal}</source>
         <translation>{device} 不支持这类任务。</translation>
     </message>
     <message>
+        <source>{device} is not shared with you any more. Pick a device with 🎛️ Move to.</source>
+        <translation>{device} 已经不再共享给你。请用「🎛️ 换设备」重新选一台设备。</translation>
+    </message>
+    <message>
         <source>{device} no longer owns the conversation; it moved to another device.</source>
         <translation>这段对话已不归 {device}，它已经搬到别的设备上了。</translation>
     </message>
@@ -9414,12 +10264,20 @@ Goal: {goal}</source>
         <translation>{name}（已停用）</translation>
     </message>
     <message>
+        <source>{name} (not connected)</source>
+        <translation>{name}（没有接上）</translation>
+    </message>
+    <message>
         <source>{name} can no longer send tasks to this Mac, and their shared folder leaves your iCloud Drive (a copy stays on this Mac). Their conversations here stay.</source>
         <translation>{name} 以后不能再发任务给这台 Mac，给他的共享文件夹会从你的 iCloud 云盘里移走（这台 Mac 上留一份）。他在这里的对话保留。</translation>
     </message>
     <message>
         <source>{name} history</source>
         <translation>{name} 历史</translation>
+    </message>
+    <message>
+        <source>{name} — {count} questions in the last 7 days</source>
+        <translation>{name}：最近 7 天 {count} 个问题</translation>
     </message>
     <message>
         <source>{name}: did not work — {reason}</source>
@@ -9487,7 +10345,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>{n} outputs · {kind}</source>
-        <translation>{n} 个输出 · {kind}</translation>
+        <translation>{n} 个成品 · {kind}</translation>
     </message>
     <message>
         <source>{n} restored</source>
@@ -9563,7 +10421,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>{updated} · From {source} · Last ran on {executor} · {status} · Default Profile fallback</source>
-        <translation>{updated} · 来自 {source} · 最后运行于 {executor} · {status} · 已回退到默认 Profile</translation>
+        <translation>{updated} · 来自 {source} · 最后运行于 {executor} · {status} · 已回退到默认配置</translation>
     </message>
     <message>
         <source>{window}: no reading</source>
@@ -9587,7 +10445,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>“{a}” gave back {files}</source>
-        <translation>「{a}」放出了 {files}</translation>
+        <translation>「{a}」让出了 {files}</translation>
     </message>
     <message>
         <source>“{a}” is next in line for {file} after “{b}”</source>
@@ -9631,7 +10489,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>“{name}” exists again, so it was not put back.</source>
-        <translation>「{name}」又有了，所以没有放回去。</translation>
+        <translation>「{name}」已经又存在了，所以没有放回去。</translation>
     </message>
     <message>
         <source>“{name}” has unsaved changes that could not be saved ({reason}), so the AI’s change was not applied. Save the file and send your request again.</source>
@@ -9639,7 +10497,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>“{name}” is being changed by a running task right now, so it was not saved. Try again in a moment.</source>
-        <translation>「{name}」正被一个运行中的任务修改，所以没有保存。请稍后再试。</translation>
+        <translation>“{name}”正被一个运行中的任务修改，所以没有保存。请稍后再试。</translation>
     </message>
     <message>
         <source>“{name}” is being changed by “{title}” right now. Undo the change when that task is done.</source>
@@ -9714,8 +10572,20 @@ Goal: {goal}</source>
         <translation>← 后退</translation>
     </message>
     <message>
+        <source>→ Clipboard</source>
+        <translation>→ 剪贴板</translation>
+    </message>
+    <message>
         <source>→ Forward</source>
         <translation>→ 前进</translation>
+    </message>
+    <message>
+        <source>→ {app}</source>
+        <translation>→ {app}</translation>
+    </message>
+    <message>
+        <source>→ {app}…</source>
+        <translation>→ {app}…</translation>
     </message>
     <message>
         <source>↳ detail</source>
@@ -9731,7 +10601,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>⏳ The agent stopped and is waiting for you · click here to see it</source>
-        <translation>⏳ Agent 停下来等你处理 · 点这里查看</translation>
+        <translation>⏳ 智能体停下来等你处理 · 点这里查看</translation>
     </message>
     <message>
         <source>⏸ **Approve?** — Claude wants to use the tool **{tool}**:</source>
@@ -9755,7 +10625,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>⏸ **Waiting for your approval** (reply to continue)</source>
-        <translation>⏸ **等待你的确认**（回复以继续）</translation>
+        <translation>⏸ **等待你的批准**（回复以继续）</translation>
     </message>
     <message>
         <source>── external target ──</source>
@@ -9766,8 +10636,12 @@ Goal: {goal}</source>
         <translation>── 复核 ──</translation>
     </message>
     <message>
+        <source>● Recording {time}</source>
+        <translation>● 正在录音 {time}</translation>
+    </message>
+    <message>
         <source>♻️ Transfer</source>
-        <translation>♻️ 转移</translation>
+        <translation>♻️ 切换视图</translation>
     </message>
     <message>
         <source>⚙️ Settings</source>
@@ -9780,6 +10654,22 @@ Goal: {goal}</source>
     <message>
         <source>⚠️ Not finished · the usage ran out · click here to see it</source>
         <translation>⚠️ 没有走完 · 用量用完了 · 点这里查看</translation>
+    </message>
+    <message>
+        <source>⚠️ 📎 {name} could not be read and was not sent.</source>
+        <translation>⚠️ 📎 {name} 读不出来，没有传过去。</translation>
+    </message>
+    <message>
+        <source>⚠️ 📎 {name} did not arrive in time and is missing.</source>
+        <translation>⚠️ 📎 {name} 没有按时到，缺了这个文件。</translation>
+    </message>
+    <message>
+        <source>⚠️ 📎 {name} was not sent: it is larger than {limit}.</source>
+        <translation>⚠️ 📎 {name} 没有传过去：它超过了 {limit}。</translation>
+    </message>
+    <message>
+        <source>⚠️ 📎 {name} was not sent: the files together would be larger than {limit}.</source>
+        <translation>⚠️ 📎 {name} 没有传过去：几个文件加起来会超过 {limit}。</translation>
     </message>
     <message>
         <source>⚡ Save</source>
@@ -9798,6 +10688,14 @@ Goal: {goal}</source>
         <translation>✓ 服务可达 — “test”返回 {n} 条结果。</translation>
     </message>
     <message>
+        <source>✓ Typed into {app}</source>
+        <translation>✓ 已填入 {app}</translation>
+    </message>
+    <message>
+        <source>✓ Typed into {app} · copied</source>
+        <translation>✓ 已填入 {app} · 已复制</translation>
+    </message>
+    <message>
         <source>✗ Test failed: {msg}</source>
         <translation>✗ 测试失败：{msg}</translation>
     </message>
@@ -9810,6 +10708,10 @@ Goal: {goal}</source>
         <translation>🆕 检查更新</translation>
     </message>
     <message>
+        <source>🌐 Browser Use in background</source>
+        <translation>🌐 Browser Use 在后台运行</translation>
+    </message>
+    <message>
         <source>🌐 Chrome</source>
         <translation>🌐 Chrome</translation>
     </message>
@@ -9819,11 +10721,11 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>🎛️ Move to</source>
-        <translation>🎛️ Move to</translation>
+        <translation>🎛️ 换设备</translation>
     </message>
     <message>
         <source>🎛️ Move to failed</source>
-        <translation>🎛️ Move to 失败</translation>
+        <translation>🎛️ 换设备失败</translation>
     </message>
     <message>
         <source>👀 Show/Hide dock icon</source>
@@ -9839,7 +10741,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>📌 Board · %d facts · %d disputed · %d proposed</source>
-        <translation>📌 黑板 · %d 条事实 · %d 条有争议 · %d 条提议</translation>
+        <translation>📌 事实板 · %d 条事实 · %d 条有争议 · %d 条提议</translation>
     </message>
     <message>
         <source>📝 Your note reached the running step: {notes}</source>
@@ -9879,7 +10781,7 @@ Goal: {goal}</source>
     </message>
     <message>
         <source>🥦 Start Broccoli!</source>
-        <translation>🥦 启动 Broccoli！</translation>
+        <translation>🥦 打开 Broccoli！</translation>
     </message>
     <message>
         <source>🧠 Models</source>

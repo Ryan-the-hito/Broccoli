@@ -25,6 +25,30 @@ SPEED_PROMPT = (
 )
 
 
+# This worker is written for the 0.13 library. 1.0 is a different program (the model writes Python
+# instead of choosing page actions; 24 of the 36 calls made here do not exist there — checked
+# 2026-11-18), so on any other series the task stops at once with a sentence that says why, instead
+# of failing somewhere in the middle. Raise this only together with the code below.
+SUPPORTED_LIBRARY_SERIES = '0.13.'
+
+
+def _library_version():
+    try:
+        from importlib.metadata import version
+        return str(version('browser-use') or '')
+    except Exception:
+        return ''   # not known (no package record): do not guess, let the import decide
+
+
+def _library_problem(found):
+    """'' when the installed library is the supported series (or its version is not known)."""
+    found = str(found or '').strip()
+    if not found or found.startswith(SUPPORTED_LIBRARY_SERIES):
+        return ''
+    return (f'Browser Use library {found} is installed, but Broccoli works with {SUPPORTED_LIBRARY_SERIES}x only '
+            f'(last one: 0.13.14). Put it back with: pip install "browser-use==0.13.14"')
+
+
 def _speed_mode(cfg):
     mode = str(cfg.get('speed_mode') or 'standard').strip().lower()
     return mode if mode in ('standard', 'no_thinking', 'flash') else 'standard'
@@ -180,6 +204,485 @@ def _apply_live_notes(cfg, agent_obj, applied):
         applied.add(item['id'])
         used.append(item)
     return used
+
+
+# ── Background mode (2026-11-19): the Chrome window waits in the screen's corner ─────────────
+# Broccoli writes the wanted mode into cfg['window_mode_path']:
+#   {"background": true, "park": [x, y], "home": [left, top]}
+# "park" is the last point of the screen (bottom right). Chrome keeps a 1-point sliver of the
+# window there, which is as far off the screen as macOS lets a window go (measured: asking for
+# -32000 leaves 261 points showing; hiding the app makes pages think they are hidden). Parked
+# windows keep drawing, so pages behave as if they were in view. Nothing about the browser
+# itself is changed.
+NEEDS_USER_MARK = 'NEEDS_USER:'
+NEEDS_USER_RULE = (
+    'If you cannot continue without the human user (a sign-in, a captcha or verification code, '
+    'a file picker, a site permission prompt, a payment confirmation), do not guess and do not '
+    'keep retrying: use the done action with success=false and start its text with '
+    '"' + NEEDS_USER_MARK + '" followed by one sentence saying exactly what the user must do in the browser.'
+)
+WINDOW_PARK_SLACK = 2
+WINDOW_CASCADE = 24
+
+
+def _read_window_mode(cfg):
+    path = str(cfg.get('window_mode_path') or '').strip()
+    if not path:
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+        park = [int(data['park'][0]), int(data['park'][1])]
+        home = [int(data['home'][0]), int(data['home'][1])]
+    except Exception:
+        return None
+    return {'background': bool(data.get('background')), 'park': park, 'home': home}
+
+
+def _window_homes_path(cfg):
+    return str(cfg.get('window_mode_path') or '').strip() + '.homes'
+
+
+def _load_window_homes(cfg):
+    try:
+        with open(_window_homes_path(cfg), 'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_window_homes(cfg, homes):
+    try:
+        path = _window_homes_path(cfg)
+        with open(path + '.tmp', 'w', encoding='utf-8') as handle:
+            json.dump(homes, handle)
+        os.replace(path + '.tmp', path)
+    except Exception:
+        pass
+
+
+def _needs_user_text(text):
+    """The sentence after the NEEDS_USER: mark, '' when the text does not carry it."""
+    text = str(text or '')
+    at = text.find(NEEDS_USER_MARK)
+    if at < 0:
+        return ''
+    rest = text[at + len(NEEDS_USER_MARK):].strip()
+    first = rest.splitlines()[0].strip() if rest else ''
+    return first or 'The browser needs you.'
+
+
+async def _apply_window_mode(send, cfg, state, key):
+    """Put every Chrome window where the mode says. `send` is a CDP client's .send; `key` tells
+    one Chrome from another in the remembered positions. Returns how many windows moved."""
+    targets = (await send.Target.getTargets()).get('targetInfos') or []
+    windows = {}
+    for target in targets:
+        if target.get('type') != 'page':
+            continue
+        try:
+            found = await send.Browser.getWindowForTarget(params={'targetId': target['targetId']})
+            windows[int(found['windowId'])] = dict(found.get('bounds') or {})
+        except Exception:
+            continue
+    park_x, park_y = state['park']
+    homes = None
+    moved = 0
+    for window_id, bounds in sorted(windows.items()):
+        if str(bounds.get('windowState') or 'normal') != 'normal':
+            continue   # minimised / full screen: the user put it there
+        parked = int(bounds.get('left', 0)) >= park_x - WINDOW_PARK_SLACK
+        name = f'{key}:{window_id}'
+        if state['background'] and not parked:
+            if homes is None:
+                homes = _load_window_homes(cfg)
+            homes.setdefault(name, [int(bounds.get("left", 0)), int(bounds.get("top", 0))])
+            target_bounds = {'left': park_x, 'top': park_y}
+        elif not state['background'] and parked:
+            if homes is None:
+                homes = _load_window_homes(cfg)
+            home = homes.pop(name, None)
+            if not (isinstance(home, list) and len(home) == 2):
+                home = [state['home'][0] + WINDOW_CASCADE * moved, state['home'][1] + WINDOW_CASCADE * moved]
+            target_bounds = {'left': int(home[0]), 'top': int(home[1])}
+        else:
+            continue
+        try:
+            await send.Browser.setWindowBounds(params={'windowId': window_id, 'bounds': target_bounds})
+            moved += 1
+        except Exception:
+            continue
+    if homes is not None:
+        _save_window_homes(cfg, homes)
+    return moved
+
+
+async def _window_command(cfg):
+    """Broccoli's own call (no task): move the windows of the Chrome at cfg['cdp_url']."""
+    import urllib.request
+    from cdp_use import CDPClient
+    state = _read_window_mode(cfg)
+    if state is None:
+        return {'ok': False, 'error': 'no window mode'}
+    base = str(cfg.get('cdp_url') or '').strip().rstrip('/')
+    with urllib.request.urlopen(base + '/json/version', timeout=3) as response:
+        socket_url = json.load(response)['webSocketDebuggerUrl']
+    client = CDPClient(socket_url)
+    await client.start()
+    try:
+        moved = await asyncio.wait_for(_apply_window_mode(client.send, cfg, state, _window_key(base)), timeout=8)
+    finally:
+        await client.stop()
+    return {'ok': True, 'moved': moved}
+
+
+def _window_key(cdp_url):
+    """The port of a CDP address: one running Chrome = one port."""
+    text = str(cdp_url or '')
+    digits = ''
+    for part in text.replace('/', ':').split(':'):
+        if part.isdigit():
+            digits = part
+    return digits or 'chrome'
+
+
+# ── A window of its own in a shared Chrome (2026-11-19) ──────────────────────────────────────
+# Browser steps work in ONE Chrome (one sign-in). The rule (Ryan, 2026-11-19: "并行任务在同一个实例的
+# 多个窗口里…一个任务里后面多加了要求你多建页面。新的对话有了你就锁定一个没有 agent 占用的窗口，0 窗口你
+# 就建一个窗口"):
+#   · one task = one window. A task that starts locks an agent window nobody is using and opens a
+#     new tab in it; when there is none, it makes a new window. The lock holds until the task ends;
+#     the window then stays, free for the next task.
+#   · more pages inside one task = more tabs in ITS window.
+#   · the task works only in its own window: it sees only its own tabs, and whenever it is found
+#     somewhere else (the library picks a tab by itself after a restart or when a tab closes) it is
+#     brought back before the next step.
+# The table of agent windows is the file <window_mode_path>.agent:
+#   {chrome port: {"windows": {window id: [pids of the task using it]}}}
+# Chrome puts a new tab into the window that was active last, so "new tab in window W" is: make W
+# the active one, create the tab, check where it landed — all while holding the table's lock, so
+# two tasks cannot interleave. A tab that still landed elsewhere is closed again.
+# Empty tabs are not left lying around: the library animates every about:blank tab it finds when a
+# task starts, and with about ten of them its start-up never finishes (measured on 0.13.14: 6 are
+# fine, 10 hang; 25 real pages are fine). So a task that locks a free window uses an empty tab that
+# is already there instead of opening another, and spare empty tabs in free windows are closed.
+WINDOW_TABLE_WAIT_SECONDS = 20.0
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except Exception:
+        return False
+
+
+class _WindowTable:
+    """`async with _WindowTable(cfg) as table:` — the table of agent windows, locked for this task
+    until the block ends (other tasks wait). `table.data` is saved when the block ends."""
+
+    def __init__(self, cfg):
+        self.path = str(cfg.get('window_mode_path') or '').strip() + '.agent'
+        self.handle = None
+        self.data = {}
+
+    async def __aenter__(self):
+        import fcntl
+        self.handle = open(self.path, 'a+', encoding='utf-8')
+        waited = 0.0
+        while True:
+            try:
+                fcntl.flock(self.handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if waited >= WINDOW_TABLE_WAIT_SECONDS:
+                    self.handle.close()
+                    self.handle = None
+                    raise
+                await asyncio.sleep(0.05)
+                waited += 0.05
+        self.handle.seek(0)
+        try:
+            data = json.loads(self.handle.read() or '{}')
+        except Exception:
+            data = {}
+        self.data = data if isinstance(data, dict) else {}
+        return self
+
+    def windows(self, key):
+        """{window id: [pids]} of one Chrome, as stored (anything else in the file counts as none)."""
+        entry = self.data.get(key)
+        stored = entry.get('windows') if isinstance(entry, dict) else None
+        result = {}
+        for window_id, users in (stored.items() if isinstance(stored, dict) else []):
+            try:
+                result[int(window_id)] = [int(pid) for pid in (users or [])]
+            except Exception:
+                continue
+        return result
+
+    def set_windows(self, key, windows):
+        self.data[key] = {'windows': {str(window_id): list(users) for window_id, users in windows.items()}}
+
+    async def __aexit__(self, *_exc):
+        if self.handle is None:
+            return False
+        try:
+            self.handle.seek(0)
+            self.handle.truncate()
+            json.dump(self.data, self.handle)
+            self.handle.flush()
+        finally:
+            self.handle.close()   # closing releases the lock
+            self.handle = None
+        return False
+
+
+async def _windows_of(send):
+    """{window id: [page target ids]} of that Chrome."""
+    windows = {}
+    for target in (await send.Target.getTargets()).get('targetInfos') or []:
+        if target.get('type') != 'page':
+            continue
+        try:
+            found = await send.Browser.getWindowForTarget(params={'targetId': target['targetId']})
+            windows.setdefault(int(found['windowId']), []).append(target['targetId'])
+        except Exception:
+            continue
+    return windows
+
+
+async def _blank_tabs(send):
+    """The page targets that are still an empty about:blank."""
+    return {target['targetId'] for target in (await send.Target.getTargets()).get('targetInfos') or []
+            if target.get('type') == 'page' and str(target.get('url') or '') in ('', 'about:blank')}
+
+
+async def _window_of_target(send, target_id):
+    try:
+        found = await send.Browser.getWindowForTarget(params={'targetId': target_id})
+        return int(found['windowId'])
+    except Exception:
+        return 0
+
+
+async def _tab_in_window(send, create, window_id, window_targets, url='about:blank'):
+    """A new tab in exactly that window; '' when Chrome put it somewhere else (then it is closed
+    again). Call only while holding the table's lock."""
+    try:
+        await send.Target.activateTarget(params={'targetId': window_targets[-1]})
+        target = await create(url)
+    except Exception:
+        return ''
+    if await _window_of_target(send, target) == int(window_id):
+        return target
+    try:
+        await send.Target.closeTarget(params={'targetId': target})
+    except Exception:
+        pass
+    return ''
+
+
+async def _open_own_window(browser, cfg):
+    """Start the session and give this task its window in the shared Chrome. Returns the task's
+    place {'key', 'windows': {ids}, 'tabs': [target ids, newest last], 'create': the library's own
+    tab maker}, or None when it could not be done — the task then runs the ordinary way."""
+    try:
+        from browser_use.browser.events import SwitchTabEvent
+        await browser.start()
+        send = browser._cdp_client_root.send
+        create = browser._cdp_create_new_page
+        key = _window_key(getattr(browser, 'cdp_url', '') or cfg.get('cdp_url'))
+        me = os.getpid()
+        async with _WindowTable(cfg) as table:
+            windows = await _windows_of(send)
+            known = {}
+            for window_id, users in table.windows(key).items():
+                if window_id in windows:      # a window the user closed is forgotten
+                    known[window_id] = [pid for pid in users if pid != me and _pid_alive(pid)]
+            target, window_id = '', 0
+            blank = await _blank_tabs(send)
+            free_windows = sorted(window_id for window_id, users in known.items() if not users)
+            for free in free_windows[:2]:
+                empty = [tab for tab in windows[free] if tab in blank]
+                target = empty[-1] if empty else await _tab_in_window(send, create, free, windows[free])
+                if target:
+                    window_id = free
+                    break
+            for free in free_windows:         # spare empty tabs in free windows go (never a window's last tab)
+                spare = [tab for tab in windows[free] if tab in blank and tab != target]
+                if len(spare) == len(windows[free]):
+                    spare = spare[1:]
+                for tab in spare:
+                    try:
+                        await send.Target.closeTarget(params={'targetId': tab})
+                    except Exception:
+                        pass
+            if not target:                    # no agent window is free: this task gets a new one
+                target = await create('about:blank', new_window=True)
+                window_id = await _window_of_target(send, target)
+            if not window_id:
+                return None
+            known[window_id] = [me]
+            table.set_windows(key, known)
+        await browser.event_bus.dispatch(SwitchTabEvent(target_id=target))
+        own = {'key': key, 'windows': {window_id}, 'tabs': [target], 'create': create}
+        _keep_task_in_own_window(browser, cfg, own)
+        return own
+    except Exception:
+        return None
+
+
+def _keep_task_in_own_window(browser, cfg, own):
+    """From now on, on this session: a tab the task opens is made in its own window, and the tab
+    list it is shown holds only its own tabs. (Set on this one object; the library is not changed.)"""
+    create = own['create']
+    list_tabs = browser.get_tabs
+    me = os.getpid()
+
+    async def create_in_own_window(url='about:blank', background=False, new_window=False):
+        send = browser._cdp_client_root.send
+        async with _WindowTable(cfg) as table:
+            target = ''
+            if not new_window:
+                windows = await _windows_of(send)
+                for window_id in sorted(own['windows']):
+                    if windows.get(window_id):
+                        target = await _tab_in_window(send, lambda page_url: create(page_url, background=background),
+                                                      window_id, windows[window_id], url)
+                        if target:
+                            break
+            if not target:        # asked for a window, or its window is gone: one more window of its own
+                target = await create(url, background=background, new_window=True)
+                window_id = await _window_of_target(send, target)
+                if window_id:
+                    own['windows'].add(window_id)
+                    known = table.windows(own['key'])
+                    known[window_id] = [me]
+                    table.set_windows(own['key'], known)
+        own['tabs'].append(target)
+        return target
+
+    async def own_tabs():
+        tabs = await list_tabs()
+        try:
+            send = browser._cdp_client_root.send
+            mine = [tab for tab in tabs if await _window_of_target(send, tab.target_id) in own['windows']]
+        except Exception:
+            return tabs
+        return mine or tabs
+
+    object.__setattr__(browser, '_cdp_create_new_page', create_in_own_window)
+    object.__setattr__(browser, 'get_tabs', own_tabs)
+
+
+async def _return_to_own_window(browser, own):
+    """Before a step: when the session is looking at a tab outside the task's window, switch back to
+    the task's newest tab (a new one in its window when none is left). True when it had to."""
+    from browser_use.browser.events import SwitchTabEvent
+    if getattr(browser, '_cdp_client_root', None) is None:
+        await browser.start()     # the library let go of the session (it does when a run ends)
+    send = browser._cdp_client_root.send
+    focus = str(getattr(browser, 'agent_focus_target_id', '') or '')
+    if focus and await _window_of_target(send, focus) in own['windows']:
+        return False
+    windows = await _windows_of(send)
+    alive = {target for window_id in own['windows'] for target in windows.get(window_id, [])}
+    target = next((tab for tab in reversed(own['tabs']) if tab in alive), '') or next(iter(sorted(alive)), '')
+    if not target:
+        target = await browser._cdp_create_new_page('about:blank')
+    await browser.event_bus.dispatch(SwitchTabEvent(target_id=target))
+    return True
+
+
+async def _leave_own_window(cfg):
+    """The task is over: its window is free for the next task (the window and its tabs stay)."""
+    me = os.getpid()
+    try:
+        async with _WindowTable(cfg) as table:
+            for key in list(table.data):
+                table.set_windows(key, {window_id: [pid for pid in users if pid != me]
+                                        for window_id, users in table.windows(key).items()})
+    except Exception:
+        pass
+
+
+async def _window_mode_loop(cfg, browser):
+    """While a task runs: follow the mode file. A new window lands in the middle of the screen,
+    and the menu-bar switch must work mid-task, so this looks once a second."""
+    last_background = None
+    while True:
+        try:
+            state = _read_window_mode(cfg)
+            client = getattr(browser, '_cdp_client_root', None)
+            if state is not None and client is not None:
+                # in the foreground nothing needs watching once the windows are back
+                if state['background'] or last_background is not False:
+                    key = _window_key(getattr(browser, 'cdp_url', '') or cfg.get('cdp_url'))
+                    await asyncio.wait_for(_apply_window_mode(client.send, cfg, state, key), timeout=8)
+                    last_background = state['background']
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+
+
+# ── When the model turns a request down, ask differently instead of failing (2026-11-19) ─────
+# Seen with claude-opus-5-5 through the built-in proxy: every step came back "400 … schema: For
+# 'integer' type, property 'minimum' is not supported" (it does not accept the forced answer
+# format), and once that was out of the way, "claude refusal (reasoning_extraction)" (the
+# standard speed asks the model to write out its thinking, which it does not hand over). Three
+# such errors and the library ends the task on a blank page. Both are decided by what the model
+# answers, not by its name:
+#   · forced format turned down → the format goes into the prompt as text; the same step is
+#     sent again at once and is not counted as a failure;
+#   · thinking turned down → the task starts over without asking for thinking (the "no
+#     thinking" speed that Settings already offers). Nothing is done to get the thinking anyway.
+FORMAT_TURNED_DOWN_WORDS = ('schema', 'grammar', 'response_format', 'output_config', 'json_schema')
+
+
+def _format_turned_down(error_text):
+    low = str(error_text or '').lower()
+    return '400' in low and any(word in low for word in FORMAT_TURNED_DOWN_WORDS)
+
+
+def _thinking_turned_down(error_text):
+    low = str(error_text or '').lower()
+    return 'reasoning_extraction' in low or ('refusal' in low and 'reasoning' in low)
+
+
+def _install_model_fallbacks(llm, state):
+    """Wrap llm.ainvoke. `state`: format_as_text / thinking_refused (set here), step (set by the caller)."""
+    original = llm.ainvoke
+
+    async def ainvoke(messages, output_format=None, **kwargs):
+        try:
+            return await original(messages, output_format=output_format, **kwargs)
+        except Exception as exc:
+            text = str(exc)
+            if (output_format is not None and not state.get('format_as_text') and _format_turned_down(text)
+                    and hasattr(llm, 'dont_force_structured_output')):
+                llm.dont_force_structured_output = True
+                llm.add_schema_to_system_prompt = True
+                state['format_as_text'] = True
+                _emit_progress({'step': int(state.get('step') or 0), 'url': '',
+                                'actions': ['the model did not accept the forced answer format; sending it as text']})
+                try:
+                    return await original(messages, output_format=output_format, **kwargs)
+                except Exception as again:
+                    if _thinking_turned_down(str(again)):
+                        state['thinking_refused'] = True
+                    raise
+            if _thinking_turned_down(text):
+                state['thinking_refused'] = True
+            raise
+
+    try:
+        llm.ainvoke = ainvoke
+    except Exception:
+        pass   # a model class that cannot be wrapped keeps the old behaviour
 
 
 def _positive_int(value, fallback):
@@ -361,11 +864,22 @@ def _result_metadata(cfg, collected, partial=False, error_text=''):
         metadata['partial'] = True
     if error_text:
         metadata['error'] = error_text
+    if cfg.get('_needs_user'):
+        metadata['needs_user'] = str(cfg['_needs_user'])
     return metadata
 
 
 async def main():
     cfg = json.load(sys.stdin)
+    if cfg.get('window_command'):
+        try:
+            _emit_result(await _window_command(cfg))
+        except Exception as exc:
+            _emit_result({'ok': False, 'error': str(exc) or exc.__class__.__name__})
+        return
+    problem = _library_problem(_library_version())
+    if problem:
+        raise RuntimeError(problem)
     try:
         import browser_use.browser.profile as browser_profile
         browser_profile.get_display_size = lambda: browser_profile.ViewportSize(width=1440, height=900)
@@ -418,6 +932,8 @@ async def main():
         if reasoning_effort:
             openai_kwargs['reasoning_effort'] = reasoning_effort
         llm = ChatOpenAI(**openai_kwargs)
+    model_state = {'format_as_text': False, 'thinking_refused': False, 'thinking_on': False, 'step': 0}
+    _install_model_fallbacks(llm, model_state)
     speed_mode = _speed_mode(cfg)
     _apply_search_engine(cfg.get('search_engine'))
     _install_tolerant_output_parsing()
@@ -433,12 +949,16 @@ async def main():
         browser_kwargs['keep_alive'] = not bool(cfg.get('close_window_after_task', False))
         browser_kwargs['ignore_default_args'] = ['--extensions-on-chrome-urls']
     browser = None
+    window_task = None
+    own = None    # this task's window in the shared Chrome (see _open_own_window)
     try:
         if _cancel_requested(cfg):
             _emit_cancelled()
             return
 
         browser = Browser(**browser_kwargs)
+        if cfg.get('own_window') and browser_kwargs.get('cdp_url'):
+            own = await _open_own_window(browser, cfg)
         task = str(cfg.get('task') or '').strip()
         stop_instruction = (
             'When the requested objective is complete, when enough information has been gathered, '
@@ -457,7 +977,8 @@ async def main():
             ) + stop_instruction + task
 
         async def should_stop():
-            return _cancel_requested(cfg)
+            # also stops a run whose every step would be turned down for asking for thinking
+            return _cancel_requested(cfg) or (model_state['thinking_on'] and model_state['thinking_refused'])
 
         applied_notes = {str(item) for item in (cfg.get('live_notes_skip') or []) if str(item or '').strip()}
 
@@ -469,6 +990,12 @@ async def main():
                 step_number = int(getattr(agent_obj.state, 'n_steps', 0) or 0)
             except Exception:
                 pass
+            model_state['step'] = step_number
+            if own is not None:
+                try:
+                    await _return_to_own_window(browser, own)
+                except Exception:
+                    pass
             used = _apply_live_notes(cfg, agent_obj, applied_notes)   # Add note: before this step's model call
             if used:
                 _emit_progress({'step': step_number, 'notes_applied': used})
@@ -481,6 +1008,10 @@ async def main():
                     dumped = action.model_dump(exclude_none=True) if hasattr(action, 'model_dump') else None
                     if isinstance(dumped, dict) and dumped:
                         actions.append(str(next(iter(dumped.keys()))))
+                        done = dumped.get('done')
+                        needs = _needs_user_text(done.get('text')) if isinstance(done, dict) else ''
+                        if needs:
+                            _emit_progress({'step': int(step_number or 0), 'needs_user': needs})
             except Exception:
                 pass
             url = ''
@@ -524,54 +1055,87 @@ async def main():
                 f'Web search policy: always search with {search_engine}. '
                 'Never open or use any other search engine site unless the task explicitly names one.'
             )
+        extend_bits.append(NEEDS_USER_RULE)
         if extend_bits:
             agent_kwargs['extend_system_message'] = '\n\n'.join(extend_bits)
         history_items = _history_items(cfg)
         if history_items:
             agent_kwargs['max_history_items'] = history_items
-        agent = Agent(
-            task=task,
-            llm=llm,
-            browser=browser,
-            use_vision=_vision_value(cfg.get('use_vision')),
-            directly_open_url=bool(cfg.get('open_new_window', True)),
-            register_new_step_callback=on_new_step,
-            register_should_stop_callback=should_stop,
-            enable_signal_handler=False,
-            llm_timeout=llm_timeout,
-            step_timeout=step_timeout,
-            max_failures=max_failures,
-            # 0.13.x 默认在任务完成后再发一次带最多 10 张截图的"裁判"模型
-            # 请求评审成败；结果只写日志，Broccoli 不消费——纯耗时，关掉
-            # 以恢复 0.12 行为。
-            use_judge=False,
-            **agent_kwargs,
-        )
+        def make_agent(no_thinking):
+            kwargs = dict(agent_kwargs)
+            if no_thinking:
+                kwargs['use_thinking'] = False
+            return Agent(
+                task=task,
+                llm=llm,
+                browser=browser,
+                use_vision=_vision_value(cfg.get('use_vision')),
+                directly_open_url=bool(cfg.get('open_new_window', True)),
+                register_new_step_callback=on_new_step,
+                register_should_stop_callback=should_stop,
+                enable_signal_handler=False,
+                llm_timeout=llm_timeout,
+                step_timeout=step_timeout,
+                max_failures=max_failures,
+                # 0.13.x 默认在任务完成后再发一次带最多 10 张截图的"裁判"模型
+                # 请求评审成败；结果只写日志，Broccoli 不消费——纯耗时，关掉
+                # 以恢复 0.12 行为。
+                use_judge=False,
+                **kwargs,
+            )
+
         _emit_progress({'step': 0, 'actions': ['starting'], 'url': ''})
+        window_task = asyncio.ensure_future(_window_mode_loop(cfg, browser))
         run_error = ''
         timed_out = False
         history = None
-        try:
-            history = await asyncio.wait_for(
-                agent.run(
-                    max_steps=_positive_int(cfg.get('max_steps'), 30),
-                    on_step_start=on_step_begin,
-                ),
-                timeout=overall_timeout,
-            )
-        except InterruptedError:
-            _emit_cancelled()
-            return
-        except asyncio.TimeoutError:
-            timed_out = True
-        except Exception as exc:
-            run_error = str(exc).strip() or exc.__class__.__name__
+        agent = None
+        for no_thinking in (False, True):
+            if own is not None and no_thinking:
+                # the first run let go of the session; the new one would pick a tab by itself
+                try:
+                    await _return_to_own_window(browser, own)
+                except Exception:
+                    pass
+            agent = make_agent(no_thinking)
+            # only the standard speed asks for thinking (no_thinking / flash already do not)
+            model_state['thinking_on'] = speed_mode == 'standard' and not no_thinking
+            model_state['thinking_refused'] = False
+            run_error, timed_out, history, interrupted = '', False, None, False
+            try:
+                history = await asyncio.wait_for(
+                    agent.run(
+                        max_steps=_positive_int(cfg.get('max_steps'), 30),
+                        on_step_start=on_step_begin,
+                    ),
+                    timeout=overall_timeout,
+                )
+            except InterruptedError:
+                interrupted = True
+            except asyncio.TimeoutError:
+                timed_out = True
+            except Exception as exc:
+                run_error = str(exc).strip() or exc.__class__.__name__
+            if (model_state['thinking_on'] and model_state['thinking_refused']
+                    and not _cancel_requested(cfg) and not timed_out):
+                _emit_progress({'step': 0, 'url': '', 'actions': [
+                    'the model does not hand over its thinking; starting again without asking for it']})
+                continue
+            if interrupted:
+                _emit_cancelled()
+                return
+            break
         if _cancel_requested(cfg):
             _emit_cancelled()
             return
         # 无论正常结束、报错还是整体超时，都从（可能不完整的）history 里
         # 抢救已收集的内容——URL、动作、每步提取的页面文本。
         collected = _collect_history(history if history is not None else getattr(agent, 'history', None))
+        needs_user = _needs_user_text(collected['final_result'])
+        if needs_user:
+            collected['final_result'] = collected['final_result'].replace(NEEDS_USER_MARK, 'Needs you:', 1)
+            collected['extracted'] = [str(item).replace(NEEDS_USER_MARK, 'Needs you:') for item in collected['extracted']]
+            cfg['_needs_user'] = needs_user
         has_content = bool(
             collected['final_result'] or collected['extracted'] or collected['urls'] or collected['action_names']
         )
@@ -614,6 +1178,10 @@ async def main():
             'metadata': _result_metadata(cfg, collected, partial=True),
         })
     finally:
+        if window_task is not None:
+            window_task.cancel()
+        if cfg.get('own_window'):
+            await _leave_own_window(cfg)
         if cfg.get('close_window_after_task', False):
             await _close_browser(browser)
 
