@@ -9,7 +9,7 @@
 
 **Broccoli is an AI workstation that floats on your Mac desktop.** One small window holds your API models, the web versions of ChatGPT, Claude and Gemini, Claude Code / Codex, and a terminal. It still chats, translates, polishes and summarizes like it always did. It can now also make a plan and carry it out: run commands, drive a browser, use your computer and edit files. When several tasks run at once, a coordinator decides who goes first, so no task overwrites another's changes. Every conversation and setting stays on your own Mac.
 
-Latest version: **v2.0.17** · Interface: English / 简体中文 / 日本語
+Latest version: **v2.0.20** · Interface: English / 简体中文 / 日本語
 
 <details>
 <summary>The old introduction (v1, out of date)</summary>
@@ -114,11 +114,72 @@ The sliders button in the Agent tab's bottom bar (it opens the mode and language
 - **Settings › Models › Model roles** decides who handles default chat, planning, the sub agent, embeddings and each tool (web search, speech, images, video, terminal commands, Browser Use, Computer Use).
 - You can also set models for one conversation or one group: click 🧠 Models in Transfer's hover column, the history right-click menu or the group settings.
 
-### The collapsed circle and its Shortcuts grid
+### The circle (the collapsed button)
 
 <p align="center"><img src="img/readme/grid_en.png" width="260" /></p>
 
-Click the blue bar at the top and Broccoli shrinks into a glass circle. The circle is its own small window that you can drag anywhere on the screen. Rest the pointer on it and a grid like iOS AssistiveTouch opens with your favourite Mac shortcuts; click the middle cell to bring the main window back.
+Click the blue bar at the top and the main window folds into a small glass circle. The circle is its own small window. It starts in the bottom-right corner of the screen, never takes the front, and shows on every desktop and over full-screen apps. It can also stay on screen while the main window is open (you can turn that off in Settings › General › Window & startup).
+
+The same circle does different things for a left click, a right click, a long press and a drag:
+
+| What you do | What happens |
+|---|---|
+| **Left click** | The main window comes out if it is folded into the circle, folds in if it is open, and slides out if it is hidden at the screen edge. While the circle glows green, it opens the conversation that finished most recently. |
+| **Left double-click** | Reopens the last answer you asked for from the circle. If the answer card is open, a double-click puts it away. |
+| **Left long press (half a second)** | Voice input for other apps: the circle turns into a red recording ball; let go to finish, and the text is typed into the box you were in when you started. |
+| **Left press and drag** | Moves the circle. It remembers where you leave it, also after a restart. |
+| **Rest the pointer on it for 0.6 s** | Opens the grid. |
+| **Right click** | An input box drips out below the circle, so you can ask Broccoli right there. Right-click again to close it. |
+| **Right press and drag** | Scan: the circle becomes a black hole that follows the pointer, and the windows and files you pass over are pulled into the tray. Let go and the input box drips out. |
+| **Drag files onto the circle** | They go into the tray, stuck in above the circle like bookmarks. |
+
+A single click waits for the double-click interval before it acts, because Broccoli has to tell the two apart. If that feels slow, turn the double-click off in Settings › General › Window & startup and a click acts at once. "Move Back to Default Position" is on the same page.
+
+**Right click: asking and answering**
+
+- In the input box, Return sends, Shift + Return starts a new line, and Esc closes it (what you typed is kept). The box does not bring Broccoli to the front; the app you are using stays in front.
+- Each question is a new Agent conversation that runs in the background and also appears in the history list. The answer drips out above the circle as a glass card.
+- The card has four buttons at the top right: copy, follow up (continues the same conversation), open in the main window, and close. Closing the card does not stop an answer that is still being written.
+- You can select text in the card and drag it into another app. Right-click the card to copy, append the selection to the input box, or open a link in the default browser.
+- When something needs your approval, the dialog appears beside the card.
+
+**The tray: drag things onto the circle**
+
+- It takes files, folders, links, pictures and pieces of text. The tray only remembers where things are; it does not move your files. It is still there after a restart.
+- Rest the pointer on the bookmarks and they spread into a row. Click = Quick Look (a link opens in the browser), double-click = open with the default app, press and drag = drag into another app, right-click = Show in Finder, Copy Path, Remove.
+- ⌘-click adds to the selection and ⇧-click selects a range, so you can drag several out at once.
+- While the tray holds something, a question sent from the circle takes it along by default. A paperclip with a number sits at the left of the input box; click the paperclip to leave the things behind this time.
+
+**Right drag: scan**
+
+- Each window you pass over is captured as a screenshot and put in the tray (up to 6 per scan), together with as much as can be read of its title, file path or address, and the text inside it. Files you pass over in Finder windows and on the desktop are collected too.
+- Let go of the right button and the circle returns to its place and drips the input box; your question is sent with what was scanned, and scanned items leave the tray once sent. Press Esc to cancel the scan.
+- Screenshots need the Screen Recording permission; without it only the app's icon is collected.
+
+**Long press: voice input**
+
+- A card comes out above the circle and shows what is heard, live, and the name of the app the text will go to. The text is delivered only as typing: what was already in the box stays, and Return is never pressed for you.
+- If the text cannot be delivered, Broccoli says so and copies it to the clipboard.
+- If you would rather not hold the button, change "Long press on the circle" in Settings › General › Voice input to "Let go and keep speaking, click to end".
+
+**The grid**
+
+- The middle cell is Broccoli itself: click it to bring out or fold the main window; right-clicking it drips the input box, the same as right-clicking the circle.
+- The 8 cells around it hold shortcuts from the Mac's Shortcuts app, or Broccoli's own quick commands (a fixed question, an AppleScript or a shell script, managed in Settings › General › Quick commands). A click runs one in the background.
+- There are five layers: scroll or swipe sideways on the grid to change layer, or click the dots at the bottom. Each layer can have its own keyboard shortcut.
+- Rest on an empty cell and a "+" appears; click it to add. Press and drag a cell to reorder; right-click a cell to replace or remove it.
+
+**The green glow**
+
+- While the main window is folded away, the circle pulses green when a conversation has finished and you have not looked at it yet. Left-click the circle to open that conversation. If the unread one is a question you asked from the circle, a right click drips its answer card out again.
+
+### Voice input
+
+- The Agent, Web and Localhost prompt bars and the circle's input box each have a microphone on the right: click to start listening, click again to stop. Recognition runs on this Mac, and nothing is sent automatically when you finish.
+- Long-press the microphone on the Agent tab for a long recording. The recording is saved on your Mac and also captures what the Mac is playing (the other side of an online meeting, for example); the text is labelled "Me" and "Them". An audio file dragged into the main window can be turned into text too.
+- Long-press the circle with the left button to dictate into other apps (see the section above).
+- The default chat model can tidy up what was heard, with tidy-up prompts you write yourself. Dictation learns from your corrections: a word you fixed is fixed automatically next time.
+- Besides Apple's built-in recognizer, you can download the Qwen3, SenseVoice and Whisper speech models. The speech and chat models on this Mac are listed in Settings › Models › Local models.
 
 ### And more
 
@@ -126,11 +187,16 @@ Click the blue bar at the top and Broccoli shrinks into a glass circle. The circ
 - **Open Connector**: connect other apps in Settings › Connected apps. Keys stay in the keychain, and you approve each action.
 - **Usage bars**: coloured bars above the blue bar show how much of each AI plan you have used (CodexBar built in).
 - **AI task dots**: small dots beside the pointer show the Claude Code / Codex sessions running on this Mac; hover to open them as a column of capsules.
-- **Questions from iPhone**: run the "Broccoli" shortcut on your iPhone, choose a Mac and a conversation, type your question, and the answer is written into Notes (see item 7 under How to use).
+- **Questions from iPhone**: run the "Broccoli" shortcut on your iPhone, choose a Mac and a conversation, type your question, and the answer is written into Notes (see item 7 under How to use). A question can carry photos and files, files in the answer are sent back to the iPhone, and you can read this Mac's conversation history on your phone.
 - **Browser scripts**: two userscripts. Broccoli Bridge puts a 🥦 button in the corner of any web page that sends the selected text, the address and your question to Broccoli; Broccoli WebFetch collects the text of web pages and hands it to Broccoli as attachments (see item 8 under How to use).
 - **One Mac, several people**: everyone gets their own settings and conversations; switch users in Settings, or share this Mac with someone through an iCloud folder.
 - **Question branch tree**: any question can branch off, and the whole tree is drawn as a graph.
 - **Editor and reader**: AI changes are checked against the original and stop on a conflict; saving keeps the file's own encoding and line endings.
+- **One Chrome for Browser Use**: all browser steps share one dedicated Chrome, so you sign in once and every task can use it; steps that run at the same time each get their own window. With "🌐 Browser Use in background" turned on in the menu bar, that Chrome is parked in a corner of the screen and only comes out when it needs you.
+- **Activity panel and reports**: the Agent start page has an activity panel that can write daily, weekly and monthly reports.
+- **Merging conversations**: select several conversations in the history list and merge them into one new conversation. Conversations in the same group know about each other.
+- **Office files**: the editor opens and edits Word, Excel and PowerPoint files; AI changes are written to the file only after you approve them.
+- **Subscription sign-in**: in Settings › Models › Subscriptions, sign in to an AI subscription you already have in the browser and add its models as profiles in one click (CLIProxyAPI built in, used on this Mac only).
 - **Also**: background vision, skills, userscripts, MCP, running code locally, finish alerts (sound and Reminders), system notifications, keeping selected text in Broccoli or Notes, one-click updates.
 
 ### Local storage
@@ -272,7 +338,7 @@ When you upgrade from an old version, whatever is in `~/BroccoliAppPath` and `~/
 - A Mac with Apple silicon (M series).
 - Developed and tested on macOS 27. The Liquid Glass look needs macOS 26 or later; older systems show the plain style. Older macOS versions have not been specifically tested.
 - At least one source of models: an API key for any OpenAI-compatible service, a web AI you are signed in to, or Claude Code / Codex installed.
-- Optional: Browser Use needs Google Chrome; Computer Use needs CuaDriver installed separately (Broccoli's settings show the install command).
+- Optional: Browser Use needs Google Chrome (Broccoli opens one dedicated Chrome; sign in once and every task shares it); Computer Use needs CuaDriver installed separately (Broccoli's settings show the install command).
 - Your own network access.
 
 <details>
@@ -286,7 +352,7 @@ When you upgrade from an old version, whatever is in `~/BroccoliAppPath` and `~/
 
 ## Download and install
 
-1. Download the latest DMG from [Releases](https://github.com/Ryan-the-hito/Broccoli/releases) (for example `Broccoli_v2.0.17.1.dmg`).
+1. Download the latest DMG from [Releases](https://github.com/Ryan-the-hito/Broccoli/releases) (for example `Broccoli_v2.0.20.dmg`).
 2. Open the DMG and accept the licence (GPL-3.0).
 3. Drag Broccoli into the Applications folder.
 4. Open Broccoli. A 🥦 icon appears in the menu bar, with "🥦 Start Broccoli!", "⚙️ Settings", "🌐 Language", "🆕 Check for Updates" and more.
@@ -295,8 +361,10 @@ When you upgrade from an old version, whatever is in `~/BroccoliAppPath` and `~/
    - **Screen Recording**: screenshots, background vision, Computer Use.
    - **Automation**: lets Broccoli control Notes, Reminders, System Events and others.
    - **Full Disk Access**: shows your shortcuts' icons in the collapsed circle, and reads protected files on your Mac.
+   - **Microphone**: voice input.
+   - **System Audio Recording**: lets a long recording capture what the Mac is playing (the system asks the first time).
 6. **Updating later**: click "🆕 Check for Updates" in the menu bar. Broccoli downloads, verifies, replaces itself and reopens; your settings and conversations stay.
-   - Going from v2.0.13 or earlier to v2.0.17, **install by hand once**: the app identifier is now `com.ryanthehito.broccoli`, which the old one-click updater cannot install. Afterwards, grant the permissions above again.
+   - Upgrading from v2.0.13 or earlier, **install by hand once**: the app identifier is now `com.ryanthehito.broccoli`, which the old one-click updater cannot install. Afterwards, grant the permissions above again.
 7. `source_open_connector.zip` and `source_agentsview.zip` in Releases: these two programs are too large for the GitHub repository, so they are attached to the release. The DMG already includes them; you only need them to run Broccoli from source. Unzip them into `open_connector/` and `agentsview/` folders next to the main script.
 
 <details>
@@ -349,7 +417,8 @@ When you upgrade from an old version, whatever is in `~/BroccoliAppPath` and `~/
    - ⌃⌥B: show / hide the main window
    - ⌃⌥N: show / hide the edge-docked window
    - ⌃⌥A: the AI tasks column
-   - Screenshot, same-position screenshot and the collapsed circle have no shortcut by default; set them if you like
+   - Screenshot, same-position screenshot, the circle, each layer of the grid, and voice input (circle / prompt box / long recording) have no shortcut by default; set them if you like
+   - A shortcut can also be a double press of ⌃, ⌥, ⇧, ⌘ or Fn, and a modifier key can be limited to the left or the right one
 
 6. **Custom prompts**: open Settings › Prompts › Saved prompts, click **New**, give the prompt a name in the list, write it in **Prompt body** below, then click **Save**. Wherever the body says `{text}`, what you type in the prompt goes in. To use one, pick Customize in the mode drop-down, then pick the prompt.
 
@@ -365,6 +434,10 @@ When you upgrade from an old version, whatever is in `~/BroccoliAppPath` and `~/
 8. **Browser scripts**: install [Tampermonkey](https://www.tampermonkey.net/) in your browser, then click a link below and Tampermonkey opens its install page. Both scripts need Broccoli to be running.
    - [Broccoli Bridge](https://github.com/Ryan-the-hito/Broccoli/raw/main/userscripts/broccoli-bridge.user.js): a 🥦 button appears in the bottom-right corner of web pages. Select some text (or not), click 🥦, write your question in the small box, then click "Send to Broccoli" or press ⌘↩. The title, address, selected text and question go into the prompt of Broccoli's current tab and are sent. "Sent to Broccoli ✓" means it went through; "Broccoli not running" means Broccoli isn't open.
    - [Broccoli WebFetch](https://github.com/Ryan-the-hito/Broccoli/raw/main/userscripts/broccoli-webfetch.user.js): a round button appears on web pages. Open it to "➕ Add Current Page", "📄 Export JSON" or "🗑 Clear All" (the same three are in the Tampermonkey menu). First, in Broccoli's Settings › General › Web & files, set "WebFetch download folder" to your browser's download folder. As soon as an exported file lands there, Broccoli takes it into the WebFetch panel at the top of the Agent tab; tick the pages you want and your next question takes them along.
+
+9. **The circle**: what a left click, right click, long press and drag each do is in the table under "The circle (the collapsed button)" above. The two you will use most: left click = bring out or fold the main window; right click = drip the input box and ask right there.
+
+10. **Browser Use in background**: click 🥦 in the menu bar and tick "🌐 Browser Use in background". From then on the Chrome used by browser steps is parked in a corner of the screen; when it needs you to sign in or do something, it comes out by itself and sends a notification. Click the item again to go back to the normal mode.
 
 <details>
 <summary>The old usage notes (v1, out of date)</summary>
@@ -501,6 +574,7 @@ GPL-3.0 license
 6. [xterm.js](https://github.com/xtermjs/xterm.js)
 7. [MathJax](https://github.com/mathjax/MathJax)
 8. [Mermaid](https://github.com/mermaid-js/mermaid)
+9. [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
 
 <details>
 <summary>Projects used by early versions</summary>
