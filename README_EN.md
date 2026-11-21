@@ -9,7 +9,7 @@
 
 **Broccoli is an AI workstation that floats on your Mac desktop.** One small window holds your API models, the web versions of ChatGPT, Claude and Gemini, Claude Code / Codex, and a terminal. It still chats, translates, polishes and summarizes like it always did. It can now also make a plan and carry it out: run commands, drive a browser, use your computer and edit files. When several tasks run at once, a coordinator decides who goes first, so no task overwrites another's changes. Every conversation and setting stays on your own Mac.
 
-Latest version: **v2.0.20** · Interface: English / 简体中文 / 日本語
+Latest version: **v2.0.21** · Interface: English / 简体中文 / 日本語
 
 <details>
 <summary>The old introduction (v1, out of date)</summary>
@@ -180,6 +180,8 @@ A single click waits for the double-click interval before it acts, because Brocc
 - Long-press the circle with the left button to dictate into other apps (see the section above).
 - The default chat model can tidy up what was heard, with tidy-up prompts you write yourself. Dictation learns from your corrections: a word you fixed is fixed automatically next time.
 - Besides Apple's built-in recognizer, you can download the Qwen3, SenseVoice and Whisper speech models. The speech and chat models on this Mac are listed in Settings › Models › Local models.
+- While you dictate with a long press on the circle, the card has three small choosers at the bottom: how the text is tidied, the language you speak, and which speech model listens. With a downloaded model, a change is used from the next sentence.
+- With a downloaded model (Qwen3, SenseVoice, Whisper), the sound is treated before it is recognized. Settings › General › Voice input has three switches: find the speech with a voice detector (on by default), make quiet sound louder (on by default), and remove noise such as typing (off by default). Quiet or far-away speech is still heard, and typing alone no longer turns into words. Apple Speech listens by itself and is not affected by these switches.
 
 ### And more
 
@@ -352,7 +354,7 @@ When you upgrade from an old version, whatever is in `~/BroccoliAppPath` and `~/
 
 ## Download and install
 
-1. Download the latest DMG from [Releases](https://github.com/Ryan-the-hito/Broccoli/releases) (for example `Broccoli_v2.0.20.dmg`).
+1. Download the latest DMG from [Releases](https://github.com/Ryan-the-hito/Broccoli/releases) (for example `Broccoli_v2.0.21.dmg`).
 2. Open the DMG and accept the licence (GPL-3.0).
 3. Drag Broccoli into the Applications folder.
 4. Open Broccoli. A 🥦 icon appears in the menu bar, with "🥦 Start Broccoli!", "⚙️ Settings", "🌐 Language", "🆕 Check for Updates" and more.
