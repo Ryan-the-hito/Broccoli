@@ -20,6 +20,7 @@ FEATURE_TRANSLATIONS = {
     'The language and tone new reports are written in': ('新报告用的语言和语气', '新しいレポートの言語と口調'),
     'Write now': ('现在写', '今すぐ書く'),
     'Regenerate': ('重新生成', '書き直す'),
+    'A picture of this report — of the selected text, when some is selected': ('把这份报告做成一张图片；选中了文字就只做选中的部分', 'このレポートを画像にします。文字を選択しているときは、その部分だけ'),
     'Writing the report…': ('正在写报告…', 'レポートを作成中…'),
     'No report yet. It is written tonight, or now with “Write now”.': ('还没有报告。今晚会自动写，也可以点「现在写」。', 'まだレポートはありません。今夜自動で作成されます。「今すぐ書く」でもすぐ作成できます。'),
     'Nothing on this day.': ('这一天没有使用记录。', 'この日の記録はありません。'),

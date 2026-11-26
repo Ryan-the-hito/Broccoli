@@ -1,0 +1,17 @@
+{
+  "version": "v0.48.0",
+  "published_at": "2026-11-22T22:02:26Z",
+  "release_url": "https://github.com/kenn-io/agentsview/releases/tag/v0.48.0",
+  "asset": {
+    "name": "agentsview_0.48.0_darwin_arm64.tar.gz",
+    "sha256": "9b9ad0e0966f53da8accec72b56431e69f5b7db72071df40699209c503b709e1",
+    "size": 53220631
+  },
+  "license_name": "MIT",
+  "license_sha256": "ffb1006bf3c32ec8da3ad6c5f693d8516eecb355df848a694332fa13174a77d4",
+  "taken_at": "2026-11-26T10:45:45+0900",
+  "test_run": {
+    "version": "agentsview v0.48.0",
+    "serve_flags": "ok"
+  }
+}

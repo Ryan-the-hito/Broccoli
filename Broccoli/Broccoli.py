@@ -3,6 +3,12 @@
 
 import functools
 import sys
+# Started by another AI app as its MCP server (shared/APP_MCP_SPEC.md, 2026-11-24): no window, only the bridge
+# that forwards to the tools of the family's apps on this Mac (Broccoli's own among them). Before anything
+# else — before Qt and before the single-instance lock — so stdout carries nothing but MCP messages.
+if '--mcp-stdio' in sys.argv[1:]:
+    import app_mcp_host
+    sys.exit(app_mcp_host.main())
 from PyQt6.QtWidgets import (QWidget, QPushButton, QApplication,
                              QLabel, QHBoxLayout, QVBoxLayout,
                              QSystemTrayIcon, QMenu, QDialog,
@@ -97,6 +103,7 @@ import fnmatch
 import glob
 import ipaddress
 import uuid
+import app_mcp_host       # the family's MCP service, card and bridge (shared/app_mcp_host.py, same copy in every app)
 import jieba
 import csv
 import sqlite3
@@ -111,6 +118,7 @@ import html
 import urllib3
 import logging
 import weakref
+import importlib.util
 import threading
 import queue
 import asyncio
@@ -3523,7 +3531,7 @@ def _resolve_bundled_resources_dir() -> str:
 
 
 NAME = 'Broccoli'
-VERSION = '2.0.20'
+VERSION = '2.0.22'
 DEFAULT_UI_SHORTCUT = '<ctrl>+<alt>+b'
 DEFAULT_SAME_POSITION_SCREENSHOT_SHORTCUT = ''
 # FIX-45: wakes the region-capture overlay (what the 📸 Shot button does), as
@@ -6082,7 +6090,7 @@ USER_GLOBAL_SETTING_KEYS = frozenset({
     'online_memory_snooze_when_idle', 'online_memory_sources', 'online_memory_route_from',
     'online_memory_route_to',
     # the person's own instructions and material
-    'custom_prompt', 'languages', 'skills', 'app_skills_disabled', 'agent_saved_comment_templates',
+    'custom_prompt', 'languages', 'skills', 'app_skills_disabled', 'app_connectors_disabled', 'agent_saved_comment_templates',
     'suggest_next_question',
     'external_context_enabled', 'external_context_use_embedding', 'external_context_max_chars',
     'external_context_sources', 'prefer_displayed_history_context', 'display_history_context_max_chars',
@@ -8359,6 +8367,42 @@ def cloud_device_display_name(device_id, cloud_root: str | None = None) -> str:
     return directory['names'].get(owner) or raw
 
 
+def remote_origin_context_note(request) -> str:
+    """For a question another device sent here: the user is NOT at this Mac, and the files the run
+    writes reach them by themselves (2026-11-22: asked from the MacBook to "save it as Word" and
+    then "put it on the remote path", the Mac mini's model knew of no other Mac and went looking
+    for network drives, and named a path that exists only on the Mac mini). Written for the model,
+    in English like the other context blocks. '' for a question typed on this Mac."""
+    if not isinstance(request, dict) or not request or request.get('standby'):
+        return ''   # (a scheduled task done for an offline Mac: nobody waits at the other Mac)
+    source = str(request.get('source_device_id', '') or '')
+    preferences = request.get('execution_preferences') if isinstance(request.get('execution_preferences'), dict) else {}
+    surface = str(request.get('origin_surface', '') or preferences.get('origin_surface', '') or '')
+    if source and cloud_device_is_this_mac(source) and surface != 'ios_shortcut':
+        return ''
+    here = broccoli_local_device_current_name() or 'this Mac'
+    if surface == 'ios_shortcut' or source == PHONE_SHORTCUT_DEVICE_ID:
+        return (
+            'Where the user is: this question was sent from the user\'s iPhone through Broccoli; you are '
+            'running on the Mac "{here}". The user reads your answer on the phone. Files you create or '
+            'change in this turn are sent to the phone together with the answer, by Broccoli. Paths on '
+            '"{here}" do not exist on the phone: name a file by its name, not by its path on this Mac.'
+        ).format(here=here)
+    there = cloud_device_display_name(source) or 'another Mac'
+    return (
+        'Where the user is: this question was sent from the user\'s other Mac, "{there}"; you are running '
+        'on the Mac "{here}", and the user is sitting at "{there}". Every file you create or change in '
+        'this turn is copied to "{there}" by Broccoli and opens there in the outputs panel, where the '
+        'user can open it, edit it, or save it anywhere on "{there}" (also as another kind of file, e.g. '
+        'Markdown as Word). Files stay where you put them on "{here}": when you say where a file is, give '
+        'its path and say it is on "{here}", and that the user also has it in the outputs panel on '
+        '"{there}" (a path on "{here}" such as ~/Documents/… does not exist on "{there}"). When the user '
+        'asks to have a file "on the remote/other computer", the file stays on "{here}" and they can '
+        'already read it on "{there}" through the outputs panel; you cannot write to a path on "{there}" '
+        'yourself, and must not look for network drives or servers for this.'
+    ).format(here=here, there=there)
+
+
 def note_local_former_device_ids(local_records, cloud_root: str | None = None) -> frozenset:
     """Find the ids this Mac had before its id was fixed, from its own conversations, and record
     them (only ever added). Evidence: a conversation file in this Mac's Conversations folder that
@@ -9690,6 +9734,7 @@ class RemoteNewConversationService:
             'resolved_agent_profile_id': str(state.get('resolved_agent_profile_id', '') or ''),
             'error': str(state.get('error', '') or ''),
             'base_revision_stale': bool(state.get('base_revision_stale', False)),
+            'question': state.get('remote_question') if isinstance(state.get('remote_question'), dict) else None,
         }
 
     @staticmethod
@@ -9945,10 +9990,18 @@ class RemoteNewConversationService:
         attempt_id = str(request.get('attempt_id', '') or '')
         outcome = None
         progress = None
+        asked, settled = {}, set(state.get('answered_interactions') or [])
         for event in self.transport.read_events(self._conversation_ref(request)):
             if str(event.get('attempt_id', '') or '') != attempt_id:
                 continue
             event_type = str(event.get('event_type', '') or '')
+            if event_type == 'interaction_request':          # a step asks (2026-11-25)
+                asked[str(event.get('interaction_id', '') or '')] = {
+                    key: event.get(key) for key in ('interaction_id', 'question', 'choices', 'recommended', 'why', 'expires_at')}
+                continue
+            if event_type == 'interaction_settled':
+                settled.add(str(event.get('interaction_id', '') or ''))
+                continue
             if event_type == 'attempt_terminal':
                 outcome = {
                     'state': str(event.get('state', '') or ''),
@@ -9964,6 +10017,8 @@ class RemoteNewConversationService:
                 outcome = {'state': 'failed', 'error': str(event.get('message', '') or '')}
             elif event_type == 'attempt_status':
                 progress = {'state': str(event.get('state', '') or ''), 'position': event.get('position', 0)}
+        open_questions = [item for key, item in asked.items() if key and key not in settled]
+        state['remote_question'] = open_questions[-1] if open_questions and outcome is None else None
         return outcome, progress
 
     def terminal_outcome(self, task_id: str) -> dict | None:
@@ -11969,6 +12024,10 @@ class RemoteTaskLifecycleManager:
         if event_type == 'supplement':
             return self.handle_supplement(payload)
         if event_type == 'interaction_response':
+            # a question of a step (2026-11-25): the window answers it (an answer is never an approval)
+            handler = getattr(self, 'interaction_handler', None)
+            if callable(handler):
+                return handler(payload)
             return {'status': 'interaction_pending_dispatch', 'payload': payload}
         if event_type == 'output_edited':
             return self.apply_output_edit(payload)
@@ -14071,6 +14130,70 @@ def append_background_vision_record(record: dict, max_records: int = DEFAULT_BAC
     }
     save_background_vision_records(payload)
     return payload
+
+
+# ── the activity feed (2026-11-23) ──────────────────────────────────────────────────────────────
+# What Broccoli noticed, one short line each, for any other app on this Mac that keeps a record of the
+# day: <data folder>/ActivityFeed/<YYYY-MM-DD>.jsonl, a line per entry {"at": local ISO time,
+# "kind": "vision", "text": …}. Broccoli only writes it (and drops files older than a week); who
+# reads it is not Broccoli's business — no app is named here. The first kind is background vision:
+# every finished round leaves one sentence, which the vision model is asked for at the head of its
+# answer ("NOW: …", cut off before the answer is used anywhere else) — no second request.
+ACTIVITY_FEED_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'ActivityFeed')
+ACTIVITY_FEED_KEEP_DAYS = 7
+ACTIVITY_FEED_TEXT_MAX_CHARS = 160
+_ACTIVITY_FEED_LOCK = threading.Lock()
+BACKGROUND_VISION_BRIEF_MARK = 'NOW:'
+BACKGROUND_VISION_BRIEF_INSTRUCTION = (
+    '\n\nBegin your answer with exactly one line that starts with "NOW: " and says in at most 15 words what '
+    'the user is doing right now (in the language of the rest of your answer). Then an empty line, then '
+    'the rest of your answer.'
+)
+
+
+def split_background_vision_brief(text: str) -> tuple[str, str]:
+    """(the one sentence, the rest of the answer). A model that left the "NOW:" line out: the first
+    sentence of its answer stands in, and the answer stays whole."""
+    text = str(text or '').strip()
+    lines = text.splitlines()
+    for index, line in enumerate(lines[:3]):
+        stripped = line.strip().lstrip('*#> ').strip()
+        if stripped.upper().startswith(BACKGROUND_VISION_BRIEF_MARK):
+            brief = stripped[len(BACKGROUND_VISION_BRIEF_MARK):].strip().strip('*').strip()
+            rest = '\n'.join(lines[:index] + lines[index + 1:]).strip()
+            if brief:
+                return ' '.join(brief.split())[:ACTIVITY_FEED_TEXT_MAX_CHARS], rest or brief
+    first = re.split(r'(?<=[.!?。！？])\s|\n', text, maxsplit=1)[0] if text else ''
+    first = ' '.join(first.lstrip('*#>- ').split())
+    if len(first) > 80:
+        first = first[:79].rstrip() + '…'
+    return first, text
+
+
+def append_activity_feed(kind: str, text: str, at: str = '', folder: str | None = None) -> bool:
+    text = ' '.join(str(text or '').split())[:ACTIVITY_FEED_TEXT_MAX_CHARS]
+    if not text:
+        return False
+    folder = folder or ACTIVITY_FEED_DIR
+    at = str(at or '') or datetime.datetime.now().isoformat(timespec='seconds')
+    try:
+        with _ACTIVITY_FEED_LOCK:
+            os.makedirs(folder, exist_ok=True)
+            path = os.path.join(folder, at[:10] + '.jsonl')
+            fresh = not os.path.exists(path)
+            with open(path, 'a', encoding='utf-8') as handle:
+                handle.write(json.dumps({'at': at, 'kind': str(kind), 'text': text}, ensure_ascii=False) + '\n')
+            if fresh:           # a new day began: files older than a week leave
+                limit = (datetime.date.today() - datetime.timedelta(days=ACTIVITY_FEED_KEEP_DAYS)).isoformat()
+                for name in os.listdir(folder):
+                    if name.endswith('.jsonl') and re.fullmatch(r'\d{4}-\d{2}-\d{2}\.jsonl', name) and name[:10] < limit:
+                        try:
+                            os.remove(os.path.join(folder, name))
+                        except OSError:
+                            pass
+        return True
+    except OSError:
+        return False
 
 
 def load_latest_background_vision_context() -> str:
@@ -17001,10 +17124,13 @@ class SettingsPageScrollArea(QScrollArea):
     with word-wrapping text to its preferred height (Memory endpoints: 648px
     preferred vs 424px needed) and scrolls pages that actually fit."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, table_page: bool = False):
         super().__init__(parent)
         self.setWidgetResizable(False)
         self.viewport().installEventFilter(self)
+        # A page whose table fills it (2026-11-22) is measured as its old layout measured it
+        # (the plain minimum), so on a tall panel it looks and fits exactly as before.
+        self._table_page = bool(table_page)
 
     def setWidget(self, widget):
         super().setWidget(widget)
@@ -17030,7 +17156,7 @@ class SettingsPageScrollArea(QScrollArea):
             return
         width = max(1, self.viewport().width())
         layout = page.layout()
-        if layout is not None and layout.hasHeightForWidth():
+        if layout is not None and layout.hasHeightForWidth() and not self._table_page:
             needed = layout.minimumHeightForWidth(width)
         else:
             needed = page.minimumSizeHint().height()
@@ -17730,8 +17856,9 @@ def ask_broccoli_text(parent, title: str, label: str, text: str = '', force_dark
     return dialog.value()
 
 
-def _center_broccoli_dialog(dialog: QDialog, parent=None):
-    dialog.adjustSize()
+def _center_broccoli_dialog(dialog: QDialog, parent=None, adjust_size: bool = True):
+    if adjust_size:
+        dialog.adjustSize()
     parent_widget = parent if isinstance(parent, QWidget) else QApplication.activeWindow()
     if parent_widget is None:
         parent_geometry = QApplication.primaryScreen().availableGeometry()
@@ -17769,6 +17896,45 @@ def _center_broccoli_dialog(dialog: QDialog, parent=None):
         top = max(bounds.top(), min(dialog_geometry.top(), bounds.bottom() - dialog_geometry.height() + 1))
         dialog_geometry.moveTo(left, top)
     dialog.move(dialog_geometry.topLeft())
+
+
+def place_dialog_over_owner(dialog) -> bool:
+    """A dialog the code did not place opens centred over the window that called it, kept on that screen
+    (style book 3: "对话框……出现在叫出它的那个窗口上方"). 2026-11-24, Ryan: "批注的那个窗口，它会飘到整个屏幕的
+    左上角。还有很多这种小窗口都会飘到左上角……所有的小窗口都得在这个主窗口的这个页面范围之内". Cause: Qt
+    centres a dialog on its parent just before showing it, but with Liquid Glass fit_dialog_window_to_card then
+    moves the window by its see-through margin, and for a dialog whose parent is a panel with its own native
+    glass view Qt's own guess was the screen's corner. Runs from the application's Show filter (after Qt's
+    guess, before the fit): only dialogs never moved by the code (WA_Moved — Qt clears it after its guess)."""
+    if not isinstance(dialog, QDialog) or not dialog.isWindow() or isinstance(dialog, QFileDialog):
+        return False
+    if dialog.testAttribute(Qt.WidgetAttribute.WA_Moved) or getattr(dialog, '_placed_over_owner', False):
+        return False
+    dialog._placed_over_owner = True
+    owner = dialog.parentWidget()
+    if owner is None:
+        owner = QApplication.activeWindow()
+        if owner is dialog:
+            owner = None
+    if owner is None:
+        main = globals().get('w3')
+        owner = main if isinstance(main, QWidget) and main.isVisible() else None
+    if owner is None:
+        return False
+    anchor = getattr(owner, 'dialog_anchor_rect', None)
+    target = owner if callable(anchor) else owner.window()
+    _center_broccoli_dialog(dialog, target, adjust_size=False)
+    return True
+
+
+class _DialogPlacementFilter(QObject):
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Show and isinstance(obj, QDialog):
+            try:
+                place_dialog_over_owner(obj)
+            except Exception:
+                logging.exception('A dialog could not be placed over its window.')
+        return False
 
 
 def _keep_window_above_owner(widget, owner=None, raise_level: bool = True) -> bool:
@@ -22306,6 +22472,8 @@ def call_mcp_http_tool(source: dict, tool_name: str, arguments: dict | None = No
 
 
 def list_mcp_source_tools(source: dict) -> list[dict]:
+    if isinstance(source.get('app_connector'), dict):
+        return list(source['app_connector'].get('tools') or [])     # from the app's card: nothing is connected to
     source_type = str(source.get('type', '') or '').strip().lower()
     if source_type == 'mcp_stdio':
         return list_mcp_stdio_tools(source)
@@ -22315,6 +22483,13 @@ def list_mcp_source_tools(source: dict) -> list[dict]:
 
 
 def call_mcp_source_tool(source: dict, tool_name: str, arguments: dict | None = None) -> dict:
+    if isinstance(source.get('app_connector'), dict):
+        if source['app_connector'].get('in_process'):        # Broccoli's own tools (broccoli_self_tool_source)
+            tools = broccoli_self_tools()
+            if tools is None:
+                raise RuntimeError("Broccoli's own tools are not ready.")
+            return tools.host.call_tool(tool_name, arguments or {})
+        return call_mcp_http_tool(app_connector_ready_source(source), tool_name, arguments)
     source_type = str(source.get('type', '') or '').strip().lower()
     if source_type == 'mcp_stdio':
         return call_mcp_stdio_tool(source, tool_name, arguments)
@@ -22341,7 +22516,11 @@ def _safe_openai_tool_name(source_index: int, tool_index: int, tool_name: str) -
 def build_mcp_tool_runtime_bundle(sources: list[dict]) -> tuple[list[dict], dict]:
     tool_defs = []
     tool_map = {}
-    for source_index, source in enumerate(normalize_external_context_sources(sources), start=1):
+    app_sources = [source for source in (sources or [])
+                   if isinstance(source, dict) and isinstance(source.get('app_connector'), dict)]
+    stored_sources = [source for source in (sources or [])
+                      if not (isinstance(source, dict) and isinstance(source.get('app_connector'), dict))]
+    for source_index, source in enumerate(normalize_external_context_sources(stored_sources) + app_sources, start=1):
         if source.get('type') not in {'mcp_http', 'mcp_stdio'}:
             continue
         if not source.get('enabled', True) or not source.get('use_in_tool_runtime', True):
@@ -22387,6 +22566,16 @@ def build_mcp_tool_runtime_bundle(sources: list[dict]) -> tuple[list[dict], dict
                     'connector': True,
                 }
                 continue
+            if isinstance(source.get('app_connector'), dict):
+                reads_only = app_connector_tool_reads_only(tool)
+                tool_map[function_name] = {
+                    'source': source,
+                    'source_name': source_name,
+                    'tool_name': tool_name,
+                    'read_only': reads_only,
+                    'mutating': not reads_only,
+                }
+                continue
             tool_map[function_name] = {
                 'source': source,
                 'source_name': source_name,
@@ -22395,6 +22584,2167 @@ def build_mcp_tool_runtime_bundle(sources: list[dict]) -> tuple[list[dict], dict
                 'mutating': is_mcp_tool_potentially_mutating(tool_name),
             }
     return tool_defs, tool_map
+
+
+# ── tools other apps bring (2026-11-23) ─────────────────────────────────────────────────────────
+# An app on this Mac that wants Broccoli's Agent to use it runs a small MCP server of its own
+# (127.0.0.1 only) and leaves a card in the family's folder (2026-11-24: ~/Library/Application Support/
+# com.ryanthehito.apps/AppConnectors — no longer inside Broccoli's data folder, so the apps serve their
+# tools whether or not Broccoli is installed; app_mcp_host.default_card_dir()) as <its id>.json:
+#   {"id", "name", "version", "description", "transport": "streamable_http",
+#    "url": "http://127.0.0.1:<port>/mcp", "headers": {"Authorization": "Bearer <token>"},
+#    "pid": <its process, null when it is not running>, "started": …,
+#    "tools":  [what its tools/list answers: name / description / inputSchema / annotations],
+#    "launch": {"bundle_id": …, "path": "/Applications/X.app", "args": [...]}   (optional; args optional)}
+# Broccoli reads whatever is there, the way it reads AppSkills: no app is named in this code, and an
+# app that is not installed leaves nothing. The tools are offered straight from the card (nothing is
+# connected to until a tool is called). A card whose process is gone counts only when it carries
+# "launch": the app is then opened in the background at the first call and waited for.
+# Settings › External context lists the cards (read only, "from another app"); each can be unticked.
+APP_CONNECTORS_DIR = app_mcp_host.default_card_dir()
+APP_CONNECTORS_MAX_FILES = 40
+APP_CONNECTOR_MAX_BYTES = 400_000
+APP_CONNECTOR_MAX_TOOLS = 80
+APP_CONNECTOR_LAUNCH_WAIT_SECONDS = 40
+APP_CONNECTOR_SOURCE_PREFIX = 'app-connector:'
+_APP_CONNECTORS_CACHE = {'key': None, 'records': []}
+_APP_CONNECTORS_LOCK = threading.Lock()
+_APP_CONNECTOR_LAUNCH_LOCK = threading.Lock()
+
+
+def normalize_app_connectors_disabled(raw) -> list:
+    out = []
+    for item in raw if isinstance(raw, (list, tuple, set)) else []:
+        name = str(item or '').strip().lower()[:200]
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def _app_connector_pid_alive(pid) -> bool:
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _app_connector_local_url(value) -> str:
+    """The card's address when it is on this Mac (the loopback interface), else ''."""
+    url = str(value or '').strip()
+    try:
+        parts = urlparse(url)
+        host = (parts.hostname or '').lower()
+    except ValueError:
+        return ''
+    if parts.scheme != 'http' or host not in {'127.0.0.1', 'localhost', '::1'}:
+        return ''
+    return url
+
+
+def _app_connector_launch(raw) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    bundle_id = str(raw.get('bundle_id', '') or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.\-]{2,150}', bundle_id):
+        bundle_id = ''
+    path = str(raw.get('path', '') or '').strip()
+    if not (path.endswith('.app') and os.path.isabs(path) and os.path.isdir(path)):
+        path = ''
+    if not (bundle_id or path):
+        return {}
+    launch = {'bundle_id': bundle_id, 'path': path}
+    # optional words the app wants at a start in the background (its own "start quietly" argument)
+    args = [str(arg) for arg in (raw.get('args') if isinstance(raw.get('args'), list) else [])
+            if isinstance(arg, str) and 0 < len(arg) <= 200][:8]
+    if args:
+        launch['args'] = args
+    return launch
+
+
+def _normalize_app_connector_card(raw, file_path: str) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    card_id = str(raw.get('id', '') or '').strip() or os.path.splitext(os.path.basename(file_path))[0]
+    name = ' '.join(str(raw.get('name', '') or '').split())[:80] or card_id
+    tools = []
+    for tool in (raw.get('tools') if isinstance(raw.get('tools'), list) else [])[:APP_CONNECTOR_MAX_TOOLS]:
+        if not isinstance(tool, dict) or not str(tool.get('name', '') or '').strip():
+            continue
+        tools.append({
+            'name': str(tool['name']).strip(),
+            'description': str(tool.get('description', '') or '').strip(),
+            'inputSchema': tool.get('inputSchema') if isinstance(tool.get('inputSchema'), dict) else {'type': 'object', 'properties': {}},
+            'annotations': tool.get('annotations') if isinstance(tool.get('annotations'), dict) else {},
+        })
+    headers = raw.get('headers') if isinstance(raw.get('headers'), dict) else {}
+    record = {
+        'id': card_id, 'name': name, 'file': file_path,
+        'version': str(raw.get('version', '') or '').strip()[:40],
+        'description': ' '.join(str(raw.get('description', '') or '').split())[:300],
+        'url': _app_connector_local_url(raw.get('url')),
+        'headers': {str(key): str(value) for key, value in headers.items() if str(key).strip()},
+        'pid': raw.get('pid'), 'tools': tools, 'launch': _app_connector_launch(raw.get('launch')),
+    }
+    record['running'] = bool(record['url']) and _app_connector_pid_alive(record['pid'])
+    if not tools or not (record['running'] or record['launch']):
+        return None
+    return record
+
+
+def load_app_connector_cards(folder: str | None = None) -> list[dict]:
+    """The cards in the AppConnectors folder that can be used now: the app is running, or the card says
+    how to open it. The files are read again only when one was added, removed or changed; whether the
+    app is running is looked up every time (one signal-0 per card)."""
+    folder = folder or APP_CONNECTORS_DIR
+    try:
+        names = sorted(name for name in os.listdir(folder)
+                       if name.lower().endswith('.json') and not name.startswith(('.', '_')))[:APP_CONNECTORS_MAX_FILES]
+    except OSError:
+        return []
+    stamps = []
+    for name in names:
+        try:
+            info = os.stat(os.path.join(folder, name))
+        except OSError:
+            continue
+        if 0 < info.st_size <= APP_CONNECTOR_MAX_BYTES:
+            stamps.append((name, info.st_mtime_ns, info.st_size))
+    key = (folder, tuple(stamps))
+    with _APP_CONNECTORS_LOCK:
+        raws = list(_APP_CONNECTORS_CACHE['records']) if _APP_CONNECTORS_CACHE['key'] == key else None
+    if raws is None:
+        raws = []
+        for name, _mtime, _size in stamps:
+            path = os.path.join(folder, name)
+            try:
+                with open(path, 'r', encoding='utf-8') as handle:
+                    raws.append((path, json.load(handle)))
+            except (OSError, ValueError):
+                continue
+        with _APP_CONNECTORS_LOCK:
+            _APP_CONNECTORS_CACHE.update({'key': key, 'records': list(raws)})
+    cards, seen = [], {BROCCOLI_BUNDLE_ID.lower()}      # Broccoli's own card is for the other AI apps
+    for path, raw in raws:
+        card = _normalize_app_connector_card(raw, path)
+        if card is None or card['id'].lower() in seen:
+            continue
+        seen.add(card['id'].lower())
+        cards.append(card)
+    return cards
+
+
+def _app_connector_source(card: dict) -> dict:
+    """A card as an MCP source of the tool runtime (never stored in the settings)."""
+    token = ''
+    header_lines = []
+    for key, value in (card.get('headers') or {}).items():
+        if key.lower() == 'authorization' and value.lower().startswith('bearer '):
+            token = value[7:].strip()
+        else:
+            header_lines.append(f'{key}: {value}')
+    return {
+        'id': APP_CONNECTOR_SOURCE_PREFIX + card['id'], 'type': 'mcp_http', 'name': card['name'], 'enabled': True,
+        'endpoint': card.get('url') or 'http://127.0.0.1/', 'transport': 'streamable_http', 'auth_token': token,
+        'headers': '\n'.join(header_lines), 'read_only': False, 'auto_context': False, 'use_in_tool_runtime': True,
+        'app_connector': {'id': card['id'], 'file': card['file'], 'tools': card['tools'], 'launch': card['launch'],
+                          'running': card['running']},
+    }
+
+
+def load_app_connector_sources(globals_store: dict | None = None, folder: str | None = None) -> list[dict]:
+    """The usable cards the person has not unticked, as MCP sources."""
+    if globals_store is None:
+        globals_store = load_settings_store().get('globals', {})
+    off = set(normalize_app_connectors_disabled((globals_store or {}).get('app_connectors_disabled', [])))
+    sources = [_app_connector_source(card) for card in load_app_connector_cards(folder) if card['id'].lower() not in off]
+    own = broccoli_self_tool_source() if folder is None else None    # Broccoli's own tools, called in this process
+    return sources + ([own] if own is not None else [])
+
+
+def app_connector_tool_reads_only(tool: dict) -> bool:
+    """The app's own word (annotations.readOnlyHint) when it gave one, else the tool's name."""
+    hint = (tool.get('annotations') or {}).get('readOnlyHint') if isinstance(tool, dict) else None
+    if isinstance(hint, bool):
+        return hint
+    return not is_mcp_tool_potentially_mutating(str((tool or {}).get('name', '') or ''))
+
+
+def _app_connector_open_app(launch: dict) -> bool:
+    """Opens the app without bringing it to the front (-g) and without showing its windows (-j)."""
+    if launch.get('path'):
+        command = ['/usr/bin/open', '-g', '-j', launch['path']]
+    elif launch.get('bundle_id'):
+        command = ['/usr/bin/open', '-g', '-j', '-b', launch['bundle_id']]
+    else:
+        return False
+    if launch.get('args'):
+        command += ['--args'] + list(launch['args'])
+    try:
+        return subprocess.run(command, capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def app_connector_ready_source(source: dict, wait_seconds: float | None = None) -> dict:
+    """The source with the app's address of this moment. The app is not running → it is opened in the
+    background (when its card says how) and its new card is waited for. Raises with words the model
+    can pass on when the app cannot be reached."""
+    meta = source.get('app_connector') or {}
+    folder = os.path.dirname(str(meta.get('file', '') or '')) or APP_CONNECTORS_DIR
+    wanted = str(meta.get('id', '') or '').lower()
+
+    def current():
+        for card in load_app_connector_cards(folder):
+            if card['id'].lower() == wanted:
+                return card
+        return None
+
+    card = current()
+    if card is not None and card['running']:
+        return _app_connector_source(card)
+    name = str(source.get('name', '') or 'The app')
+    launch = (card or {}).get('launch') or {}
+    if not launch:
+        raise RuntimeError(f'{name} is not running, so its tools cannot be used right now.')
+    with _APP_CONNECTOR_LAUNCH_LOCK:
+        card = current()
+        if card is not None and card['running']:
+            return _app_connector_source(card)
+        if not _app_connector_open_app(launch):
+            raise RuntimeError(f'{name} is not running and could not be opened.')
+        deadline = time.time() + (APP_CONNECTOR_LAUNCH_WAIT_SECONDS if wait_seconds is None else wait_seconds)
+        while time.time() < deadline:
+            time.sleep(0.5)
+            card = current()
+            if card is not None and card['running']:
+                return _app_connector_source(card)
+    raise RuntimeError(f'{name} was opened but did not get ready in time. Try again in a moment.')
+
+
+# ── Broccoli's own tools (2026-11-24) ────────────────────────────────────────────────────────
+# Ryan: "Brockley 他自己的 MCP 我其实也很想做上……控制他自己，管理这个历史记录……加上某一个 profile……
+# 各种各样的功能"; "接口通用，别的也能接"; "全做". The same rules as every app of the family
+# (shared/APP_MCP_SPEC.md, app_mcp_host.py next to this file): one list of tools, three ways in —
+# - Broccoli's own Agent: an in-process source (no network), approval by the tool's readOnlyHint as for
+#   any app's tools;
+# - other AI apps (Claude Desktop, Cursor, …): Broccoli's card in the family folder + the bridge
+#   (Broccoli started with --mcp-stdio), switched by Settings › External context ›
+#   "Let other AI apps use Broccoli's tools" (APP_MCP_SERVICE_ENABLED_KEY, on unless switched off);
+# - the person: the window, as always.
+# Every tool runs on the service's thread: files and the settings store are read there; what touches the
+# window (rename, archive, open, start a question, refresh lists) is handed to the GUI thread and waited
+# for (BroccoliGuiCall). A tool never opens a dialog. Nothing reads an API key back out.
+APP_MCP_SERVICE_ENABLED_KEY = 'app_mcp_service_enabled'
+BROCCOLI_SELF_SOURCE_ID = APP_CONNECTOR_SOURCE_PREFIX + BROCCOLI_BUNDLE_ID
+SELF_TOOL_ANSWERS_DIR_NAME = 'AppConnectorAnswers'      # <user folder>/…/<request id>.json (_write_external_reply)
+SELF_TOOL_ANSWER_KEEP_DAYS = 7
+SELF_TOOL_TEXT_LIMIT = 6000                             # one answer / output given back, at most (characters)
+SELF_TOOL_SKILL_MAX_CHARS = 20000                       # a skill's instructions, at most (characters)
+SELF_TOOL_SKILL_DESCRIPTION_MAX = 600
+SELF_TOOL_SKILL_NAME_MAX = 80
+SELF_TOOL_SKILLS_MAX = 200
+# The settings update_settings may set: key → (kind, what to apply after, words for the model). Left out on
+# purpose: everything about approval and autonomy, code running, the connectors' own switches, shortcuts,
+# keys and tokens — a model must not be able to loosen what holds it, and those stay with the person.
+SELF_TOOL_SETTINGS = {
+    'languages': ('lines', '', 'The languages offered for answers and translation; the first is the main one.'),
+    'suggest_next_question': ('bool', '', 'Suggest a next question under an answer.'),
+    'clear_attachments_after_send': ('bool', '', 'Empty the attachment tray after sending.'),
+    'allow_blank_prompt_with_attachments': ('bool', '', 'Sending attachments without any text is allowed.'),
+    'pdf_max_pages': (('int', 0, 500), '', 'Pages of an attached PDF that are sent (0 = all).'),
+    'always_on_top': ('bool', 'always_on_top', 'The main window above other windows.'),
+    'show_on_all_spaces': ('bool', 'all_spaces', 'The window on every desktop.'),
+    'edge_auto_hide_enabled': ('bool', 'edge_hide', 'Hide the window at the screen edge.'),
+    'edge_trigger_hints': ('bool', 'edge_hint', 'Show the hint at the screen edge.'),
+    'web_auto_open_last_urls': ('bool', '', 'Open the last web pages again at start.'),
+    'web_lifecycle_mode': (('choice', ('off', 'balanced', 'aggressive')), 'web_lifecycle', 'How hard unused web pages are put to sleep.'),
+    'completion_alert_sound': ('bool', '', 'A sound when an answer is ready.'),
+    'completion_alert_reminder': ('bool', '', 'A reminder (Apple Reminders) when an answer is ready and not looked at.'),
+    'usage_bar_enabled': ('bool', 'usage_bar', 'The usage bars.'),
+    'external_context_enabled': ('bool', '', 'Use the external context sources at all.'),
+    'external_context_use_embedding': ('bool', '', 'Pick external context by meaning (embedding).'),
+    'background_vision_enabled': ('bool', 'vision', 'Look at the screen in the background and keep short notes.'),
+    'background_vision_interval_sec': (('int', 1, 3600), 'vision', 'Seconds between two looks (fixed_interval).'),
+    'background_vision_schedule_mode': (('choice', ('fixed_interval', 'after_completion')), 'vision', 'Look every N seconds, or again after each look is done.'),
+    'background_vision_show_overlay': ('bool', 'vision', 'Show what was seen as a small overlay.'),
+    'online_memory_enabled': ('bool', '', 'Keep the memory in step with the person\'s online AI accounts.'),
+    'online_memory_default_interval_minutes': (('int', 1, 525600), '', 'Minutes between two memory syncs.'),
+    'report_daily': ('bool', '', 'Write a daily report.'),
+    'report_weekly': ('bool', '', 'Write a weekly report.'),
+    'report_monthly': ('bool', '', 'Write a monthly report.'),
+    'report_language': ('text', '', 'The language reports are written in ("" = the main language).'),
+    'report_to_notes': ('bool', '', 'Also put reports into Apple Notes.'),
+    'voice_input_tidy': ('bool', '', 'Tidy dictated text before it is put in.'),
+    'voice_sound_detector': ('bool', '', 'Voice input: detect speech.'),
+    'voice_sound_gain': ('bool', '', 'Voice input: make quiet speech louder.'),
+    'voice_sound_denoise': ('bool', '', 'Voice input: remove noise.'),
+}
+_BROCCOLI_SELF = {'tools': None}
+
+
+class SelfToolError(Exception):
+    """Told to the calling model as the tool's error."""
+
+
+class BroccoliGuiCall:
+    """Run a function on the GUI thread from a worker and wait for what it returns (made on the GUI thread)."""
+
+    def __init__(self, parent=None):
+        self.bridge = GuiCallBridge(parent)
+
+    def __call__(self, fn, timeout=25.0):
+        if threading.current_thread() is threading.main_thread():
+            return fn()
+        box, done = {}, threading.Event()
+
+        def run():
+            try:
+                box['value'] = fn()
+            except BaseException as exc:
+                box['error'] = exc
+            finally:
+                done.set()
+        self.bridge.call.emit(run)
+        if not done.wait(timeout):
+            raise SelfToolError('Broccoli is busy right now. Try again in a moment.')
+        if 'error' in box:
+            raise box['error']
+        return box.get('value')
+
+
+def _self_tool_text(value, limit=SELF_TOOL_TEXT_LIMIT) -> str:
+    text = str(value or '')
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f'\n… [{len(text) - limit} more characters]'
+
+
+def broccoli_self_tools(window=None):
+    """The one BroccoliSelfTools of this process (made with the window, on the GUI thread)."""
+    if _BROCCOLI_SELF['tools'] is None and window is not None:
+        _BROCCOLI_SELF['tools'] = BroccoliSelfTools(window)
+    return _BROCCOLI_SELF['tools']
+
+
+def broccoli_self_tool_source() -> dict | None:
+    """Broccoli's own tools for its own Agent: an app-connector source that is called in this process."""
+    tools = _BROCCOLI_SELF['tools']
+    if tools is None:
+        return None
+    return {
+        'id': BROCCOLI_SELF_SOURCE_ID, 'type': 'mcp_http', 'name': NAME, 'enabled': True,
+        'endpoint': 'http://127.0.0.1/', 'transport': 'streamable_http', 'auth_token': '', 'headers': '',
+        'read_only': False, 'auto_context': False, 'use_in_tool_runtime': True,
+        'app_connector': {'id': BROCCOLI_BUNDLE_ID, 'file': '', 'tools': tools.host._tool_list(), 'launch': {},
+                          'running': True, 'in_process': True},
+    }
+
+
+def broccoli_bridge_setup_json() -> str:
+    """The lines another AI app's MCP settings take: this program started with --mcp-stdio."""
+    return app_mcp_host.bridge_setup_json()
+
+
+def _self_tool_model_roles() -> tuple:
+    """The roles update_model_role may set: the conversation's roles, embedding and the background look —
+    not the model that reviews approvals."""
+    return tuple(slot for slot in MODEL_ROLE_SLOTS if slot != APPROVAL_REVIEW_CANDIDATES_KEY) + ('embedding', 'background_vision')
+
+
+class BroccoliSelfTools:
+    def __init__(self, window):
+        self.w = window
+        self.on_main = BroccoliGuiCall(window)
+        self.requests = {}            # request id → {'path', 'at'} of questions started here (this run of Broccoli)
+        self.host = app_mcp_host.AppMcpHost(
+            BROCCOLI_BUNDLE_ID, NAME, VERSION,
+            description="The person's AI assistant: their conversations (history, groups), model profiles, "
+                        "permanent memory, skills, saved prompts, scheduled tasks, deliverables, reports, "
+                        "what is running, its settings and the sources it draws on.",
+            instructions="Broccoli keeps the person's conversations with AI models. Find a conversation with "
+                         "list_conversations first and use its id. Asking a question (create_question) runs in "
+                         "the background and uses the person's model and money: start it, then fetch the answer "
+                         "with read_question_answer. Look before you change, and say what you will change. "
+                         "Deleting a conversation archives it (update_conversation_restore brings it back).")
+        self._register()
+
+    # ---- helpers
+    def _answers_dir(self) -> str:
+        return os.path.join(user_data_dir(), SELF_TOOL_ANSWERS_DIR_NAME)
+
+    def _conversation(self, args, *, archived_ok=False):
+        reference = str(args.get('conversation_id', '') or '').strip()
+        if not reference:
+            raise SelfToolError('conversation_id is needed (list_conversations gives it).')
+        path = resolve_conversation_path(reference)
+        record = load_conversation_record(path, include_retrieval=False) if path else None
+        if not isinstance(record, dict) and archived_ok:
+            # an archived one is no longer resolved: its file on this Mac, read as it is
+            for local in conversation_local_json_paths(conversation_id_for_reference(reference) or reference):
+                try:
+                    with open(local, encoding='utf-8') as handle:
+                        record = normalize_conversation_record(json.load(handle), local, include_retrieval=False)
+                    path = local
+                    break
+                except (OSError, ValueError, TypeError):
+                    record = None
+        if not isinstance(record, dict):
+            raise SelfToolError(f'There is no conversation {reference!r} on this Mac.')
+        conversation_id = str(record.get('id', '') or conversation_id_from_path(path))
+        if conversation_id in guest_share_conversation_ids():
+            raise SelfToolError('That conversation belongs to a person this Mac is shared with.')
+        if not archived_ok and conversation_archive_hidden(conversation_id):
+            raise SelfToolError('That conversation is archived (update_conversation_restore brings it back).')
+        return str(record.get('path', '') or path), record, conversation_id
+
+    def _busy(self, paths) -> str:
+        return self.on_main(lambda: self.w._conversation_busy_reason(
+            list(paths) + [resolve_conversation_path(p) or p for p in paths]))
+
+    @staticmethod
+    def _group_lookup(value, data=None):
+        value = str(value or '').strip()
+        data = data or load_conversation_groups()
+        for group in data.get('groups') or []:
+            if group.get('id') == value or str(group.get('name', '')).strip().lower() == value.lower():
+                return group
+        return None
+
+    def _groups_changed(self):
+        def refresh():
+            panel = getattr(self.w, 'history_panel', None)
+            if panel is not None:
+                panel.groups_changed.emit()
+            self.w._refresh_history_panel()
+        self.on_main(refresh)
+
+    def _settings_panel_open(self) -> bool:
+        panel = getattr(self.w, 'settings_panel', None)
+        return bool(panel is not None and self.on_main(panel.isVisible))
+
+    def _settings_changed(self):
+        def refresh():
+            panel = getattr(self.w, 'settings_panel', None)
+            if panel is not None and not panel.isVisible():
+                panel.reload_from_store()
+        self.on_main(refresh)
+
+    # ---- conversations
+    def list_conversations(self, a):
+        limit = max(1, min(200, int(a.get('limit') or 30)))
+        text = str(a.get('text', '') or '').strip().lower()
+        data = load_conversation_groups()
+        names = {g['id']: g.get('name', '') for g in data.get('groups') or []}
+        assigned = data.get('assignments') or {}
+        if a.get('archived'):
+            rows = []
+            for cid, entry in (load_conversation_archive().get('conversations') or {}).items():
+                if isinstance(entry, dict) and entry.get('state') == 'archived':
+                    if text and text not in str(entry.get('title', '')).lower():
+                        continue
+                    rows.append({'id': cid, 'title': entry.get('title', ''), 'archived_at': entry.get('at', '')})
+            rows.sort(key=lambda r: str(r['archived_at']), reverse=True)
+            return {'archived': rows[:limit], 'count': len(rows)}
+        group = None
+        if a.get('group'):
+            group = self._group_lookup(a['group'], data)
+            if group is None:
+                raise SelfToolError('No group named %r. Groups: %s' % (a['group'], ', '.join(names.values()) or 'none'))
+        guests = guest_share_conversation_ids()
+        rows = []
+        for record in conversation_history_index_records():
+            cid = str(record.get('conversation_id', '') or '')
+            if not cid or cid in guests:
+                continue
+            if group is not None and assigned.get(cid) != group['id']:
+                continue
+            if text and text not in str(record.get('search_blob', '') or record.get('title', '')).lower():
+                continue
+            rows.append({'id': cid, 'title': record.get('title', ''), 'updated': record.get('updated_at', ''),
+                         'group': names.get(assigned.get(cid, ''), '')})
+        result = {'conversations': rows[:limit], 'count': len(rows)}
+        if not rows and history_index_needs_rebuild():
+            result['note'] = 'The history list is still being built; try again in a few seconds.'
+        return result
+
+    def read_conversation(self, a):
+        path, record, cid = self._conversation(a, archived_ok=True)
+        turns = conversation_turns_from_messages(record.get('messages') or [])
+        last = int(a.get('last_turns') or 10)
+        shown = turns if last <= 0 else turns[-last:]
+        group = conversation_group_for_conversation(cid)
+        owner = conversation_owned_elsewhere(record)
+        return {
+            'id': cid, 'title': record.get('title', ''), 'created': record.get('created_at', ''),
+            'updated': record.get('updated_at', ''), 'group': (group or {}).get('name', ''),
+            'archived': conversation_archive_hidden(cid),
+            'on_another_mac': self.on_main(lambda: self.w._conversation_device_name(owner)) if owner else '',
+            'turns_total': len(turns), 'outputs': len(record.get('outputs') or []),
+            'turns': [{'question': _self_tool_text(t.get('question', ''), 3000), 'asked': t.get('question_time', ''),
+                       'answer': _self_tool_text(t.get('answer', '')), 'answered': t.get('answer_time', '')}
+                      for t in shown],
+        }
+
+    def open_conversation(self, a):
+        path, _record, cid = self._conversation(a)
+        self.on_main(lambda: self.w._activate_agent_conversation_badge(path))
+        return f'Opened {cid} in the Broccoli window.'
+
+    def _existing_file(self, a) -> str:
+        path = os.path.abspath(os.path.expanduser(str(a.get('path', '') or '').strip()))
+        if not str(a.get('path', '') or '').strip():
+            raise SelfToolError('path is needed (the full path of a file on this Mac).')
+        if not os.path.isfile(path):
+            raise SelfToolError(f'There is no file {path!r} on this Mac.')
+        return path
+
+    def open_reader(self, a):
+        path = self._existing_file(a)
+        if not reader_supported_file(path):
+            raise SelfToolError('The reader cannot show this kind of file (it shows PDF, Office files, text and '
+                                'pictures); open_editor opens files to change them.')
+        page = None
+        try:
+            page = max(1, int(a.get('page'))) if a.get('page') not in (None, '') else None
+        except (TypeError, ValueError):
+            page = None
+        # the reader counts pages from 0
+        self.on_main(lambda: self.w.open_reader_window(path, page=(page - 1) if page else None))
+        return f'Opened {os.path.basename(path)} in the reader' + (f' at page {page}.' if page else '.')
+
+    def open_editor(self, a):
+        path = self._existing_file(a)
+        self.on_main(lambda: self.w.open_editor_window([path]))
+        return f'Opened {os.path.basename(path)} in the editor.'
+
+    def update_conversation_title(self, a):
+        path, record, cid = self._conversation(a)
+        title = sanitize_conversation_title(str(a.get('title', '') or ''))
+        if not title:
+            raise SelfToolError('title is empty.')
+        self.on_main(lambda: self.w._rename_conversation(path, title))
+        if conversation_owned_elsewhere(record):
+            return f'Asked the Mac that owns it to rename it to {title!r}.'
+        return f'Renamed to {title!r}.'
+
+    def delete_conversation(self, a):
+        path, _record, cid = self._conversation(a)
+        reason = self._busy([path])
+        if reason:
+            raise SelfToolError(f'That conversation is busy ({reason}); try again when it has finished.')
+        self.on_main(lambda: self.w._delete_conversation(path))
+        return f'Archived {cid}. It can be brought back with update_conversation_restore.'
+
+    def update_conversation_restore(self, a):
+        cid = conversation_id_for_reference(str(a.get('conversation_id', '') or '').strip()) \
+            or str(a.get('conversation_id', '') or '').strip()
+        result = restore_conversation(cid)
+        if result.get('status') != 'restored':
+            raise SelfToolError(f'Could not restore {cid!r} ({result.get("status")}).')
+        self.on_main(self.w._after_conversations_changed)
+        return f'Restored {cid}.'
+
+    def create_merged_conversation(self, a):
+        ids = [str(i or '').strip() for i in (a.get('conversation_ids') or []) if str(i or '').strip()]
+        if len(ids) < 2:
+            raise SelfToolError('Give at least two conversation_ids.')
+        paths, records = [], []
+        for cid in ids:
+            path, record, _cid = self._conversation({'conversation_id': cid})
+            paths.append(path)
+            records.append(record)
+        if self.on_main(lambda: bool(getattr(self.w, '_merge_running', False))):
+            raise SelfToolError('Broccoli is merging other conversations; try again in a moment.')
+        reason = self._busy(paths)
+        if reason:
+            raise SelfToolError(f'One of them is busy ({reason}); try again when it has finished.')
+        self.on_main(lambda: setattr(self.w, '_merge_running', True))
+        try:
+            result = merge_conversations(paths, title=str(a.get('title', '') or ''))
+        finally:
+            self.on_main(lambda: setattr(self.w, '_merge_running', False))
+        if result.get('status') != 'merged':
+            self.on_main(self.w._after_conversations_changed)
+            raise SelfToolError(f'Not merged ({result.get("status")}); nothing was changed.')
+        archived = set(result.get('archived') or [])
+        gone = [str(s.get('path', '') or '') for s in result.get('sources') or [] if str(s.get('id', '') or '') in archived]
+
+        def tidy():
+            for path in set(paths + gone):
+                if path in gone or conversation_id_from_path(path) in archived or resolve_conversation_path(path) in gone:
+                    self.w._forget_conversation_ui_state(path)
+            self.w._after_conversations_changed()
+        self.on_main(tidy)
+        ordered = _merge_block_order(records)
+        threading.Thread(target=lambda: rewrite_merged_conversation_summary(result['path'], ordered),
+                         name='broccoli-merge-summary', daemon=True).start()
+        return {'merged_into': result.get('conversation_id'), 'title': result.get('title', ''),
+                'archived': sorted(archived), 'messages': result.get('messages')}
+
+    # ---- groups
+    def list_groups(self, a):
+        data = load_conversation_groups()
+        counts = {}
+        for gid in (data.get('assignments') or {}).values():
+            counts[gid] = counts.get(gid, 0) + 1
+        return [{'id': g['id'], 'name': g.get('name', ''), 'conversations': counts.get(g['id'], 0),
+                 'kind': g.get('auto', '') or 'own'} for g in data.get('groups') or []]
+
+    def create_group(self, a):
+        name = ' '.join(str(a.get('name', '') or '').split())[:80]
+        if not name:
+            raise SelfToolError('name is empty.')
+        if self._group_lookup(name):
+            raise SelfToolError(f'There is already a group named {name!r}.')
+        group = create_conversation_group(name)
+        self._groups_changed()
+        return {'id': group['id'], 'name': group['name']}
+
+    def update_group(self, a):
+        group = self._group_lookup(a.get('group'))
+        name = ' '.join(str(a.get('name', '') or '').split())[:80]
+        if group is None or not name:
+            raise SelfToolError('Give an existing group (name or id) and a new name.')
+        update_conversation_groups(lambda d: [g.__setitem__('name', name) for g in d['groups'] if g['id'] == group['id']])
+        self._groups_changed()
+        return f'Renamed the group to {name!r}.'
+
+    def delete_group(self, a):
+        group = self._group_lookup(a.get('group'))
+        if group is None:
+            raise SelfToolError('No such group.')
+        delete_conversation_group(group['id'])
+        self._groups_changed()
+        return f'Deleted the group {group.get("name", "")!r}; its conversations stay, in no group.'
+
+    def update_conversation_group(self, a):
+        _path, _record, cid = self._conversation(a)
+        wanted = str(a.get('group', '') or '').strip()
+        if not wanted:
+            set_conversation_group(cid, '')
+            self._groups_changed()
+            return 'Taken out of its group.'
+        group = self._group_lookup(wanted)
+        if group is None:
+            raise SelfToolError(f'No group named {wanted!r} (create_group makes one).')
+        set_conversation_group(cid, group['id'])
+        self._groups_changed()
+        return f'Put into {group.get("name", "")!r}.'
+
+    # ---- asking
+    def _prune_answers(self):
+        folder = self._answers_dir()
+        cutoff = time.time() - SELF_TOOL_ANSWER_KEEP_DAYS * 86400
+        try:
+            for name in os.listdir(folder):
+                full = os.path.join(folder, name)
+                if name.endswith('.json') and os.path.getmtime(full) < cutoff:
+                    os.remove(full)
+        except OSError:
+            pass
+
+    def create_question(self, a):
+        question = str(a.get('question', '') or '').strip()
+        if not question:
+            raise SelfToolError('question is empty.')
+        store = load_settings_store()
+        profile_name = str(a.get('profile', '') or '').strip()
+        if profile_name and get_profile_from_store_by_name(store, profile_name) is None:
+            raise SelfToolError(f'No usable model profile named {profile_name!r} (list_profiles).')
+        if not load_runtime_openai_client_config()[0] and not profile_name:
+            raise SelfToolError('Broccoli has no model profile with an API key yet (Settings › Models).')
+        path = ''
+        if a.get('conversation_id'):
+            path, record, _cid = self._conversation(a)
+            if conversation_owned_elsewhere(record):
+                raise SelfToolError('That conversation belongs to another Mac; ask in a new conversation instead.')
+        request_id = uuid.uuid4().hex
+        self._prune_answers()
+        payload = {'prompt': question, 'id': request_id, 'reply_to': self._answers_dir(), 'source': 'mcp',
+                   'title': str(a.get('title', '') or '').strip() or question[:60]}
+        if a.get('group'):
+            payload['group'] = str(a['group'])
+        files = self._attachment_paths(a)
+        if files:
+            payload['attachments'] = files
+
+        def start():
+            w = self.w
+            target = path
+            if not target:
+                record = w._create_empty_agent_conversation_record(payload['title'], source='mcp', metadata={})
+                target = str(record.get('path', '') or '')
+                if not target:
+                    raise SelfToolError('A new conversation could not be made.')
+                group_id = ensure_named_conversation_group(payload.get('group'))
+                if group_id:
+                    set_conversation_group(record.get('id') or conversation_id_from_path(target), group_id)
+            if profile_name:
+                roles = normalize_model_roles(conversation_model_roles(target))
+                roles.setdefault('candidates', {})['final_answer'] = [profile_name]
+                update_conversation_extensions(target, {MODEL_ROLES_KEY: normalize_model_roles(roles)})
+            w._refresh_history_panel()
+            if w._agent_run_for_path(target) is not None or w._external_pending.get(target):
+                w._external_pending.setdefault(target, []).append(payload)
+                return target, 'queued'
+            w._start_external_request(target, payload, question, 'mcp', payload['title'])
+            return target, 'started'
+        target, status = self.on_main(start)
+        self.requests[request_id] = {'path': target, 'at': time.time()}
+        return {'request_id': request_id, 'conversation_id': conversation_id_from_path(target), 'status': status,
+                'next': 'read_question_answer with this request_id (it can wait up to 25 s per call).'}
+
+    def read_question_answer(self, a):
+        request_id = re.sub(r'[^A-Za-z0-9._-]+', '_', str(a.get('request_id', '') or '').strip())[:80]
+        if not request_id:
+            raise SelfToolError('request_id is needed (create_question gives it).')
+        target = os.path.join(self._answers_dir(), request_id + '.json')
+        deadline = time.time() + max(0.0, min(25.0, float(a.get('wait_seconds', 20) or 0)))
+        while True:
+            try:
+                with open(target, encoding='utf-8') as handle:
+                    data = json.load(handle)
+                return {'status': data.get('status', ''), 'conversation_id': data.get('conversation', ''),
+                        'answer': _self_tool_text(data.get('answer', ''), 20000), 'finished_at': data.get('finished_at', '')}
+            except (OSError, ValueError):
+                pass
+            if time.time() >= deadline:
+                break
+            time.sleep(0.5)
+        known = self.requests.get(request_id)
+        if known is None:
+            raise SelfToolError('No answer for that request_id (unknown, or Broccoli restarted before it finished).')
+        running = self.on_main(lambda: self.w._agent_run_for_path(known['path']) is not None)
+        return {'status': 'running' if running else 'waiting', 'conversation_id': conversation_id_from_path(known['path']),
+                'next': 'Call read_question_answer again.'}
+
+    # ---- model profiles
+    def list_profiles(self, a):
+        store = load_settings_store()
+        default = str(store.get('active_profile', '') or '')
+        return [{'name': p.get('name', ''), 'model': p.get('model', ''), 'endpoint': p.get('endpoint', ''),
+                 'has_api_key': bool(str(p.get('api_key', '') or '').strip()), 'default': p.get('name') == default,
+                 'usable_here': get_profile_from_store_by_name(store, p.get('name', '')) is not None}
+                for p in store.get('profiles') or []]
+
+    def _refuse_while_settings_open(self, what='model profiles'):
+        if self._settings_panel_open():
+            raise SelfToolError(f'Settings is open in Broccoli; {what} can be changed once it is closed.')
+
+    def create_profile(self, a):
+        self._refuse_while_settings_open()
+        name = ' '.join(str(a.get('name', '') or '').split())[:120]
+        endpoint, model = str(a.get('endpoint', '') or '').strip(), str(a.get('model', '') or '').strip()
+        if not (name and endpoint and model):
+            raise SelfToolError('name, endpoint and model are needed.')
+        entry = normalize_profile_entry({'name': name, 'endpoint': endpoint, 'model': model,
+                                         'api_key': str(a.get('api_key', '') or ''),
+                                         'append_v1': bool(a.get('append_v1', False)),
+                                         'timeout': str(int(a.get('timeout') or 60))}, name)
+        clash = {}
+
+        def change(store):
+            if any(p.get('name') == name for p in store['profiles']):
+                clash['yes'] = True
+                return
+            store['profiles'].append(entry)
+        update_settings_store(change)
+        if clash:
+            raise SelfToolError(f'There is already a profile named {name!r} (update_profile changes it).')
+        ensure_reasoning_probe_async(entry)
+        self._settings_changed()
+        return f'Added the profile {name!r}.'
+
+    def update_profile(self, a):
+        self._refuse_while_settings_open()
+        name = str(a.get('name', '') or '').strip()
+        fields = {k: a[k] for k in ('endpoint', 'model', 'api_key', 'append_v1', 'timeout') if k in a and a[k] is not None}
+        if not fields:
+            raise SelfToolError('Nothing to change (endpoint, model, api_key, append_v1, timeout).')
+        found = {}
+
+        def change(store):
+            for index, profile in enumerate(store['profiles']):
+                if profile.get('name') == name:
+                    merged = dict(profile, **{k: (str(v) if k == 'timeout' else v) for k, v in fields.items()})
+                    store['profiles'][index] = found['profile'] = normalize_profile_entry(merged, name)
+                    found['default'] = store.get('active_profile') == name
+                    found['globals'] = dict(store.get('globals') or {})
+        update_settings_store(change)
+        if not found:
+            raise SelfToolError(f'No profile named {name!r}.')
+        if found['default']:
+            sync_profile_to_legacy_files(found['profile'], found['globals'])
+        ensure_reasoning_probe_async(found['profile'])
+        self._settings_changed()
+        return f'Changed {", ".join(sorted(fields))} of {name!r}.'
+
+    def delete_profile(self, a):
+        self._refuse_while_settings_open()
+        name = str(a.get('name', '') or '').strip()
+        done = {}
+
+        def change(store):
+            profiles = [p for p in store['profiles'] if p.get('name') != name]
+            if len(profiles) == len(store['profiles']):
+                return
+            if not profiles:
+                done['last'] = True
+                return
+            store['profiles'] = profiles
+            g = store.setdefault('globals', {})
+            if store.get('active_profile') == name:
+                store['active_profile'] = profiles[0]['name']
+                done['new_default'] = profiles[0]
+            for key in ('embedding_profile', 'browser_use_profile'):
+                if g.get(key) == name:
+                    g[key] = ''
+            specialized = normalize_specialized_profiles(g.get('specialized_profiles', {}))
+            g['specialized_profiles'] = {k: ('' if v == name else v) for k, v in specialized.items()}
+            g['background_vision_profile_names'] = [
+                n for n in normalize_background_vision_profile_names(g.get('background_vision_profile_names', [])) if n != name]
+            rules = normalize_model_location_rules(g.get('model_location_rules'))
+            for location in rules['locations']:
+                location['blocked'] = [n for n in location['blocked'] if n != name]
+            g['model_location_rules'] = rules
+            done['globals'] = dict(g)
+            done['ok'] = True
+        update_settings_store(change)
+        if done.get('last'):
+            raise SelfToolError('That is the only profile; it cannot be deleted.')
+        if not done.get('ok'):
+            raise SelfToolError(f'No profile named {name!r}.')
+        if done.get('new_default'):
+            sync_profile_to_legacy_files(done['new_default'], done['globals'])
+        self.on_main(lambda: self.w.apply_background_vision_settings())
+        self._settings_changed()
+        return f'Deleted the profile {name!r}.' + (
+            f' The default is now {done["new_default"]["name"]!r}.' if done.get('new_default') else '')
+
+    def update_default_profile(self, a):
+        self._refuse_while_settings_open()
+        name = str(a.get('name', '') or '').strip()
+        found = {}
+
+        def change(store):
+            profile = next((p for p in store['profiles'] if p.get('name') == name), None)
+            if profile is None:
+                return
+            store['active_profile'] = name
+            g = store.setdefault('globals', {})
+            candidates = g.get('specialized_profile_candidates')
+            if isinstance(candidates, dict) and candidates.get('final_answer'):
+                candidates['final_answer'] = [name] + [n for n in candidates['final_answer'] if n != name]
+            found.update(profile=profile, globals=dict(g))
+        update_settings_store(change)
+        if not found:
+            raise SelfToolError(f'No profile named {name!r}.')
+        sync_profile_to_legacy_files(found['profile'], found['globals'])
+        self._settings_changed()
+        return f'{name!r} is now the default profile.'
+
+    def update_conversation_profile(self, a):
+        path, _record, cid = self._conversation(a)
+        role = str(a.get('role', '') or 'final_answer').strip()
+        if role not in MODEL_ROLE_SLOTS:
+            raise SelfToolError('role is one of: ' + ', '.join(MODEL_ROLE_SLOTS))
+        name = str(a.get('profile', '') or '').strip()
+        if name and _settings_profile_by_name(load_settings_store(), name) is None:
+            raise SelfToolError(f'No profile named {name!r} (list_profiles).')
+        roles = normalize_model_roles(conversation_model_roles(path))
+        candidates = roles.setdefault('candidates', {})
+        if name:
+            candidates[role] = [name]
+        else:
+            candidates.pop(role, None)
+        self.on_main(lambda: update_conversation_extensions(path, {MODEL_ROLES_KEY: normalize_model_roles(roles)}))
+        return (f'{cid} now uses {name!r} for {role}.' if name
+                else f'{cid} follows the group / Settings again for {role}.')
+
+    # ---- memory
+    def read_memory(self, a):
+        g = load_settings_store().get('globals') or {}
+        items = normalize_memory_item_records(g.get('memory_items') or [])
+        return {'memory': _self_tool_text(g.get('memory_text', ''), 20000),
+                'recent_notes': [{'text': _self_tool_text(i.get('text', ''), 1500), 'kind': i.get('kind', ''),
+                                  'day': i.get('source_date', '')} for i in items[-15:]]}
+
+    def _memory_changed(self):
+        try:
+            self.w.memory_synced.emit()
+        except RuntimeError:
+            pass
+
+    def create_memory_note(self, a):
+        result = remember_in_permanent_memory(str(a.get('text', '') or ''))
+        if result.get('status') in ('saved', 'already'):
+            self._memory_changed()
+            return {'saved': result.get('added') or [], 'already_there': result.get('already') or []}
+        raise SelfToolError(f'Not saved ({result.get("status")}).')
+
+    def delete_memory_note(self, a):
+        result = forget_items_in_permanent_memory(str(a.get('text', '') or ''))
+        if result.get('forgotten'):
+            self._memory_changed()
+        return {'forgotten': result.get('forgotten') or [],
+                'ambiguous': [{'asked': line, 'could_be': cands} for line, cands in result.get('ambiguous') or []],
+                'not_found': result.get('not_found') or []}
+
+    # ---- files that go with a question or a note
+    @staticmethod
+    def _attachment_paths(a, key='attachments'):
+        raw = a.get(key)
+        if raw in (None, '', []):
+            return []
+        if not isinstance(raw, list) or len(raw) > 20:
+            raise SelfToolError(f'{key} is a list of at most 20 file paths.')
+        paths = []
+        for item in raw:
+            path = os.path.expanduser(str(item or '').strip())
+            if not os.path.isabs(path) or not os.path.isfile(path):
+                raise SelfToolError(f'No file at {str(item)!r} (a full path to a file on this Mac is needed).')
+            paths.append(path)
+        return paths
+
+    # ---- what is running
+    def list_running(self, a):
+        def look():
+            w = self.w
+            rows = []
+            for path, run in list(getattr(w, '_agent_runs_by_conversation', {}).items()):
+                if not isinstance(run, dict) or w._agent_run_for_path(path) is not run:
+                    continue
+                rows.append({'conversation_id': conversation_id_from_path(path),
+                             'title': str(w._agent_plan_title_for_path(path) or ''),
+                             'status': str(run.get('status', '') or ''), 'doing': str(run.get('phase', '') or ''),
+                             'waiting_questions': len(w._agent_queue_for_path(path)) + len(w._external_pending.get(path) or [])})
+            return rows
+        return self.on_main(look)
+
+    def _running(self, a):
+        path, _record, cid = self._conversation(a)
+        return path, cid
+
+    def update_conversation_stop(self, a):
+        path, cid = self._running(a)
+
+        def stop():
+            run = self.w._agent_run_for_path(path)
+            if not isinstance(run, dict):
+                return False
+            self.w._stop_agent_run(run)
+            return True
+        if not self.on_main(stop):
+            raise SelfToolError('Nothing is running in that conversation (list_running).')
+        return f'Stopped what was running in {cid}; what it had written so far is kept as its answer.'
+
+    def create_running_note(self, a):
+        path, cid = self._running(a)
+        text = str(a.get('text', '') or '').strip()
+        if not text:
+            raise SelfToolError('text is empty.')
+        files = self._attachment_paths(a)
+
+        def add():
+            run = self.w._agent_run_for_path(path)
+            if not isinstance(run, dict):
+                return False
+            self.w._add_agent_supplement_to_run(run, text[:12000], attachments=files or None)
+            return True
+        if not self.on_main(add):
+            raise SelfToolError('Nothing is running in that conversation (list_running); ask with create_question instead.')
+        return f'The note was added to the running task in {cid}; it is taken in at its next step.'
+
+    # ---- saved prompts (Settings › Saved prompts; {text} in a body stands for what the person types)
+    @staticmethod
+    def _saved_prompt_parts(name, body):
+        name = sanitize_custom_prompt_name(name, '')[:80]
+        body = str(body or '').replace('\r\n', '\n').replace('\r', '\n').strip('\n')
+        if not name:
+            raise SelfToolError('name is needed.')
+        if not body.strip():
+            raise SelfToolError('body is needed: the prompt\'s text.')
+        if len(body) > SELF_TOOL_SKILL_MAX_CHARS:
+            raise SelfToolError(f'body is too long ({SELF_TOOL_SKILL_MAX_CHARS} characters at most).')
+        if '---' in body or '<|' in body or '|>' in body:
+            raise SelfToolError('A saved prompt cannot hold "---", "<|" or "|>" (they separate the saved prompts); '
+                                'write the line another way (e.g. "***" for a rule).')
+        return name, body
+
+    def _saved_prompts_write(self, change):
+        """change(records) edits the list in place and returns words for the model, or raises."""
+        self._refuse_while_settings_open('saved prompts')
+        box = {}
+
+        def edit(store):
+            records = parse_custom_prompt_storage(store['globals'].get('custom_prompt', ''))
+            box['said'] = change(records)
+            box['text'] = store['globals']['custom_prompt'] = serialize_custom_prompt_storage(records)
+        update_settings_store(edit)
+        write_text_file(CUSTOM_PROMPT_PATH, box['text'])            # the main window reads this file
+        self._settings_changed()
+        return box['said']
+
+    @staticmethod
+    def _saved_prompt_at(records, name):
+        wanted = sanitize_custom_prompt_name(name, '').lower()
+        return next((i for i, r in enumerate(records) if str(r.get('name', '')).strip().lower() == wanted), -1)
+
+    def list_saved_prompts(self, a):
+        records = parse_custom_prompt_storage(load_settings_store()['globals'].get('custom_prompt', ''))
+        return [{'name': r['name'], 'body': _self_tool_text(r['body'], 2000)} for r in records]
+
+    def create_saved_prompt(self, a):
+        name, body = self._saved_prompt_parts(a.get('name'), a.get('body'))
+
+        def change(records):
+            if self._saved_prompt_at(records, name) >= 0:
+                raise SelfToolError(f'There is already a saved prompt named {name!r} (update_saved_prompt changes it).')
+            records.append({'name': name, 'body': body})
+            return f'Saved the prompt {name!r}.'
+        return self._saved_prompts_write(change)
+
+    def update_saved_prompt(self, a):
+        if a.get('new_name') is None and a.get('body') is None:
+            raise SelfToolError('Nothing to change (new_name, body).')
+
+        def change(records):
+            at = self._saved_prompt_at(records, a.get('name'))
+            if at < 0:
+                raise SelfToolError(f'No saved prompt named {str(a.get("name", "")).strip()!r} (list_saved_prompts).')
+            name, body = self._saved_prompt_parts(a.get('new_name') if a.get('new_name') is not None else records[at]['name'],
+                                                  a.get('body') if a.get('body') is not None else records[at]['body'])
+            other = self._saved_prompt_at(records, name)
+            if other >= 0 and other != at:
+                raise SelfToolError(f'There is already a saved prompt named {name!r}.')
+            records[at] = {'name': name, 'body': body}
+            return f'Changed the saved prompt {name!r}.'
+        return self._saved_prompts_write(change)
+
+    def delete_saved_prompt(self, a):
+        def change(records):
+            at = self._saved_prompt_at(records, a.get('name'))
+            if at < 0:
+                raise SelfToolError(f'No saved prompt named {str(a.get("name", "")).strip()!r} (list_saved_prompts).')
+            return f'Deleted the saved prompt {records.pop(at)["name"]!r}.'
+        return self._saved_prompts_write(change)
+
+    # ---- the switches of Settings (the ones that are safe to set from a tool; see SELF_TOOL_SETTINGS)
+    def read_settings(self, a):
+        g = load_settings_store().get('globals') or {}
+        out = {}
+        for key, (kind, _apply, _words) in SELF_TOOL_SETTINGS.items():
+            value = g.get(key)
+            out[key] = [line for line in str(value or '').split('\n') if line.strip()] if kind == 'lines' else value
+        return out
+
+    def update_settings(self, a):
+        self._refuse_while_settings_open('settings')
+        wanted = {}
+        for key, (kind, _apply, _words) in SELF_TOOL_SETTINGS.items():
+            if a.get(key) is None:
+                continue
+            value = a[key]
+            if kind == 'bool':
+                if not isinstance(value, bool):
+                    raise SelfToolError(f'{key} is true or false.')
+            elif kind == 'lines':
+                if not isinstance(value, list) or not value or len(value) > 40:
+                    raise SelfToolError(f'{key} is a list of 1–40 texts.')
+                value = '\n'.join(' '.join(str(item).split())[:60] for item in value if str(item).strip())
+                if not value:
+                    raise SelfToolError(f'{key} is a list of 1–40 texts.')
+            elif kind == 'text':
+                value = ' '.join(str(value).split())[:60]
+            elif kind[0] == 'int':
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value \
+                        or not kind[1] <= int(value) <= kind[2]:
+                    raise SelfToolError(f'{key} is a whole number from {kind[1]} to {kind[2]}.')
+                value = int(value)
+            elif kind[0] == 'choice':
+                if value not in kind[1]:
+                    raise SelfToolError(f'{key} is one of: {", ".join(kind[1])}.')
+            wanted[key] = value
+        unknown = sorted(k for k in a if k not in SELF_TOOL_SETTINGS)
+        if unknown:
+            raise SelfToolError(f'Not a setting this tool sets: {", ".join(unknown)}. (read_settings names them.)')
+        if not wanted:
+            raise SelfToolError('Nothing to change (read_settings names the settings).')
+        box = {}
+
+        def change(store):
+            g = store['globals']
+            box['changed'] = sorted(k for k, v in wanted.items() if g.get(k) != v)
+            g.update(wanted)
+            if 'usage_bar_enabled' in wanted:
+                g[USAGE_BAR_ENABLED_CHOSEN_KEY] = True
+            box['globals'] = dict(g)
+        update_settings_store(change)
+        if 'languages' in box['changed']:
+            write_text_file(LANGUAGE_LIST_PATH, wanted['languages'])    # the main window reads this file
+        applies = []
+        for key in box['changed']:
+            apply = SELF_TOOL_SETTINGS[key][1]
+            if apply and apply not in applies:
+                applies.append(apply)
+        g = box['globals']
+
+        def run_applies():
+            w = self.w
+            for name in applies:
+                if name == 'always_on_top':
+                    w.set_always_on_top(bool(g.get('always_on_top')))
+                elif name == 'all_spaces':
+                    w.apply_show_on_all_spaces_settings(bool(g.get('show_on_all_spaces')))
+                    w.sync_show_on_all_spaces_action(bool(g.get('show_on_all_spaces')))
+                elif name == 'edge_hide':
+                    w.apply_edge_auto_hide_settings(bool(g.get('edge_auto_hide_enabled')))
+                elif name == 'edge_hint':
+                    w.apply_edge_trigger_hint_settings(bool(g.get(EDGE_HINT_SETTING_KEY)))
+                elif name == 'web_lifecycle':
+                    w.apply_web_lifecycle_settings(g.get('web_lifecycle_mode'))
+                elif name == 'vision':
+                    w.apply_background_vision_settings()
+                elif name == 'usage_bar':
+                    w.apply_usage_bar_settings(g)
+        if applies:
+            self.on_main(run_applies)
+        self._settings_changed()
+        return {'changed': box['changed'], 'settings': self.read_settings({})}
+
+    # ---- which model does what (Settings › Models), for every conversation that has no choice of its own
+    def list_model_roles(self, a):
+        store = load_settings_store()
+        g = store.get('globals') or {}
+        chosen = get_specialized_profile_candidates_from_store(store)
+        roles = {slot: list(chosen.get(slot) or []) for slot in _self_tool_model_roles() if slot != 'background_vision'}
+        roles['background_vision'] = normalize_background_vision_profile_names(g.get('background_vision_profile_names', []))
+        return {'roles': roles, 'profiles': [p.get('name', '') for p in store.get('profiles') or []],
+                'note': 'Each role lists its models in order: the first usable one is used, the next ones when it fails.'}
+
+    def update_model_role(self, a):
+        self._refuse_while_settings_open('the models of the roles')
+        role = str(a.get('role', '') or '').strip()
+        if role not in _self_tool_model_roles():
+            raise SelfToolError(f'role is one of: {", ".join(_self_tool_model_roles())}.')
+        names = a.get('profiles')
+        if not isinstance(names, list) or len(names) > 12:
+            raise SelfToolError('profiles is a list of profile names in order ([] = none chosen).')
+        names = list(dict.fromkeys(str(n or '').strip() for n in names if str(n or '').strip()))
+        store = load_settings_store()
+        missing = [n for n in names if not model_role_name_available(store, n)]
+        if missing:
+            raise SelfToolError(f'Not a model that can be used here: {", ".join(missing)} (list_profiles).')
+        if role == 'final_answer' and (not names or _settings_profile_by_name(store, names[0]) is None):
+            raise SelfToolError('final_answer needs a model profile first in its list (it is the default for new chats).')
+        box = {}
+
+        def change(store):
+            g = store['globals']
+            if role == 'background_vision':
+                g['background_vision_profile_names'] = normalize_background_vision_profile_names(names)
+                return
+            candidates = normalize_specialized_profile_candidates(g.get('specialized_profile_candidates'))
+            if names:
+                candidates[role] = names
+            else:
+                candidates.pop(role, None)
+            g['specialized_profile_candidates'] = candidates
+            first = names[0] if names else ''
+            firsts = normalize_specialized_profiles(g.get('specialized_profiles', {}))
+            if role == 'final_answer':
+                store['active_profile'] = first
+                box['default'] = _settings_profile_by_name(store, first)
+            elif role == BROWSER_USE_CAPABILITY:
+                g['browser_use_profile'] = first
+            elif role == 'embedding':
+                g['embedding_profile'] = first
+            elif role in firsts:
+                firsts[role] = first
+                g['specialized_profiles'] = firsts
+            box['globals'] = dict(g)
+        update_settings_store(change)
+        if box.get('default'):
+            sync_profile_to_legacy_files(box['default'], box['globals'])
+        if role == 'background_vision':
+            self.on_main(self.w.apply_background_vision_settings)
+        self._settings_changed()
+        return f'{role} now uses: {", ".join(names) or "(nothing chosen)"}.'
+
+    # ---- reports: written now, and their templates (Settings › Reports)
+    def _report_key(self, a):
+        kind = str(a.get('kind', '') or 'day').strip()
+        if kind not in REPORT_KINDS:
+            raise SelfToolError('kind is day, week or month.')
+        day = str(a.get('day', '') or '').strip() or datetime.date.today().isoformat()
+        try:
+            return kind, report_key_for(kind, datetime.date.fromisoformat(day[:10]))
+        except ValueError:
+            raise SelfToolError('day is written "YYYY-MM-DD".')
+
+    def create_report(self, a):
+        kind, key = self._report_key(a)
+        status = str((run_report(kind, key, force=True) or {}).get('status', '') or 'failed')
+        if status == 'written':
+            found = read_report_file(kind, key) or {}
+            return {'kind': kind, 'key': key, 'report': _self_tool_text(found.get('text', ''), 30000)}
+        words = {'no_activity': f'Nothing was recorded for {key}, so there is no report to write.',
+                 'busy': 'Another report is being written right now. Try again in a minute.',
+                 'no_model': 'Broccoli has no usable default model to write the report with (Settings › Models).'}
+        raise SelfToolError(words.get(status, f'The {kind} report of {key} could not be written ({status}).'))
+
+    def list_report_templates(self, a):
+        templates = report_settings()['templates']
+        return [{'name': t['name'], 'used_for': t['kinds'], 'text': t['text']} for t in templates]
+
+    def _report_templates_write(self, change):
+        self._refuse_while_settings_open('report templates')
+        box = {}
+
+        def edit(store):
+            templates = normalize_report_templates(store['globals'].get(REPORT_TEMPLATES_KEY))
+            box['said'] = change(templates)
+            store['globals'][REPORT_TEMPLATES_KEY] = normalize_report_templates(templates)
+        update_settings_store(edit)
+        self._settings_changed()
+        return box['said']
+
+    @staticmethod
+    def _report_template_fields(a, old=None):
+        old = old or {}
+        name = ' '.join(str(a.get('new_name') if a.get('new_name') is not None else a.get('name') or '').split())[:60] \
+            if (a.get('new_name') is not None or not old) else old['name']
+        text = str(a['text']).strip() if a.get('text') is not None else old.get('text', '')
+        if not name:
+            raise SelfToolError('name is needed.')
+        if len(text) < 20 or len(text) > REPORT_TEMPLATE_MAX_CHARS:
+            raise SelfToolError(f'text is the whole template (Markdown headings and what goes under each), '
+                                f'{REPORT_TEMPLATE_MAX_CHARS} characters at most.')
+        kinds = old.get('kinds', [])
+        if a.get('used_for') is not None:
+            if not isinstance(a['used_for'], list) or any(k not in REPORT_KINDS for k in a['used_for']):
+                raise SelfToolError('used_for is a list out of day, week, month.')
+            kinds = [k for k in REPORT_KINDS if k in a['used_for']]
+        return name, text, kinds
+
+    @staticmethod
+    def _report_template_at(templates, name):
+        wanted = ' '.join(str(name or '').split()).lower()
+        return next((i for i, t in enumerate(templates) if t['name'].lower() == wanted), -1)
+
+    def create_report_template(self, a):
+        name, text, kinds = self._report_template_fields(a)
+
+        def change(templates):
+            if self._report_template_at(templates, name) >= 0:
+                raise SelfToolError(f'There is already a report template named {name!r}.')
+            for other in templates:                 # a kind follows one template: the new one takes it over
+                other['kinds'] = [k for k in other['kinds'] if k not in kinds]
+            templates.append({'id': uuid.uuid4().hex[:12], 'name': name, 'text': text, 'kinds': kinds})
+            return f'Saved the report template {name!r}' + (f', used for: {", ".join(kinds)}.' if kinds else ' (not used by any report yet).')
+        return self._report_templates_write(change)
+
+    def update_report_template(self, a):
+        if all(a.get(k) is None for k in ('new_name', 'text', 'used_for')):
+            raise SelfToolError('Nothing to change (new_name, text, used_for).')
+
+        def change(templates):
+            at = self._report_template_at(templates, a.get('name'))
+            if at < 0:
+                raise SelfToolError(f'No report template named {str(a.get("name", "")).strip()!r} (list_report_templates).')
+            name, text, kinds = self._report_template_fields(a, templates[at])
+            other = self._report_template_at(templates, name)
+            if other >= 0 and other != at:
+                raise SelfToolError(f'There is already a report template named {name!r}.')
+            if a.get('used_for') is not None:
+                for index, item in enumerate(templates):
+                    if index != at:
+                        item['kinds'] = [k for k in item['kinds'] if k not in kinds]
+            templates[at].update({'name': name, 'text': text, 'kinds': kinds})
+            return f'Changed the report template {name!r}.'
+        return self._report_templates_write(change)
+
+    def delete_report_template(self, a):
+        def change(templates):
+            at = self._report_template_at(templates, a.get('name'))
+            if at < 0:
+                raise SelfToolError(f'No report template named {str(a.get("name", "")).strip()!r} (list_report_templates).')
+            if len(templates) == 1:
+                raise SelfToolError('That is the only report template; reports need one.')
+            return f'Deleted the report template {templates.pop(at)["name"]!r}.'
+        return self._report_templates_write(change)
+
+    # ---- external context sources (Settings › External context) and the tools other apps bring
+    @staticmethod
+    def _context_source_view(source):
+        kind = source.get('type', '')
+        view = {'id': source.get('id', ''), 'name': source.get('name', ''), 'type': kind,
+                'enabled': bool(source.get('enabled', True)), 'auto_context': bool(source.get('auto_context', True))}
+        if kind == 'local_path':
+            view['path'] = source.get('path', '')
+        else:
+            view['where'] = source.get('endpoint', '') if kind == 'mcp_http' else source.get('command', '')
+            view['tools'] = [str(t.get('name', '')) for t in source.get('discovered_tools') or [] if isinstance(t, dict)][:80]
+            view['used_as_tools'] = bool(source.get('use_in_tool_runtime', True))
+            view['has_token'] = bool(source.get('auth_token') or source.get('headers') or source.get('env'))
+            if source.get('discovery_error'):
+                view['problem'] = str(source['discovery_error'])[:300]
+        return view
+
+    def list_context_sources(self, a):
+        g = load_settings_store().get('globals') or {}
+        off = set(normalize_app_connectors_disabled(g.get('app_connectors_disabled', [])))
+        apps = [{'id': card.get('id', ''), 'name': card.get('name', ''), 'type': 'another app on this Mac',
+                 'enabled': str(card.get('id', '')).lower() not in off, 'running': bool(card.get('running')),
+                 'tools': [str(t.get('name', '')) for t in card.get('tools') or [] if isinstance(t, dict)][:80]}
+                for card in load_app_connector_cards()]
+        return {'external_context_enabled': bool(g.get('external_context_enabled', True)),
+                'sources': [self._context_source_view(x) for x in normalize_external_context_sources(g.get('external_context_sources', []))],
+                'apps': apps}
+
+    def create_context_source(self, a):
+        self._refuse_while_settings_open('external context sources')
+        kind = str(a.get('type', '') or '').strip()
+        name = ' '.join(str(a.get('name', '') or '').split())[:80]
+        if kind == 'local_path':
+            path = os.path.expanduser(str(a.get('path', '') or '').strip())
+            if not os.path.isabs(path) or not os.path.exists(path):
+                raise SelfToolError('path is the full path of a folder or file on this Mac that exists.')
+            record = {'type': 'local_path', 'path': path, 'name': name or os.path.basename(path.rstrip('/'))}
+        elif kind == 'mcp_http':
+            endpoint = str(a.get('endpoint', '') or '').strip()
+            if not re.match(r'^https?://[^\s/]+', endpoint):
+                raise SelfToolError('endpoint is the server\'s address, starting with http:// or https://.')
+            # read_only False: every tool of the new server that is not plainly a read asks the person first
+            record = {'type': 'mcp_http', 'endpoint': endpoint, 'name': name or re.sub(r'^https?://', '', endpoint)[:60],
+                      'auth_token': str(a.get('auth_token', '') or '').strip(), 'read_only': False}
+            try:
+                record.update(discover_mcp_source(normalize_external_context_source_record(record) or record))
+            except Exception as exc:
+                raise SelfToolError(f'That server did not answer as an MCP server ({str(exc)[:200]}); nothing was added.')
+        else:
+            raise SelfToolError('type is local_path (a folder or file to read from) or mcp_http (an MCP server by address). '
+                                'A server started by a command is added by the person in Settings.')
+        record['id'] = _new_external_context_source_id()
+        record = normalize_external_context_source_record(record)
+        if record is None:
+            raise SelfToolError('That source could not be stored.')
+        clash = {}
+
+        def change(store):
+            sources = normalize_external_context_sources(store['globals'].get('external_context_sources', []))
+            same = record['path'] if kind == 'local_path' else record['endpoint']
+            if any((x.get('path') if kind == 'local_path' else x.get('endpoint')) == same and x.get('type') == kind for x in sources):
+                clash['yes'] = True
+                return
+            sources.append(record)
+            store['globals']['external_context_sources'] = sources
+        update_settings_store(change)
+        if clash:
+            raise SelfToolError('That source is already there (list_context_sources).')
+        self._settings_changed()
+        return self._context_source_view(record)
+
+    def _context_source_change(self, a, change_one):
+        self._refuse_while_settings_open('external context sources')
+        wanted = str(a.get('source', '') or '').strip()
+        box = {}
+
+        def change(store):
+            g = store['globals']
+            sources = normalize_external_context_sources(g.get('external_context_sources', []))
+            hits = [i for i, x in enumerate(sources) if x['id'] == wanted or x['name'].lower() == wanted.lower()]
+            if len(hits) == 1:
+                box['said'] = change_one(sources, hits[0])
+                g['external_context_sources'] = sources
+            elif len(hits) > 1:
+                box['several'] = True
+            else:
+                box['card'] = next((c for c in load_app_connector_cards()
+                                    if wanted.lower() in (str(c.get('id', '')).lower(), str(c.get('name', '')).lower())), None)
+                if box['card'] is not None and 'enabled' in a and set(k for k in a if a[k] is not None) <= {'source', 'enabled'}:
+                    card_id = str(box['card'].get('id', '')).lower()
+                    off = [x for x in normalize_app_connectors_disabled(g.get('app_connectors_disabled', [])) if x != card_id]
+                    if a['enabled'] is False:
+                        off.append(card_id)
+                    g['app_connectors_disabled'] = normalize_app_connectors_disabled(off)
+                    box['said'] = f'The tools of {box["card"].get("name", card_id)!r} are switched {"on" if a["enabled"] else "off"}.'
+        update_settings_store(change)
+        if box.get('several'):
+            raise SelfToolError('Several sources have that name; give the id (list_context_sources).')
+        if 'said' not in box:
+            if box.get('card') is not None:
+                raise SelfToolError('That is another app\'s toolset: only "enabled" can be changed here.')
+            raise SelfToolError(f'No source {wanted!r} (list_context_sources).')
+        self._settings_changed()
+        return box['said']
+
+    def update_context_source(self, a):
+        fields = {k: a[k] for k in ('enabled', 'auto_context', 'used_as_tools') if isinstance(a.get(k), bool)}
+        new_name = ' '.join(str(a.get('new_name') or '').split())[:80]
+        if not fields and not new_name:
+            raise SelfToolError('Nothing to change (enabled, auto_context, used_as_tools, new_name).')
+
+        def change_one(sources, index):
+            source = sources[index]
+            if 'enabled' in fields:
+                source['enabled'] = fields['enabled']
+            if 'auto_context' in fields:
+                source['auto_context'] = fields['auto_context']
+            if 'used_as_tools' in fields:
+                source['use_in_tool_runtime'] = fields['used_as_tools']
+            if new_name:
+                source['name'] = new_name
+            return f'Changed the source {source["name"]!r}.'
+        return self._context_source_change(a, change_one)
+
+    def delete_context_source(self, a):
+        return self._context_source_change({'source': a.get('source')}, lambda sources, index: f'Removed the source {sources.pop(index)["name"]!r} (the files or the server itself are untouched).')
+
+    # ---- memory kept in step with the person's online AI accounts
+    def list_memory_sync(self, a):
+        g = load_settings_store().get('globals') or {}
+        return {'enabled': bool(g.get('online_memory_enabled')), 'every_minutes': g.get('online_memory_default_interval_minutes'),
+                'last_sync': g.get('online_memory_last_sync_at', ''),
+                'accounts': [{'name': x.get('name', ''), 'enabled': bool(x.get('enabled', True)), 'last_status': x.get('last_status', ''),
+                              'last_read': x.get('last_pull_at', ''), 'last_written': x.get('last_push_at', '')}
+                             for x in normalize_online_memory_sources(g.get('online_memory_sources', []))]}
+
+    def create_memory_sync(self, a):
+        self._refuse_while_settings_open('the memory sync')
+
+        def start():
+            panel = getattr(self.w, 'settings_panel', None)
+            if panel is None:
+                return 'none'
+            panel.reload_from_store()                       # the sync reads the panel's form: the saved state first
+            sources = panel._current_online_memory_sources()
+            from_ids = normalize_online_memory_route_from(panel._online_memory_route_from, sources)
+            if not from_ids or not normalize_online_memory_route_to(panel._online_memory_route_to, sources,
+                                                                    excluded=set(from_ids), allow_empty=True):
+                return 'none'
+            if panel._online_memory_syncing_ids:
+                return 'busy'
+            panel._sync_online_memory_route()
+            return 'started'
+        state = self.on_main(start)
+        if state == 'none':
+            raise SelfToolError('No memory sync is set up (Settings › Memory: an account to read from and one to write to).')
+        if state == 'busy':
+            raise SelfToolError('A memory sync is running already.')
+        return 'The memory sync was started; it runs in the background (list_memory_sync shows each account\'s last status).'
+
+    # ---- kept texts (favorites) and the links of a conversation
+    def list_favorites(self, a):
+        text = str(a.get('text', '') or '').strip().lower()
+        limit = max(1, min(200, int(a.get('limit') or 50)))
+        rows = []
+        for record in reversed(load_agent_favorite_records()):
+            if text and text not in (str(record.get('caption', '')) + '\n' + str(record.get('text', ''))).lower():
+                continue
+            rows.append({'id': record.get('id', ''), 'caption': record.get('caption', ''),
+                         'text': _self_tool_text(record.get('text', ''), 1500), 'kept': record.get('created_at', ''),
+                         'from': record.get('source_url', '') or conversation_id_for_reference(record.get('conversation_path', '')) or ''})
+        return {'count': len(rows), 'favorites': rows[:limit]}
+
+    def create_favorite(self, a):
+        text = str(a.get('text', '') or '').strip()
+        if not text or len(text) > 20000:
+            raise SelfToolError('text is what to keep (20000 characters at most).')
+        now = datetime.datetime.now().isoformat(timespec='seconds')
+        record = normalize_agent_favorite_record({'id': f'agent-fav-{int(time.time() * 1000)}', 'text': text,
+                                                  'caption': ' '.join(str(a.get('caption', '') or '').split())[:120],
+                                                  'created_at': now, 'updated_at': now})
+
+        def add():
+            records = load_agent_favorite_records()
+            if any(str(x.get('text', '')).strip() == text and not x.get('conversation_path') for x in records):
+                return False
+            records.append(record)
+            save_agent_favorite_records(records)
+            self.w._refresh_agent_favorites_panel()
+            return True
+        if not self.on_main(add):
+            raise SelfToolError('That text is kept already (list_favorites).')
+        return {'id': record['id'], 'caption': record['caption']}
+
+    def delete_favorite(self, a):
+        wanted = str(a.get('id', '') or '').strip()
+
+        def remove():
+            if not any(str(x.get('id', '')).strip() == wanted for x in load_agent_favorite_records()):
+                return False
+            self.w._delete_agent_favorite(wanted)
+            return True
+        if not wanted or not self.on_main(remove):
+            raise SelfToolError(f'No favorite {wanted!r} (list_favorites).')
+        return 'Removed that favorite.'
+
+    def list_links(self, a):
+        _path, record, _cid = self._conversation(a, archived_ok=True)
+        return [{'url': x.get('url', ''), 'title': x.get('title', '')} for x in record.get('links') or [] if isinstance(x, dict)][:300]
+
+    # ---- a deliverable saved as a file, or corrected
+    def _output(self, a):
+        path, record, cid = self._conversation(a)
+        wanted = str(a.get('output_id', '') or '').strip()
+        for index, output in enumerate(record.get('outputs') or []):
+            if isinstance(output, dict) and output.get('id') == wanted:
+                return path, record, index, output
+        raise SelfToolError(f'No output {wanted!r} in that conversation (list_outputs).')
+
+    def create_output_file(self, a):
+        _path, _record, _index, output = self._output(a)
+        target = os.path.expanduser(str(a.get('path', '') or '').strip())
+        if not os.path.isabs(target) or target.endswith('/'):
+            raise SelfToolError('path is the full path of the file to write, e.g. ~/Desktop/report.docx.')
+        if os.path.isdir(target):
+            target = os.path.join(target, default_output_filename(output))
+        if not os.path.isdir(os.path.dirname(target)):
+            raise SelfToolError(f'The folder {os.path.dirname(target)!r} does not exist.')
+        key = str(a.get('format', '') or '').strip().lower() or OUTPUT_SAVE_ORIGINAL
+        allowed = [k for k, _words in output_save_choices(output)]
+        typed = os.path.splitext(target)[1].lower().lstrip('.')
+        if key not in allowed or (typed in {k for k, _e, _n in OUTPUT_SAVE_FORMATS} and typed not in allowed
+                                  and typed != output_save_source(output)[2]):
+            raise SelfToolError(f'This output can be saved as: {", ".join(allowed)}.')
+        if os.path.exists(target) and a.get('overwrite') is not True:
+            raise SelfToolError(f'{target!r} is there already. Another name, or overwrite: true after the person said so.')
+        try:
+            used = save_output_as(output, target, key, pdf_from_html=self.w._print_page_to_pdf_and_wait)
+        except Exception as exc:
+            raise SelfToolError(f'The file could not be written ({str(exc)[:200]}).')
+        written = target if os.path.exists(target) else next(
+            (target + '.' + e for k, e, _n in OUTPUT_SAVE_FORMATS if k == used and os.path.exists(target + '.' + e)), target)
+        return {'saved': written, 'as': used}
+
+    def update_output(self, a):
+        path, record, index, output = self._output(a)
+        new = str(a.get('content', '') or '')
+        if not new.strip() or len(new) > 400000:
+            raise SelfToolError('content is the complete new text of the deliverable.')
+        if str(output.get('kind', '')) in {'image', 'audio', 'video'} or not str(output.get('content', '') or ''):
+            raise SelfToolError('That deliverable is a file, not a text Broccoli keeps; its text cannot be replaced here.')
+        if conversation_owned_elsewhere(record):
+            raise SelfToolError('That conversation belongs to another Mac.')
+        if self._busy([path]):
+            raise SelfToolError('That conversation is busy right now. Try again when it is done.')
+
+        def store():
+            fresh = load_conversation_record(path, include_retrieval=True)
+            outputs = list((fresh or {}).get('outputs') or [])
+            at = next((i for i, o in enumerate(outputs) if isinstance(o, dict) and o.get('id') == output.get('id')), -1)
+            if at < 0:
+                return False
+            old = dict(outputs[at])
+            merged = dict(old, content=new, edited_at=datetime.datetime.now().isoformat(timespec='seconds'),
+                          annotations=remap_text_annotations(new, list(old.get('annotations') or [])))
+            if not isinstance(old.get('original_content'), str):
+                merged['original_content'] = str(old.get('content', '') or '')
+            outputs[at] = merged
+            fresh['outputs'] = outputs
+            write_conversation_record(path, fresh)
+            if getattr(self.w, '_active_conversation_path', '') == path:
+                self.w._refresh_outputs_panel()
+            return True
+        if not self.on_main(store):
+            raise SelfToolError('That deliverable is no longer there.')
+        return f'Replaced the text of {output.get("title", "") or output.get("id", "")!r}; the text before the first change is kept as its original.'
+
+    # ---- the tray beside the small circle (files and links kept at hand)
+    def _tray(self):
+        tray = getattr(self.w, '_circle_tray', None)
+        if tray is None:
+            raise SelfToolError('The tray is not there in this run of Broccoli.')
+        return tray
+
+    def list_tray_items(self, a):
+        tray = self._tray()
+        return self.on_main(lambda: [{'key': circle_tray_item_key(x), 'kind': x.get('kind', ''), 'name': x.get('name', ''),
+                                      'where': x.get('path', '') or x.get('url', '')} for x in tray.items])
+
+    def create_tray_item(self, a):
+        tray = self._tray()
+        path, url = str(a.get('path', '') or '').strip(), str(a.get('url', '') or '').strip()
+        if path:
+            path = os.path.expanduser(path)
+            if not os.path.isabs(path) or not os.path.exists(path):
+                raise SelfToolError('path is the full path of a file or folder on this Mac that exists.')
+            item = {'kind': 'file', 'path': path}
+        elif re.match(r'^https?://\S+$', url):
+            item = {'kind': 'url', 'url': url, 'name': ' '.join(str(a.get('name', '') or '').split())[:120] or url}
+        else:
+            raise SelfToolError('Give path (a file on this Mac) or url (http:// or https://).')
+        self.on_main(lambda: tray.add_items([item]))
+        return self.list_tray_items({})
+
+    def delete_tray_item(self, a):
+        tray = self._tray()
+        key = str(a.get('key', '') or '').strip()
+
+        def remove():
+            if key not in [circle_tray_item_key(x) for x in tray.items]:
+                return False
+            tray.remove(key)
+            return True
+        if not self.on_main(remove):
+            raise SelfToolError(f'Nothing in the tray with the key {key!r} (list_tray_items).')
+        return 'Taken out of the tray (the file itself stays where it is, unless it was a copy the tray made).'
+
+    # ---- skills (Settings › Skills: the person's own can be written; what other apps bring is read only)
+    @staticmethod
+    def _skill_named(records, name):
+        return find_skill_record(records, sanitize_skill_name(name, ''))
+
+    @staticmethod
+    def _skill_view(record, full=False):
+        view = {'name': record['name'], 'description': record.get('description', ''),
+                'enabled': bool(record.get('enabled', True)),
+                'from': 'another app (read only)' if record.get('app') else 'the person'}
+        if full:
+            view['instructions'] = _self_tool_text(record.get('body', ''), SELF_TOOL_SKILL_MAX_CHARS)
+        return view
+
+    @staticmethod
+    def _skill_text(name, description, instructions):
+        """A skill's stored text from its parts, checked the way Settings › Skills checks on Save."""
+        name = sanitize_skill_name(name, '')[:SELF_TOOL_SKILL_NAME_MAX]
+        description = ' '.join(str(description or '').split())
+        instructions = str(instructions or '').replace('\r\n', '\n').replace('\r', '\n').strip('\n')
+        if not name or ':' in name or name.startswith(('-', '#', '"', "'")):
+            raise SelfToolError('name is needed: a few words or a-hyphenated-name, without ":".')
+        if len(description) < 20:
+            raise SelfToolError('description is needed: one or two sentences on exactly when this skill is to be '
+                                'used (and when not) — it is all the Agent sees when it decides.')
+        if len(description) > SELF_TOOL_SKILL_DESCRIPTION_MAX:
+            raise SelfToolError(f'description is too long ({SELF_TOOL_SKILL_DESCRIPTION_MAX} characters at most).')
+        if len(instructions.strip()) < 20:
+            raise SelfToolError('instructions are needed: the steps to follow, in full.')
+        if len(instructions) > SELF_TOOL_SKILL_MAX_CHARS:
+            raise SelfToolError(f'instructions are too long ({SELF_TOOL_SKILL_MAX_CHARS} characters at most).')
+        raw = f'---\nname: {name}\ndescription: {description}\n---\n\n{instructions}'
+        back = normalize_skill_record({'raw_text': raw, 'enabled': True})
+        if not back or back['name'] != name or back['description'] != description or back['body'] != instructions:
+            raise SelfToolError('That name or description cannot be stored as written (avoid quotes at both ends and '
+                                'a line of only "---" at the start of the instructions).')
+        return name, raw
+
+    def _skills_changed(self):
+        self.on_main(self.w._refresh_enabled_skills_cache)
+        self._settings_changed()
+
+    def list_skills(self, a):
+        return [self._skill_view(record) for record in load_skill_records_from_store()]
+
+    def read_skill(self, a):
+        record = self._skill_named(load_skill_records_from_store(), a.get('name'))
+        if record is None:
+            raise SelfToolError(f'No skill named {str(a.get("name", "")).strip()!r} (list_skills).')
+        return self._skill_view(record, full=True)
+
+    def create_skill(self, a):
+        self._refuse_while_settings_open('skills')
+        name, raw = self._skill_text(a.get('name'), a.get('description'), a.get('instructions'))
+        if self._skill_named(load_app_skill_records(), name) is not None:
+            raise SelfToolError(f'Another app already brings a skill named {name!r}; choose another name.')
+        clash = {}
+
+        def change(store):
+            records = normalize_skill_records(store['globals'].get('skills', []))
+            if self._skill_named(records, name) is not None:
+                clash['yes'] = True
+                return
+            if len(records) >= SELF_TOOL_SKILLS_MAX:
+                clash['full'] = True
+                return
+            records.append({'raw_text': raw, 'enabled': a.get('enabled', True) is not False})
+            store['globals']['skills'] = serialize_skill_records(records)
+        update_settings_store(change)
+        if clash.get('full'):
+            raise SelfToolError(f'There are already {SELF_TOOL_SKILLS_MAX} skills; delete one first.')
+        if clash:
+            raise SelfToolError(f'There is already a skill named {name!r} (update_skill changes it).')
+        self._skills_changed()
+        return f'Saved the skill {name!r}. It is in Settings › Skills and can be used from the next question on.'
+
+    def update_skill(self, a):
+        self._refuse_while_settings_open('skills')
+        name = sanitize_skill_name(a.get('name'), '')
+        fields = {k: a[k] for k in ('new_name', 'description', 'instructions', 'enabled') if k in a and a[k] is not None}
+        if not fields:
+            raise SelfToolError('Nothing to change (new_name, description, instructions, enabled).')
+        app_record = self._skill_named(load_app_skill_records(), name)
+        done = {}
+
+        def change(store):
+            g = store['globals']
+            records = normalize_skill_records(g.get('skills', []))
+            mine = self._skill_named(records, name)
+            if mine is None and app_record is not None:
+                # another app's skill: only its switch is the person's
+                if set(fields) != {'enabled'}:
+                    done['app'] = True
+                    return
+                off = [n for n in normalize_app_skills_disabled(g.get('app_skills_disabled', []))
+                       if n != app_record['name'].lower()]
+                if not fields['enabled']:
+                    off.append(app_record['name'].lower())
+                g['app_skills_disabled'] = normalize_app_skills_disabled(off)
+                done['ok'] = app_record['name']
+                return
+            if mine is None:
+                return
+            new_name, raw = self._skill_text(fields.get('new_name', mine['name']),
+                                             fields.get('description', mine['description']),
+                                             fields.get('instructions', mine['body']))
+            if new_name.lower() != mine['name'].lower() and (
+                    self._skill_named(records, new_name) is not None
+                    or self._skill_named(load_app_skill_records(), new_name) is not None):
+                done['clash'] = new_name
+                return
+            mine.update(normalize_skill_record({'raw_text': raw, 'enabled': bool(fields.get('enabled', mine['enabled']))}))
+            g['skills'] = serialize_skill_records(records)
+            done['ok'] = new_name
+        update_settings_store(change)
+        if done.get('app'):
+            raise SelfToolError(f'{name!r} is brought by another app: only "enabled" can be changed here. To change '
+                                'what it does, create_skill a skill of the person\'s own under another name.')
+        if done.get('clash'):
+            raise SelfToolError(f'There is already a skill named {done["clash"]!r}.')
+        if not done.get('ok'):
+            raise SelfToolError(f'No skill named {name!r} (list_skills).')
+        self._skills_changed()
+        return f'Changed {", ".join(sorted(fields))} of the skill {done["ok"]!r}.'
+
+    def delete_skill(self, a):
+        self._refuse_while_settings_open('skills')
+        name = sanitize_skill_name(a.get('name'), '')
+        done = {}
+
+        def change(store):
+            records = normalize_skill_records(store['globals'].get('skills', []))
+            mine = self._skill_named(records, name)
+            if mine is None:
+                return
+            store['globals']['skills'] = serialize_skill_records([r for r in records if r is not mine])
+            done['ok'] = mine['name']
+        update_settings_store(change)
+        if not done:
+            if self._skill_named(load_app_skill_records(), name) is not None:
+                raise SelfToolError(f'{name!r} is brought by another app and cannot be deleted here '
+                                    '(update_skill with enabled: false switches it off).')
+            raise SelfToolError(f'No skill named {name!r} (list_skills).')
+        self._skills_changed()
+        return f'Deleted the skill {done["ok"]!r}.'
+
+    # ---- scheduled tasks (the folder Tomato runs from; see the tomato-schedule skill)
+    @staticmethod
+    def _task_folder(name, must_exist=True):
+        name = str(name or '').strip()
+        if not name or len(name) > 80 or name.startswith(('.', '_')) or any(c in name for c in '/\\:'):
+            raise SelfToolError('A task name: at most 80 characters, no / \\ :, not starting with . or _.')
+        folder = os.path.join(SCHEDULED_TASKS_DIR, name)
+        if must_exist and not os.path.isdir(folder):
+            raise SelfToolError(f'No scheduled task named {name!r}.')
+        return folder
+
+    @staticmethod
+    def _scheduler_ready():
+        if not os.path.isfile(os.path.join(SCHEDULED_TASKS_DIR, '_schedulers', 'Tomato.json')):
+            raise SelfToolError('No timing app has set up scheduled tasks on this Mac (Tomato runs them); nothing written.')
+
+    def list_scheduled_tasks(self, a):
+        rows = []
+        try:
+            names = sorted(os.listdir(SCHEDULED_TASKS_DIR))
+        except OSError:
+            names = []
+        for name in names:
+            folder = os.path.join(SCHEDULED_TASKS_DIR, name)
+            if name.startswith(('.', '_')) or not os.path.isdir(folder):
+                continue
+            try:
+                with open(os.path.join(folder, 'schedule.json'), encoding='utf-8') as handle:
+                    schedule = json.load(handle)
+            except (OSError, ValueError):
+                schedule = {}
+            rows.append({'name': name, 'start': schedule.get('start'), 'repeat_hours': schedule.get('repeat_hours'),
+                         'repeat_until': schedule.get('repeat_until'), 'draft': not os.path.isfile(os.path.join(folder, 'task.md')),
+                         'task': _self_tool_text(read_task_text(SCHEDULED_TASKS_DIR, name), 1500)})
+        return rows
+
+    @staticmethod
+    def _write_task_file(path, text):
+        with open(path + '.tmp', 'w', encoding='utf-8') as handle:
+            handle.write(text)
+        os.replace(path + '.tmp', path)
+
+    def _schedule_from(self, a, old=None):
+        schedule = dict(old or {'version': 1, 'scheduler': 'Tomato', 'length_hours': 1, 'repeat_hours': None,
+                                'repeat_until': None, 'created_by': 'Broccoli',
+                                'created_at': time.strftime('%Y-%m-%d %H:%M')})
+        if a.get('start') is not None:
+            start = ' '.join(str(a['start']).replace('T', ' ').split())[:16]
+            try:
+                datetime.datetime.strptime(start, '%Y-%m-%d %H:%M')
+            except ValueError:
+                raise SelfToolError('start is a local time written "YYYY-MM-DD HH:MM".')
+            schedule['start'] = start
+        if 'repeat_hours' in a:
+            schedule['repeat_hours'] = (float(a['repeat_hours']) or None) if a['repeat_hours'] not in (None, '') else None
+        if 'repeat_until' in a:
+            schedule['repeat_until'] = str(a['repeat_until'] or '').strip()[:10] or None
+        if a.get('length_hours'):
+            schedule['length_hours'] = float(a['length_hours'])
+        if not schedule.get('start'):
+            raise SelfToolError('start is needed ("YYYY-MM-DD HH:MM", local time, in the future).')
+        return schedule
+
+    def create_scheduled_task(self, a):
+        self._scheduler_ready()
+        folder = self._task_folder(a.get('name'), must_exist=False)
+        text = str(a.get('task_text', '') or '').strip()
+        if not text:
+            raise SelfToolError('task_text (the full instructions sent at each run) is needed.')
+        if os.path.isfile(os.path.join(folder, 'task.md')):
+            raise SelfToolError('A task with that name exists (update_scheduled_task changes it).')
+        os.makedirs(folder, exist_ok=True)
+        schedule_path = os.path.join(folder, 'schedule.json')
+        if not os.path.exists(schedule_path):               # a draft made in Tomato already has its time
+            self._write_task_file(schedule_path, json.dumps(self._schedule_from(a), ensure_ascii=False, indent=1))
+        self._write_task_file(os.path.join(folder, 'task.md'), text)     # last: its appearance is the "go"
+        return f'Saved the scheduled task {os.path.basename(folder)!r}; it shows up in Tomato within a few seconds.'
+
+    def update_scheduled_task(self, a):
+        self._scheduler_ready()
+        folder = self._task_folder(a.get('name'))
+        changed = []
+        if any(k in a for k in ('start', 'repeat_hours', 'repeat_until', 'length_hours')):
+            path = os.path.join(folder, 'schedule.json')
+            try:
+                with open(path, encoding='utf-8') as handle:
+                    old = json.load(handle)
+            except (OSError, ValueError):
+                old = None
+            self._write_task_file(path, json.dumps(self._schedule_from(a, old), ensure_ascii=False, indent=1))
+            changed.append('schedule')
+        if str(a.get('task_text', '') or '').strip():
+            self._write_task_file(os.path.join(folder, 'task.md'), str(a['task_text']).strip())
+            changed.append('instructions')
+        if not changed:
+            raise SelfToolError('Nothing to change (task_text, start, repeat_hours, repeat_until, length_hours).')
+        return f'Changed the {" and ".join(changed)} of {os.path.basename(folder)!r}.'
+
+    def delete_scheduled_task(self, a):
+        folder = self._task_folder(a.get('name'))
+        shutil.rmtree(folder)
+        return f'Deleted the scheduled task {os.path.basename(folder)!r} (Tomato drops its coming runs).'
+
+    def create_scheduled_task_run(self, a):
+        folder = self._task_folder(a.get('name'))
+        name = os.path.basename(folder)
+        text = read_task_text(SCHEDULED_TASKS_DIR, name)
+        if not text.strip():
+            raise SelfToolError('That task has no instructions yet (a draft).')
+        return self.create_question({'question': text, 'title': name, 'group': name})
+
+    # ---- deliverables and reports
+    def list_outputs(self, a):
+        _path, record, cid = self._conversation(a, archived_ok=True)
+        return [{'id': o.get('id', ''), 'kind': o.get('kind', ''), 'title': o.get('title', ''),
+                 'file': o.get('path', '') or o.get('filename', ''), 'created': o.get('created_at', '')}
+                for o in record.get('outputs') or [] if isinstance(o, dict)]
+
+    def read_output(self, a):
+        _path, record, cid = self._conversation(a, archived_ok=True)
+        wanted = str(a.get('output_id', '') or '').strip()
+        for output in record.get('outputs') or []:
+            if isinstance(output, dict) and output.get('id') == wanted:
+                text = output.get('content') or ''
+                file_path = str(output.get('path', '') or output.get('snapshot_path', '') or '')
+                if not text and file_path and os.path.isfile(file_path):
+                    text = _output_text_from_file(file_path)
+                return {'title': output.get('title', ''), 'kind': output.get('kind', ''), 'file': file_path,
+                        'content': _self_tool_text(text, 40000)}
+        raise SelfToolError(f'No output {wanted!r} in that conversation (list_outputs).')
+
+    def read_report(self, a):
+        kind = str(a.get('kind', '') or 'day').strip()
+        if kind not in REPORT_KINDS:
+            raise SelfToolError('kind is day, week or month.')
+        day = str(a.get('day', '') or '').strip() or datetime.date.today().isoformat()
+        try:
+            key = report_key_for(kind, datetime.date.fromisoformat(day[:10]))
+        except ValueError:
+            raise SelfToolError('day is written "YYYY-MM-DD".')
+        found = read_report_file(kind, key)
+        if not found:
+            return f'There is no {kind} report for {key}.'
+        return {'kind': kind, 'key': key, 'report': _self_tool_text(found.get('text', ''), 30000)}
+
+    # ---- the list
+    def _register(self):
+        obj = lambda required=(), **properties: dict(
+            {'type': 'object', 'properties': properties}, **({'required': list(required)} if required else {}))
+        text = lambda description: {'type': 'string', 'description': description}
+        number = lambda description: {'type': 'number', 'description': description}
+        cid = text('The conversation\'s id (list_conversations).')
+        files = {'type': 'array', 'items': {'type': 'string'},
+                 'description': 'Full paths of files on this Mac to send along (at most 20): images, PDFs, text, Office files.'}
+        add = self.host.tool
+        quick = dict(main_thread=False, timeout=40)
+        add('list_conversations', 'The person\'s conversations, newest first: id, title, last change, group. text: words '
+            'that must appear in the conversation (title, questions, answers, files). group: only this group. '
+            'archived: true = the archived ones instead.',
+            obj(text=text('Words to look for.'), group=text('A group name.'), archived={'type': 'boolean'},
+                limit=number('At most this many (30).')), self.list_conversations, **quick)
+        add('read_conversation', 'One conversation: title, group, and its last turns (question + answer). last_turns: '
+            'how many (10; 0 = all).', obj(['conversation_id'], conversation_id=cid, last_turns=number('How many turns.')),
+            self.read_conversation, **quick)
+        add('open_conversation', 'Shows a conversation in the Broccoli window.', obj(['conversation_id'], conversation_id=cid),
+            self.open_conversation, **quick)
+        add('open_reader', 'Shows a file in Broccoli\'s reader window (read only: PDF, Office files, text, pictures); page = '
+            'the page to show. What the person then asks goes with that file and page.',
+            obj(['path'], path=text('Full path of the file.'), page=number('Page to show (1 = the first).')),
+            self.open_reader, **quick)
+        add('open_editor', 'Opens a file in Broccoli\'s editor window (text, code, Markdown, Office files) so the '
+            'person can see and change it.', obj(['path'], path=text('Full path of the file.')),
+            self.open_editor, **quick)
+        add('update_conversation_title', 'Renames a conversation.', obj(['conversation_id', 'title'], conversation_id=cid,
+            title=text('The new title (48 characters at most).')), self.update_conversation_title, mutating=True, **quick)
+        add('delete_conversation', 'Archives a conversation (hidden; update_conversation_restore brings it back). Ask the '
+            'person first.', obj(['conversation_id'], conversation_id=cid), self.delete_conversation, destructive=True, **quick)
+        add('update_conversation_restore', 'Brings an archived conversation back into the history.',
+            obj(['conversation_id'], conversation_id=cid), self.update_conversation_restore, mutating=True, **quick)
+        add('create_merged_conversation', 'Merges two or more conversations into one new conversation (oldest first); '
+            'the originals are archived. Ask the person first.',
+            obj(['conversation_ids'], conversation_ids={'type': 'array', 'items': {'type': 'string'}},
+                title=text('A title for the merged one (optional).')),
+            self.create_merged_conversation, mutating=True, main_thread=False, timeout=180)
+        add('list_groups', 'The conversation groups: id, name, how many conversations.', obj(), self.list_groups, **quick)
+        add('create_group', 'Makes a new, empty conversation group.', obj(['name'], name=text('The group\'s name.')),
+            self.create_group, mutating=True, **quick)
+        add('update_group', 'Renames a group.', obj(['group', 'name'], group=text('The group (name or id).'),
+            name=text('The new name.')), self.update_group, mutating=True, **quick)
+        add('delete_group', 'Deletes a group; its conversations stay, in no group. Ask the person first.',
+            obj(['group'], group=text('The group (name or id).')), self.delete_group, destructive=True, **quick)
+        add('update_conversation_group', 'Puts a conversation into a group (group "" = into no group).',
+            obj(['conversation_id', 'group'], conversation_id=cid, group=text('The group (name or id), or "".')),
+            self.update_conversation_group, mutating=True, **quick)
+        add('create_question', 'Asks Broccoli\'s AI a question, in the background: in an existing conversation '
+            '(conversation_id) or a new one (title, group). profile: the model profile to use (the conversation keeps '
+            'it). attachments: files to send along. In a conversation that is busy the question waits its turn. '
+            'Uses the person\'s models and money. Returns a request_id for read_question_answer.',
+            obj(['question'], question=text('The question or task, in full.'), conversation_id=cid,
+                title=text('Title of a new conversation.'), group=text('Group of a new conversation (made if missing).'),
+                profile=text('A model profile name (list_profiles).'), attachments=files),
+            self.create_question, mutating=True, **quick)
+        add('read_question_answer', 'The answer to a create_question: status completed / waiting_for_user / failed / '
+            'stopped with the answer, or running. Waits up to wait_seconds (20, at most 25) for it.',
+            obj(['request_id'], request_id=text('From create_question.'), wait_seconds=number('Seconds to wait.')),
+            self.read_question_answer, main_thread=False, timeout=40)
+        add('list_profiles', 'The model profiles: name, model, endpoint, whether a key is set, which is the default. '
+            'API keys are never shown.', obj(), self.list_profiles, **quick)
+        add('create_profile', 'Adds a model profile (an OpenAI-compatible endpoint). Ask the person first.',
+            obj(['name', 'endpoint', 'model'], name=text('A name.'), endpoint=text('Base URL, e.g. https://api.openai.com.'),
+                model=text('The model id.'), api_key=text('The API key (stored in Broccoli, never shown again).'),
+                append_v1={'type': 'boolean', 'description': 'Add /v1 to the endpoint.'}, timeout=number('Seconds (60).')),
+            self.create_profile, mutating=True, **quick)
+        add('update_profile', 'Changes a model profile: endpoint, model, api_key, append_v1, timeout.',
+            obj(['name'], name=text('The profile.'), endpoint=text('Base URL.'), model=text('The model id.'),
+                api_key=text('A new API key.'), append_v1={'type': 'boolean'}, timeout=number('Seconds.')),
+            self.update_profile, mutating=True, **quick)
+        add('delete_profile', 'Deletes a model profile. Ask the person first.', obj(['name'], name=text('The profile.')),
+            self.delete_profile, destructive=True, **quick)
+        add('update_default_profile', 'Makes a profile the default for new chats.', obj(['name'], name=text('The profile.')),
+            self.update_default_profile, mutating=True, **quick)
+        add('update_conversation_profile', 'Sets the model profile one conversation uses for a role (final_answer = its '
+            'answers, router = planning, …); profile "" = follow the group / Settings again.',
+            obj(['conversation_id', 'profile'], conversation_id=cid, profile=text('A profile name, or "".'),
+                role={'type': 'string', 'enum': list(MODEL_ROLE_SLOTS)}),
+            self.update_conversation_profile, mutating=True, **quick)
+        add('read_memory', 'Broccoli\'s permanent memory about the person (what it always keeps in mind) and the latest '
+            'daily notes.', obj(), self.read_memory, **quick)
+        add('create_memory_note', 'Adds lines to the permanent memory (one fact per line).',
+            obj(['text'], text=text('What to remember.')), self.create_memory_note, mutating=True, **quick)
+        add('delete_memory_note', 'Removes remembered lines (the 📌 ones) matching the text; ambiguous matches are '
+            'given back instead of removed.', obj(['text'], text=text('What to forget.')),
+            self.delete_memory_note, mutating=True, **quick)
+        add('list_running', 'What Broccoli is working on right now: the conversations with a running task, what each is '
+            'doing, how many questions wait behind it.', obj(), self.list_running, **quick)
+        add('update_conversation_stop', 'Stops the task running in a conversation (the Stop button); what was written so '
+            'far stays as its answer. Ask the person first.', obj(['conversation_id'], conversation_id=cid),
+            self.update_conversation_stop, mutating=True, **quick)
+        add('create_running_note', 'Adds a note to the task running in a conversation (Add note): it is taken in at the '
+            'task\'s next step, without stopping it. For a new question behind a running task use create_question (it waits its turn).',
+            obj(['conversation_id', 'text'], conversation_id=cid, text=text('The note.'), attachments=files),
+            self.create_running_note, mutating=True, **quick)
+        prompt_name = text('The saved prompt\'s name (list_saved_prompts).')
+        add('list_saved_prompts', 'The person\'s saved prompts (Settings › Saved prompts): name and text; {text} in a body '
+            'stands for what the person types.', obj(), self.list_saved_prompts, **quick)
+        add('create_saved_prompt', 'Saves a new reusable prompt. Show the person the text first.',
+            obj(['name', 'body'], name=text('A short name.'), body=text('The prompt; {text} = what the person types.')),
+            self.create_saved_prompt, mutating=True, **quick)
+        add('update_saved_prompt', 'Changes a saved prompt: body (the complete new text) and / or new_name.',
+            obj(['name'], name=prompt_name, new_name=text('A new name.'), body=text('The complete new text.')),
+            self.update_saved_prompt, mutating=True, **quick)
+        add('delete_saved_prompt', 'Deletes a saved prompt. Ask the person first.', obj(['name'], name=prompt_name),
+            self.delete_saved_prompt, destructive=True, **quick)
+        setting_schema = {}
+        for key, (kind, _apply, words) in SELF_TOOL_SETTINGS.items():
+            if kind == 'bool':
+                setting_schema[key] = {'type': 'boolean', 'description': words}
+            elif kind == 'lines':
+                setting_schema[key] = {'type': 'array', 'items': {'type': 'string'}, 'description': words}
+            elif kind == 'text':
+                setting_schema[key] = text(words)
+            elif kind[0] == 'int':
+                setting_schema[key] = number(f'{words} ({kind[1]}–{kind[2]})')
+            else:
+                setting_schema[key] = {'type': 'string', 'enum': list(kind[1]), 'description': words}
+        add('read_settings', 'Broccoli\'s switches that a tool may set (window, answers, languages, background look at '
+            'the screen, memory sync, reports, voice input, usage bars), with their values now.', obj(), self.read_settings, **quick)
+        add('update_settings', 'Sets one or more of those switches; the rest stay. Not here on purpose: anything about '
+            'approval, permissions, shortcuts, keys.', {'type': 'object', 'properties': setting_schema, 'additionalProperties': False},
+            self.update_settings, mutating=True, **quick)
+        add('list_model_roles', 'Which model profiles each role uses for all conversations (final_answer = the answers, '
+            'router = planning, web_search, speech_to_text, browser_use, embedding, background_vision …), in order of preference.',
+            obj(), self.list_model_roles, **quick)
+        add('update_model_role', 'Sets the models of one role for all conversations (one conversation: '
+            'update_conversation_profile): profiles = names in order of preference, [] = none chosen.',
+            obj(['role', 'profiles'], role={'type': 'string', 'enum': list(_self_tool_model_roles())},
+                profiles={'type': 'array', 'items': {'type': 'string'}}), self.update_model_role, mutating=True, **quick)
+        report_kind = {'type': 'string', 'enum': list(REPORT_KINDS)}
+        template_name = text('The template\'s name (list_report_templates).')
+        used_for = {'type': 'array', 'items': {'type': 'string', 'enum': list(REPORT_KINDS)},
+                    'description': 'Which reports follow this template (a kind follows one template).'}
+        add('create_report', 'Writes Broccoli\'s report of a day / week / month now (again, if there is one) and gives it '
+            'back. Uses the person\'s default model; can take a few minutes.',
+            obj(kind=report_kind, day=text('YYYY-MM-DD (a day in that week / month; default today).')),
+            self.create_report, mutating=True, main_thread=False, timeout=420)
+        add('list_report_templates', 'The templates Broccoli\'s reports follow: name, text, which reports use each.',
+            obj(), self.list_report_templates, **quick)
+        add('create_report_template', 'Saves a new report template (Markdown: the headings and what goes under each). '
+            'Show the person the text first.', obj(['name', 'text'], name=text('A short name.'), text=text('The template.'),
+            used_for=used_for), self.create_report_template, mutating=True, **quick)
+        add('update_report_template', 'Changes a report template: text (the complete new one), new_name, used_for.',
+            obj(['name'], name=template_name, new_name=text('A new name.'), text=text('The complete new template.'),
+                used_for=used_for), self.update_report_template, mutating=True, **quick)
+        add('delete_report_template', 'Deletes a report template. Ask the person first.', obj(['name'], name=template_name),
+            self.delete_report_template, destructive=True, **quick)
+        source = text('The source: its id or name (list_context_sources).')
+        add('list_context_sources', 'What Broccoli can draw on besides its conversations: the external context sources '
+            '(folders, MCP servers) and the tools other apps on this Mac bring — each with its switch. Tokens are never shown.',
+            obj(), self.list_context_sources, **quick)
+        add('create_context_source', 'Adds an external context source: type local_path (a folder or file Broccoli may '
+            'read from: path) or mcp_http (an MCP server by address: endpoint, auth_token if it needs one). The server is '
+            'asked for its tools first; its tools then ask the person before anything that is not a plain read. '
+            'Ask the person first.', obj(['type'], type={'type': 'string', 'enum': ['local_path', 'mcp_http']},
+            name=text('A name.'), path=text('local_path: the folder or file.'), endpoint=text('mcp_http: the address.'),
+            auth_token=text('mcp_http: a token (stored, never shown again).')),
+            self.create_context_source, mutating=True, main_thread=False, timeout=90)
+        add('update_context_source', 'Changes a source: enabled, auto_context (offered to every question by itself), '
+            'used_as_tools, new_name. For another app\'s tools: only enabled.',
+            obj(['source'], source=source, enabled={'type': 'boolean'}, auto_context={'type': 'boolean'},
+                used_as_tools={'type': 'boolean'}, new_name=text('A new name.')),
+            self.update_context_source, mutating=True, **quick)
+        add('delete_context_source', 'Removes a source from Broccoli (its files or server are untouched). Ask the person first.',
+            obj(['source'], source=source), self.delete_context_source, destructive=True, **quick)
+        add('list_memory_sync', 'The memory sync with the person\'s online AI accounts: on or off, how often, each '
+            'account\'s last result.', obj(), self.list_memory_sync, **quick)
+        add('create_memory_sync', 'Starts the memory sync now (it reads and writes the person\'s online AI accounts, in the '
+            'background).', obj(), self.create_memory_sync, mutating=True, **quick)
+        add('list_favorites', 'The texts the person kept (favorites), newest first. text: words to look for.',
+            obj(text=text('Words to look for.'), limit=number('At most this many (50).')), self.list_favorites, **quick)
+        add('create_favorite', 'Keeps a text among the favorites.', obj(['text'], text=text('The text to keep.'),
+            caption=text('A short caption (optional).')), self.create_favorite, mutating=True, **quick)
+        add('delete_favorite', 'Removes a favorite. Ask the person first.', obj(['id'], id=text('From list_favorites.')),
+            self.delete_favorite, destructive=True, **quick)
+        add('list_links', 'The links that appeared in a conversation\'s answers: url and title.',
+            obj(['conversation_id'], conversation_id=cid), self.list_links, **quick)
+        output_id = text('From list_outputs.')
+        add('create_output_file', 'Saves a deliverable as a file: path = where (a full path; a folder = the '
+            'deliverable\'s own name in it), format = original, md, docx, pdf, html or txt (text and pages convert; '
+            'other files only as the original).', obj(['conversation_id', 'output_id', 'path'], conversation_id=cid,
+            output_id=output_id, path=text('Full path of the file or folder.'),
+            format={'type': 'string', 'enum': ['original', 'md', 'docx', 'pdf', 'html', 'txt']},
+            overwrite={'type': 'boolean', 'description': 'Write over a file that is there (only after the person said so).'}),
+            self.create_output_file, mutating=True, main_thread=False, timeout=200)
+        add('update_output', 'Replaces the text of a text deliverable with a corrected one (content = the complete new '
+            'text). The text before the first change stays kept as its original.',
+            obj(['conversation_id', 'output_id', 'content'], conversation_id=cid, output_id=output_id,
+                content=text('The complete new text.')), self.update_output, mutating=True, **quick)
+        add('list_tray_items', 'What is in the tray beside Broccoli\'s small circle (files and links kept at hand).',
+            obj(), self.list_tray_items, **quick)
+        add('create_tray_item', 'Puts a file (path) or a link (url) into the tray.',
+            obj(path=text('Full path of a file or folder.'), url=text('A link.'), name=text('A name for the link.')),
+            self.create_tray_item, mutating=True, **quick)
+        add('delete_tray_item', 'Takes one thing out of the tray.', obj(['key'], key=text('From list_tray_items.')),
+            self.delete_tray_item, destructive=True, **quick)
+        skill = text('The skill\'s name (list_skills).')
+        add('list_skills', 'The skills Broccoli\'s Agent can use: name, description (when it is used), whether it is '
+            'switched on, and whether it is the person\'s own or brought by another app (read only).',
+            obj(), self.list_skills, **quick)
+        add('read_skill', 'One skill in full: its description and its instructions.', obj(['name'], name=skill),
+            self.read_skill, **quick)
+        add('create_skill', 'Saves a new skill of the person\'s own (Settings › Skills): fixed instructions the Agent '
+            'follows whenever a request fits. Use it when the person asks to keep a way of doing something ("from now '
+            'on, when I say X, do it like this", "save this as a skill"). Writing a good one: description = exactly '
+            'when to use it and when NOT, in the words the person would say (the Agent sees only this line when it '
+            'chooses); instructions = the numbered steps in full, naming the tools to use, what to show the person and '
+            'what needs their yes before it is done, how to avoid doing the same thing twice, what to do when a step '
+            'fails, and the limits. A skill is read by an Agent that remembers nothing of this conversation: leave '
+            'nothing to "as discussed". No passwords or keys in it. Show the person the whole text and get a yes first.',
+            obj(['name', 'description', 'instructions'], name=text('A short name, e.g. log-meals-to-my-diet-app.'),
+                description=text('When to use it, and when not (one or two sentences).'),
+                instructions=text('The complete instructions (Markdown).'),
+                enabled={'type': 'boolean', 'description': 'Switched on (default true).'}),
+            self.create_skill, mutating=True, **quick)
+        add('update_skill', 'Changes a skill of the person\'s own: description, instructions (the complete new text — '
+            'read_skill first and change only what is asked), new_name, enabled. For a skill another app brings, only '
+            'enabled. Use it to put into a skill what was learnt when it ran ("add that to the skill").',
+            obj(['name'], name=skill, new_name=text('A new name.'), description=text('The new description.'),
+                instructions=text('The complete new instructions.'), enabled={'type': 'boolean'}),
+            self.update_skill, mutating=True, **quick)
+        add('delete_skill', 'Deletes a skill of the person\'s own. Ask the person first.', obj(['name'], name=skill),
+            self.delete_skill, destructive=True, **quick)
+        add('list_scheduled_tasks', 'The scheduled tasks Broccoli runs at their times (through Tomato): name, start, '
+            'repeat, the start of the instructions.', obj(), self.list_scheduled_tasks, **quick)
+        add('create_scheduled_task', 'Saves a new scheduled task. task_text: the complete instructions sent at each run '
+            '(each run is a new conversation that remembers nothing). start "YYYY-MM-DD HH:MM" local; repeat_hours: '
+            'none = once, 24 = daily, 168 = weekly; repeat_until "YYYY-MM-DD". Show the person the task and get a yes first.',
+            obj(['name', 'task_text', 'start'], name=text('A short name (a folder name).'), task_text=text('The instructions.'),
+                start=text('YYYY-MM-DD HH:MM'), repeat_hours=number('Hours between runs.'),
+                repeat_until=text('YYYY-MM-DD'), length_hours=number('Hours (1).')),
+            self.create_scheduled_task, mutating=True, **quick)
+        add('update_scheduled_task', 'Changes a scheduled task: its instructions (task_text) and / or its time.',
+            obj(['name'], name=text('The task.'), task_text=text('New instructions.'), start=text('YYYY-MM-DD HH:MM'),
+                repeat_hours=number('Hours; 0 = once.'), repeat_until=text('YYYY-MM-DD or "".'), length_hours=number('Hours.')),
+            self.update_scheduled_task, mutating=True, **quick)
+        add('delete_scheduled_task', 'Deletes a scheduled task with its folder (including the files its runs kept). '
+            'Ask the person first.', obj(['name'], name=text('The task.')), self.delete_scheduled_task,
+            destructive=True, **quick)
+        add('create_scheduled_task_run', 'Runs a scheduled task now, once (a new conversation in the task\'s group). '
+            'Returns a request_id for read_question_answer.', obj(['name'], name=text('The task.')),
+            self.create_scheduled_task_run, mutating=True, **quick)
+        add('list_outputs', 'The deliverables of a conversation (texts, code, files the AI made or changed).',
+            obj(['conversation_id'], conversation_id=cid), self.list_outputs, **quick)
+        add('read_output', 'One deliverable in full.', obj(['conversation_id', 'output_id'], conversation_id=cid,
+            output_id=text('From list_outputs.')), self.read_output, **quick)
+        add('read_report', 'Broccoli\'s written report of a day / week / month (what the person did with AI).',
+            obj(kind={'type': 'string', 'enum': list(REPORT_KINDS)}, day=text('YYYY-MM-DD (a day in that week / month).')),
+            self.read_report, **quick)
 
 
 # ── Open Connector: the user's own apps as tools (2026-10-29) ─────────────────────────────
@@ -22970,6 +25320,11 @@ USAGE_BAR_PROVIDER_COLOR_NAMES = ('Blue', 'Indigo', 'Purple', 'Teal', 'Yellow', 
 USAGE_BAR_WINDOW_MODES = ('auto', 'session', 'weekly')
 USAGE_BAR_DISPLAY_MODES = ('always', 'near', 'hover')
 USAGE_BAR_ENABLED_KEY = 'usage_bar_enabled'
+# 2026-11-23 (Ryan: "如果在他什么都没有的情况下默认是不要开的…上面这个栏就是空的嘛，就显得非常不好看"):
+# usage_bar_enabled is None until the user ticks or unticks the box themselves — then the bars show
+# only once a provider has given a real number (nothing set up = no empty bar). True / False count
+# only with this mark: older versions wrote True on every Settings save, which nobody chose.
+USAGE_BAR_ENABLED_CHOSEN_KEY = 'usage_bar_enabled_chosen'
 # General → Completion alerts (2026-10-30): both off by default = the behaviour before
 COMPLETION_SOUND_SETTING_KEY = 'completion_alert_sound'
 COMPLETION_REMINDER_SETTING_KEY = 'completion_alert_reminder'
@@ -22978,6 +25333,10 @@ VOICE_INPUT_DEVICE_KEY = 'voice_input_device'              # the microphone's id
 VOICE_INPUT_DEVICE_NAME_KEY = 'voice_input_device_name'    # its name, shown while it is not connected
 VOICE_INPUT_LANGUAGE_KEY = 'voice_input_language'          # a language key ('chinese', 'japanese', …)
 VOICE_INPUT_TIDY_KEY = 'voice_input_tidy'                  # after listening, the default chat model tidies the text
+# the sound before a DOWNLOADED model hears it (2026-11-21; local_speech.SoundTreatment)
+VOICE_SOUND_DETECTOR_KEY = 'voice_sound_detector'          # a voice detector finds the speech (not "louder than X")
+VOICE_SOUND_GAIN_KEY = 'voice_sound_gain'                  # quiet sound is made louder
+VOICE_SOUND_DENOISE_KEY = 'voice_sound_denoise'            # keys, fans and the like are taken out
 VOICE_INPUT_TIDY_PROMPTS_KEY = 'voice_input_tidy_prompts'  # the user's own tidy instructions: [{'name', 'text'}]
 VOICE_INPUT_TIDY_PROMPT_KEY = 'voice_input_tidy_prompt'    # the name of the one in use ('' = Broccoli's own)
 # 2026-11-17: corrections learned from what the user changed in a dictation before sending it:
@@ -24037,14 +26396,46 @@ def usage_bar_details_text(name: str, reading: dict, cli_kind: str) -> str:
 
 def default_usage_bar_settings() -> dict:
     """The Usage page's settings and their defaults (what its collect step writes)."""
-    return {USAGE_BAR_ENABLED_KEY: True, 'usage_bar_providers': [], 'usage_bar_window': 'auto',
-            'usage_bar_display': 'always', 'usage_bar_colors': {}}
+    return {USAGE_BAR_ENABLED_KEY: None, USAGE_BAR_ENABLED_CHOSEN_KEY: False, 'usage_bar_providers': [],
+            'usage_bar_window': 'auto', 'usage_bar_display': 'always', 'usage_bar_colors': {}}
+
+
+def usage_bar_enabled_choice(globals_store: dict):
+    """True / False when the user ticked or unticked "Show usage bars" themselves, else None
+    (on as soon as a provider has a real number)."""
+    globals_store = globals_store if isinstance(globals_store, dict) else {}
+    value = globals_store.get(USAGE_BAR_ENABLED_KEY)
+    if value is False:
+        return False   # turned off: always the user's own doing
+    if value is True and globals_store.get(USAGE_BAR_ENABLED_CHOSEN_KEY):
+        return True
+    return None
+
+
+def _load_usage_bar_enabled(raw_globals: dict, _globals_store: dict):
+    return usage_bar_enabled_choice(raw_globals)
+
+
+def usage_bar_state_has_numbers(globals_store: dict, state: dict) -> bool:
+    """A provider the bars would show has a real number in this CodexBar state (the monitor's, or
+    the cache file's): what "not chosen" waits for before the bars appear."""
+    state = state if isinstance(state, dict) else {}
+    if not state.get('cli'):
+        return False
+    config = usage_bar_config_from_globals(globals_store)
+    selected = usage_bar_selected_providers({'usage_bar_providers': config['providers']}, state.get('providers') or [])
+    readings = state.get('readings') or {}
+    return any(usage_bar_pick_window(readings.get(provider) or {}, config['window'])[0] is not None
+               for provider in selected)
 
 
 def usage_bar_config_from_globals(globals_store: dict) -> dict:
     globals_store = globals_store if isinstance(globals_store, dict) else {}
+    choice = usage_bar_enabled_choice(globals_store)
     return {
-        'enabled': bool(globals_store.get(USAGE_BAR_ENABLED_KEY, True)),
+        # None (not chosen) still reads in the background: that is how a set-up provider is noticed
+        'enabled': choice is not False,
+        'chosen': choice is not None,
         'providers': normalize_usage_bar_providers(globals_store.get('usage_bar_providers')),
         'window': normalize_usage_bar_window(globals_store.get('usage_bar_window')),
         'display': normalize_usage_bar_display(globals_store.get('usage_bar_display')),
@@ -27596,6 +29987,7 @@ GLOBAL_SETTING_SPECS = [
     ('external_context_sources', ('call', 'default_external_context_sources'),
      ('fn_if_present', 'normalize_external_context_sources')),
     ('mcp_tool_runtime_enabled', True, 'bool'),
+    ('app_mcp_service_enabled', True, 'bool'),
     ('prefer_displayed_history_context', False, 'bool'),
     ('display_history_context_max_chars', DISPLAY_HISTORY_CONTEXT_MAX_CHARS,
      ('fn', 'normalize_display_history_context_max_chars')),
@@ -27603,6 +29995,7 @@ GLOBAL_SETTING_SPECS = [
     ('skip_retrieval_for_blank_prompt', False, 'bool'),
     ('conversation_export_format', 'md', ('str_strip_or', 'md')),   # 🔻 Save: the kind picked last
     ('conversation_export_folder', '', 'str_strip'),
+    ('output_save_folder', '', 'str_strip'),   # outputs panel › Save: the folder picked last (2026-11-22)
     # 🎛️ Move to: new conversations keep going to the device picked last (2026-11-16)
     ('remote_follow_last_device', False, 'bool'),
     ('remote_last_device_id', '', 'str_strip'),
@@ -27627,6 +30020,7 @@ GLOBAL_SETTING_SPECS = [
     ('online_memory_route_to', [ONLINE_MEMORY_LOCAL_ID], ('custom', '_load_online_memory_route_to')),
     ('skills', [], ('fn', 'normalize_skill_records')),
     ('app_skills_disabled', [], ('fn', 'normalize_app_skills_disabled')),
+    ('app_connectors_disabled', [], ('fn', 'normalize_app_connectors_disabled')),
     ('specialized_profiles', ('call', 'default_specialized_profiles'),
      ('fn', 'normalize_specialized_profiles')),
     ('specialized_profile_candidates', {}, ('fn', 'normalize_specialized_profile_candidates')),
@@ -27670,7 +30064,8 @@ GLOBAL_SETTING_SPECS = [
     ('open_connector_enabled', False, 'bool'),
     ('open_connector_port', 0, 'int'),
     # 2026-10-30: usage bars above the blue strip, read from CodexBar (General → Usage)
-    (USAGE_BAR_ENABLED_KEY, True, 'bool'),
+    (USAGE_BAR_ENABLED_KEY, None, ('custom', '_load_usage_bar_enabled')),   # None = not chosen (2026-11-23)
+    (USAGE_BAR_ENABLED_CHOSEN_KEY, False, 'bool'),
     ('usage_bar_providers', [], ('fn', 'normalize_usage_bar_providers')),
     ('usage_bar_window', 'auto', ('fn', 'normalize_usage_bar_window')),
     ('usage_bar_display', 'always', ('fn', 'normalize_usage_bar_display')),
@@ -27683,6 +30078,9 @@ GLOBAL_SETTING_SPECS = [
     (VOICE_INPUT_DEVICE_NAME_KEY, '', 'str'),
     (VOICE_INPUT_LANGUAGE_KEY, '', 'str'),
     (VOICE_INPUT_TIDY_KEY, False, 'bool'),
+    (VOICE_SOUND_DETECTOR_KEY, True, 'bool'),
+    (VOICE_SOUND_GAIN_KEY, True, 'bool'),
+    (VOICE_SOUND_DENOISE_KEY, False, 'bool'),
     (VOICE_INPUT_TIDY_PROMPTS_KEY, [], ('fn', 'normalize_voice_tidy_prompts')),
     (VOICE_INPUT_TIDY_PROMPT_KEY, '', 'str'),
     (VOICE_INPUT_CIRCLE_COPY_KEY, True, 'bool'),
@@ -28181,7 +30579,13 @@ def merge_settings_globals_three_way(base: dict, mine: dict, theirs: dict) -> di
     for key in list(mine.keys()) + [k for k in theirs.keys() if k not in mine]:
         if key in mine:
             panel_changed = key not in base or mine[key] != base[key]
-            if panel_changed or key not in theirs:
+            if (key == 'memory_text' and panel_changed and key in base and key in theirs
+                    and theirs[key] != base[key]):
+                # changed here and on disk (the memory sync from another Mac, the memory tool): both
+                # sides' lines, else a sync's lines would look deleted here and go everywhere
+                merged[key] = merge_memory_text_three_way(str(base[key] or ''), str(mine[key] or ''),
+                                                          str(theirs[key] or ''))
+            elif panel_changed or key not in theirs:
                 merged[key] = copy.deepcopy(mine[key])
             else:
                 merged[key] = copy.deepcopy(theirs[key])
@@ -30408,6 +32812,13 @@ def load_skill_records_from_store(store: dict | None = None, *, enabled_only: bo
             continue
         record['enabled'] = lowered not in switched_off
         records.append(record)
+    taken = {str(record.get('name', '') or '').lower() for record in records}
+    for record in builtin_skill_records():          # Broccoli's own (skill-creator, 2026-11-25)
+        lowered = record['name'].lower()
+        if lowered in taken:
+            continue
+        record['enabled'] = lowered not in switched_off
+        records.append(record)
     if enabled_only:
         records = [record for record in records if record.get('enabled', True)]
     return records
@@ -30958,13 +33369,66 @@ def render_message_plaintext(message: dict) -> str:
     return content
 
 
-def model_profile_label(model: str, profile: str = '') -> str:
-    """"model · profile" for answers and steps (a profile named like its model shows once)."""
+def model_profile_label(model: str, profile: str = '', mcp_sources=None) -> str:
+    """"model · profile" for answers and steps (a profile named like its model shows once);
+    then the MCP services it really got data from: "model · profile · MCP: Tomato, Notion"."""
     model = str(model or '').strip()
     profile = str(profile or '').strip()
+    label = model
     if profile and profile != model:
-        return f'{model} · {profile}' if model else profile
-    return model
+        label = f'{model} · {profile}' if model else profile
+    mcp_label = mcp_sources_label(mcp_sources)
+    if mcp_label:
+        label = f'{label} · {mcp_label}' if label else mcp_label
+    return label
+
+
+def unique_mcp_source_names(names) -> list[str]:
+    seen, out = set(), []
+    for name in (names or []):
+        name = str(name or '').strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def mcp_sources_label(names) -> str:
+    """"MCP: Tomato, Notion" — the services called for this answer / step; '' when none."""
+    names = unique_mcp_source_names(names)
+    return _tr('MCP: {names}').format(names=', '.join(names)) if names else ''
+
+
+# The MCP services one run really called (the lookup before the answer, and the tools the
+# answering model called), kept until the answer is written and labelled.
+_MCP_SOURCES_USED_BY_RUN = {}
+_MCP_SOURCES_USED_LOCK = threading.Lock()
+
+
+def note_mcp_sources_used(run_id: str, names) -> None:
+    run_id = str(run_id or '').strip()
+    names = unique_mcp_source_names(names)
+    if not run_id or not names:
+        return
+    with _MCP_SOURCES_USED_LOCK:
+        if run_id not in _MCP_SOURCES_USED_BY_RUN and len(_MCP_SOURCES_USED_BY_RUN) >= 200:
+            _MCP_SOURCES_USED_BY_RUN.pop(next(iter(_MCP_SOURCES_USED_BY_RUN)), None)   # runs that never finished
+        used = _MCP_SOURCES_USED_BY_RUN.setdefault(run_id, [])
+        used.extend(name for name in names if name not in used)
+
+
+def take_mcp_sources_used(run_id: str) -> list[str]:
+    with _MCP_SOURCES_USED_LOCK:
+        return list(_MCP_SOURCES_USED_BY_RUN.pop(str(run_id or '').strip(), []))
+
+
+def mcp_source_names_of_documents(documents) -> list[str]:
+    """The MCP services that gave something to the lookup (a "nothing found" note is not data)."""
+    return unique_mcp_source_names(
+        document.get('source_name', '') for document in (documents or [])
+        if isinstance(document, dict)
+        and str(document.get('source_type', '') or '').startswith('mcp')
+        and str(document.get('tool_name', '') or '') != 'retrieval_diagnostics')
 
 
 def chat_message_render_hash(message: dict) -> str:
@@ -31057,12 +33521,18 @@ def normalize_memory_item_record(item) -> dict | None:
         text = str(item.get('text', '')).strip()
         if not text:
             return None
-        return {
+        record = {
             'text': text,
             'created_at': str(item.get('created_at', '')).strip() or datetime.datetime.now().isoformat(timespec='seconds'),
             'kind': str(item.get('kind', '')).strip() or 'manual',
             'source_date': str(item.get('source_date', '')).strip(),
         }
+        # the Mac whose daily rollup wrote it (2026-11-23: notes sync between the person's Macs,
+        # and a rollup replaces only its own Mac's note of that day)
+        device = str(item.get('device', '') or '').strip()
+        if device:
+            record['device'] = device
+        return record
     text = str(item or '').strip()
     if not text:
         return None
@@ -31510,6 +33980,315 @@ def forget_items_in_permanent_memory(text: str, user=None) -> dict:
         else:
             change['not_found'].append(item)
     return change
+
+
+# ── Memory synced between the same person's Macs (2026-11-23) ───────────────────────────────
+# Ryan: "同一个账户、同一个人嘛，那他的这个记忆就应该是同步的…而且是自动同步的". Automatic, no switch.
+# iCloud › Broccoli › control › memory › <person id> › <device id>.json: each Mac writes only its
+# own file (one writer per file, so iCloud never makes conflict copies) and reads the others'.
+# What syncs: permanent memory (memory_text, its 📌 and ✎ sections included), the dated notes
+# (memory_items) and how many days they are kept. A merge never drops what one Mac added: every
+# line and note keeps when it was last added and last removed on any Mac (the newer one wins), the
+# text edited last gives the order, and the other Macs' lines are slotted in after the line they
+# followed. Only this Mac's owner (never another person using it); on the iCloud poll thread.
+MEMORY_SYNC_SECONDS = 15.0
+MEMORY_SYNC_CLOCK_DAYS = 180
+_MEMORY_SYNC = {'at': -1e9, 'signature': None, 'remote_cache': {}}
+_MEMORY_SYNC_LOCK = threading.Lock()
+
+
+class _MemorySyncRaced(Exception):
+    """The memory changed on this Mac while a sync round was merging: the next round takes it."""
+
+
+def _memory_line_key(line: str) -> str:
+    text = str(line or '').strip()
+    for mark in (REMEMBERED_MEMORY_MARK, LEARNED_OUTPUT_PREFS_MARK):
+        if text.startswith(mark):
+            return mark      # the section's heading, written in each Mac's own language
+    return text
+
+
+def memory_item_sync_key(item: dict) -> str:
+    item = item if isinstance(item, dict) else {}
+    raw = '\x1f'.join(str(item.get(name, '') or '').strip() for name in ('kind', 'source_date', 'text'))
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]
+
+
+def memory_sync_content(globals_store: dict) -> dict:
+    """The part of a user's settings that syncs between their Macs."""
+    globals_store = globals_store if isinstance(globals_store, dict) else {}
+    try:
+        retention = max(1, int(globals_store.get('memory_retention_days', 30) or 30))
+    except (TypeError, ValueError):
+        retention = 30
+    return {'text': str(globals_store.get('memory_text', '') or ''),
+            'items': normalize_memory_item_records(globals_store.get('memory_items', [])),
+            'retention_days': retention}
+
+
+def _memory_sync_clocks(raw=None) -> dict:
+    raw = raw if isinstance(raw, dict) else {}
+    clocks = {}
+    for name in ('lines_added', 'lines_removed', 'items_added', 'items_removed'):
+        table = raw.get(name) if isinstance(raw.get(name), dict) else {}
+        clocks[name] = {}
+        for key, value in table.items():
+            try:
+                clocks[name][str(key)] = float(value)
+            except (TypeError, ValueError):
+                pass
+    for name in ('text_at', 'retention_at'):
+        try:
+            clocks[name] = float(raw.get(name, 0) or 0)
+        except (TypeError, ValueError):
+            clocks[name] = 0.0
+    return clocks
+
+
+def _memory_text_keys(text: str) -> set:
+    return {_memory_line_key(line) for line in str(text or '').splitlines() if line.strip()}
+
+
+def record_memory_sync_edit(before: dict, after: dict, clocks: dict, now: float) -> None:
+    """A change made on this Mac since the last sync round: stamp what was added and removed."""
+    old_keys, new_keys = _memory_text_keys(before.get('text', '')), _memory_text_keys(after.get('text', ''))
+    for key in new_keys - old_keys:
+        clocks['lines_added'][key] = now
+    for key in old_keys - new_keys:
+        clocks['lines_removed'][key] = now
+    if before.get('text', '') != after.get('text', ''):
+        clocks['text_at'] = now
+    old_items = {memory_item_sync_key(item) for item in before.get('items') or []}
+    new_items = {memory_item_sync_key(item) for item in after.get('items') or []}
+    for key in new_items - old_items:
+        clocks['items_added'][key] = now
+    for key in old_items - new_items:
+        clocks['items_removed'][key] = now
+    if before.get('retention_days') != after.get('retention_days'):
+        clocks['retention_at'] = now
+
+
+def _memory_alive(key: str, added: dict, removed: dict) -> bool:
+    gone = removed.get(key)
+    return gone is None or added.get(key, 0.0) > gone
+
+
+def _slot_in(primary: list, secondary: list, key_of, allow=None) -> list:
+    """primary plus the entries of secondary it lacks, each placed right after the entry it followed
+    in secondary (at the top when it followed nothing primary has). Blank text lines are not
+    carried over. allow(key) limits which missing entries come in."""
+    out = list(primary)
+    present = {key_of(entry) for entry in out if key_of(entry)}
+    anchor = -1
+    for entry in secondary:
+        key = key_of(entry)
+        if not key:
+            continue
+        if key in present:
+            anchor = next((index for index, existing in enumerate(out) if key_of(existing) == key), anchor)
+            continue
+        if allow is not None and not allow(key):
+            continue
+        anchor += 1
+        out.insert(anchor, entry)
+        present.add(key)
+    return out
+
+
+def _drop_dead_memory_lines(lines: list, added: dict, removed: dict) -> list:
+    """Lines removed on some Mac after they were last added go. A '## ' heading goes only when no
+    line of its section stays (one Mac emptying 📌 must not orphan a line another Mac just added)."""
+    alive = [not line.strip() or _memory_alive(_memory_line_key(line), added, removed) for line in lines]
+    for index, line in enumerate(lines):
+        if alive[index] or not line.strip().startswith('## '):
+            continue
+        for later in range(index + 1, len(lines)):
+            if lines[later].strip().startswith('## '):
+                break
+            if lines[later].strip() and alive[later]:
+                alive[index] = True
+                break
+    if all(alive):
+        return list(lines)
+    out = []
+    for line, keep in zip(lines, alive):
+        if not keep or (not line.strip() and out and not out[-1].strip()):
+            continue
+        out.append(line)
+    return out
+
+
+def merge_memory_sync_sides(sides: list) -> tuple[dict, dict]:
+    """Merge [{'content', 'clocks', 'device_id'}] → (content, clocks). Same inputs, same result on
+    every Mac: the order comes from the text edited last (ties: the device id)."""
+    clocks = _memory_sync_clocks()
+    for side in sides:
+        side_clocks = side['clocks']
+        for name in ('lines_added', 'lines_removed', 'items_added', 'items_removed'):
+            for key, value in side_clocks[name].items():
+                if value > clocks[name].get(key, -1.0):
+                    clocks[name][key] = value
+        clocks['text_at'] = max(clocks['text_at'], side_clocks['text_at'])
+        clocks['retention_at'] = max(clocks['retention_at'], side_clocks['retention_at'])
+    order = sorted(sides, key=lambda side: (-side['clocks']['text_at'], str(side.get('device_id', ''))))
+    primary_text = order[0]['content']['text']
+    primary_lines = primary_text.splitlines()
+    lines = primary_lines
+    for side in order[1:]:
+        lines = _slot_in(lines, side['content']['text'].splitlines(),
+                         lambda line: _memory_line_key(line) if line.strip() else '')
+    lines = _drop_dead_memory_lines(lines, clocks['lines_added'], clocks['lines_removed'])
+    if lines == primary_lines:
+        text = primary_text                     # nothing came in or went: the text exactly as written
+    else:
+        text = '\n'.join(lines).strip('\n')
+        if text and primary_text.endswith('\n'):
+            text += '\n'
+    items = list(order[0]['content']['items'])
+    for side in order[1:]:
+        items = _slot_in(items, side['content']['items'], memory_item_sync_key)
+    items = [item for item in items
+             if _memory_alive(memory_item_sync_key(item), clocks['items_added'], clocks['items_removed'])]
+    retention_side = sorted(sides, key=lambda side: (-side['clocks']['retention_at'], str(side.get('device_id', ''))))[0]
+    content = {'text': text, 'items': normalize_memory_item_records(items),
+               'retention_days': retention_side['content']['retention_days']}
+    return content, clocks
+
+
+def merge_memory_text_three_way(base: str, mine: str, theirs: str) -> str:
+    """Settings › Memory saved while the memory changed on disk (a sync round, the memory tool):
+    the disk text with the panel's own changes applied — the lines the panel removed go, the lines
+    it added come in after the line they follow in the panel."""
+    base_keys, mine_keys = _memory_text_keys(base), _memory_text_keys(mine)
+    removed = base_keys - mine_keys
+    added = mine_keys - base_keys
+    lines = [line for line in str(theirs or '').splitlines() if not (line.strip() and _memory_line_key(line) in removed)]
+    lines = _slot_in(lines, str(mine or '').splitlines(),
+                     lambda line: _memory_line_key(line) if line.strip() else '', allow=lambda key: key in added)
+    return '\n'.join(lines)
+
+
+def memory_sync_state_path() -> str:
+    return os.path.join(user_data_dir(OWNER_USER_KEY), 'memory_sync.json')
+
+
+def memory_sync_folder(backend, person_id: str) -> str:
+    return backend.path('control', 'memory', _cloud_file_component(person_id, 'user'))
+
+
+def _read_memory_sync_remotes(backend, folder: str, me: str, person_id: str) -> list:
+    """The other Macs' memory files that are on this Mac (one not downloaded yet is asked for and
+    skipped: nothing waits). Parsed files are kept by size and time."""
+    sides = []
+    cache = _MEMORY_SYNC['remote_cache']
+    try:
+        paths = sorted(Path(folder).glob('*.json'))
+    except OSError:
+        return sides
+    for path in paths:
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        signature = (int(stat.st_mtime_ns), int(stat.st_size))
+        cached = cache.get(str(path))
+        if cached and cached[0] == signature:
+            payload = cached[1]
+        else:
+            payload = _read_cloud_json_now(backend, path)
+            if payload is False:
+                continue
+            cache[str(path)] = (signature, payload)
+        if not (isinstance(payload, dict) and verify_cloud_payload(payload)
+                and payload.get('record_type') == 'memory'
+                and str(payload.get('person_id', '') or '') == person_id):
+            continue
+        device = _cloud_file_component(str(payload.get('device_id', '') or ''), 'device')
+        if not device or device == me:
+            continue
+        content = memory_sync_content({'memory_text': (payload.get('memory') or {}).get('text', ''),
+                                       'memory_items': (payload.get('memory') or {}).get('items', []),
+                                       'memory_retention_days': (payload.get('memory') or {}).get('retention_days', 30)})
+        sides.append({'content': content, 'clocks': _memory_sync_clocks(payload.get('clocks')), 'device_id': device})
+    return sides
+
+
+def _prune_memory_sync_clocks(clocks: dict, now: float) -> None:
+    oldest = now - MEMORY_SYNC_CLOCK_DAYS * 86400
+    for name in ('lines_added', 'lines_removed', 'items_added', 'items_removed'):
+        clocks[name] = {key: value for key, value in clocks[name].items() if value >= oldest}
+
+
+def sync_owner_memory_with_icloud(cloud_root: str | None = None, *, materializer=None, device_id: str | None = None,
+                                  force: bool = False, now: float | None = None) -> bool:
+    """One sync round of this Mac owner's memory with their other Macs. True when the memory on
+    this Mac changed (the caller refreshes what shows it). iCloud poll thread; never raises."""
+    if ACTIVE_USER_KEY != OWNER_USER_KEY:
+        return False   # another person uses this Mac now: the owner's memory waits here
+    if not _MEMORY_SYNC_LOCK.acquire(blocking=False):
+        return False
+    try:
+        signature = settings_store_file_signature(OWNER_USER_KEY)
+        if (not force and signature == _MEMORY_SYNC['signature']
+                and time.monotonic() - _MEMORY_SYNC['at'] < MEMORY_SYNC_SECONDS):
+            return False
+        _MEMORY_SYNC['at'] = time.monotonic()
+        now = time.time() if now is None else float(now)
+        person_id = str(broccoli_owner_person().get('user_id', '') or '')
+        if not person_id:
+            return False
+        backend = CloudTreeBackend(cloud_root or BROCCOLI_ICLOUD_ROOT, materializer)
+        folder = memory_sync_folder(backend, person_id)
+        me = _cloud_file_component(device_id or BROCCOLI_LOCAL_DEVICE_ID, 'device')
+        state_path = memory_sync_state_path()
+        state = _read_settings_json(state_path)
+        local = memory_sync_content(load_settings_store(OWNER_USER_KEY).get('globals'))
+        clocks = _memory_sync_clocks(state.get('clocks'))
+        synced = state.get('synced')
+        if not isinstance(synced, dict):
+            # first round on this Mac: what it has counts as written now (nothing is removed)
+            if local['text'].strip() and not clocks['text_at']:
+                clocks['text_at'] = now
+        else:
+            synced = memory_sync_content({'memory_text': synced.get('text', ''), 'memory_items': synced.get('items', []),
+                                          'memory_retention_days': synced.get('retention_days', 30)})
+            if synced != local:
+                record_memory_sync_edit(synced, local, clocks, now)
+        remotes = _read_memory_sync_remotes(backend, folder, me, person_id)
+        merged, merged_clocks = merge_memory_sync_sides([{'content': local, 'clocks': clocks, 'device_id': me}] + remotes)
+        changed = merged != local
+        if changed:
+            def apply(store):
+                globals_store = store['globals']
+                if memory_sync_content(globals_store) != local:
+                    raise _MemorySyncRaced()
+                globals_store['memory_text'] = merged['text']
+                globals_store['memory_items'] = merged['items']
+                globals_store['memory_retention_days'] = merged['retention_days']
+            try:
+                update_settings_store(apply, OWNER_USER_KEY)
+            except _MemorySyncRaced:
+                _MEMORY_SYNC['signature'] = None
+                return False
+        _prune_memory_sync_clocks(merged_clocks, now)
+        payload_core = {'person_id': person_id, 'device_id': me, 'memory': merged, 'clocks': merged_clocks}
+        published = hashlib.sha256(json.dumps(payload_core, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+        target = os.path.join(folder, me + '.json')
+        if published != state.get('published') or not os.path.exists(target):
+            payload = seal_cloud_payload({'schema_version': 1, 'record_type': 'memory', **payload_core,
+                                          'updated_at': datetime.datetime.now().isoformat(timespec='seconds')})
+            os.makedirs(folder, exist_ok=True)
+            _write_bytes_atomic(target, json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8'))
+        _write_settings_json(state_path, {'synced': merged, 'clocks': merged_clocks, 'published': published,
+                                          'synced_at': datetime.datetime.now().isoformat(timespec='seconds')})
+        _MEMORY_SYNC['signature'] = settings_store_file_signature(OWNER_USER_KEY)
+        return changed
+    except Exception:
+        logging.exception('Syncing memory with the other Macs failed.')
+        return False
+    finally:
+        _MEMORY_SYNC_LOCK.release()
 
 
 def memory_tool_definition() -> dict:
@@ -33550,6 +36329,19 @@ def normalize_agent_saved_comment_templates(items) -> list[dict]:
         seen_ids.add(str(record.get('id', '') or '').strip())
         normalized.append(record)
     return normalized
+
+
+def external_write_back_note(source: str, file_name: str, marker: str) -> str:
+    """2026-11-25: the note that goes with the first message of a conversation staged with "write_back" — the answer
+    is typed into the sender's document at the marked spot, so it must be only that text."""
+    return (
+        f'[Writing into a document from {source}] The person opened this conversation from {source} to have text '
+        f'written into the attached document "{file_name}" at the spot marked {marker}. Their message says what to '
+        f'write. Reply with ONLY the new text that goes at that spot: no greeting, no explanation, no title saying '
+        f'what it is, no quotes or code fence around it, no {marker}, and do not repeat the text before or after the '
+        f'spot. Use the language, tone and format of the document around the spot (Markdown when it is Markdown). '
+        f'Your reply is typed into the document at that spot as soon as you finish.'
+    )
 
 
 def format_agent_annotations_prompt_block(annotations: list[dict], messages: list[dict] | None = None) -> str:
@@ -39083,6 +41875,8 @@ class BackgroundVisionWorker(QThread):
             record['targets'] = results
             record['complete'] = any(item.get('status') == 'ok' and str(item.get('text', '')).strip() for item in results)
             record['context_text'] = self._build_context_text(results)
+            record['brief'] = next((str(item.get('brief', '') or '') for item in results
+                                    if item.get('status') == 'ok' and str(item.get('brief', '') or '').strip()), '')
             record['completed_at'] = datetime.datetime.now().isoformat(timespec='seconds')
             self.record_ready.emit(record)
             self.status.emit(f'Background vision round {round_id}: complete')
@@ -39107,7 +41901,7 @@ class BackgroundVisionWorker(QThread):
                 raise RuntimeError('profile is missing API key, endpoint, or model')
             client = create_openai_client(api_key, endpoint, timeout)
             prompt = str(self.settings.get('background_vision_prompt', DEFAULT_BACKGROUND_VISION_PROMPT) or '').strip() or DEFAULT_BACKGROUND_VISION_PROMPT
-            messages = [{'role': 'system', 'content': prompt}]
+            messages = [{'role': 'system', 'content': prompt + BACKGROUND_VISION_BRIEF_INSTRUCTION}]
             for user_text, assistant_text in self._get_history_turns(profile_name):
                 messages.append({'role': 'user', 'content': user_text})
                 messages.append({'role': 'assistant', 'content': assistant_text})
@@ -39126,8 +41920,9 @@ class BackgroundVisionWorker(QThread):
                 messages=messages,
                 stream=False,
             )
-            text = str(response.choices[0].message.content or '').strip()
-            result.update({'status': 'ok', 'text': text, 'error': ''})
+            # the one sentence for the activity feed comes off the head of the answer; the rest is the answer
+            brief, text = split_background_vision_brief(str(response.choices[0].message.content or ''))
+            result.update({'status': 'ok', 'text': text, 'brief': brief, 'error': ''})
             self._append_history_turn(profile_name, round_id, text)
         except Exception as exc:
             result['error'] = str(exc)
@@ -42339,7 +45134,8 @@ def build_pipeline_display_prefix(plan: dict, step_results: list[dict]) -> str:
         )
     for result in step_results:
         label = str(result.get('capability_label', result.get('capability', 'Step'))).strip()
-        model_label = model_profile_label(result.get('model_name', ''), result.get('profile_name', ''))
+        model_label = model_profile_label(result.get('model_name', ''), result.get('profile_name', ''),
+                                          result.get('mcp_sources'))
         # capability_label stays English in the stored step result (plan/archive); translate
         # only this display heading (fixed labels are registered as extra source strings).
         title = _tr(label) + (f' · {model_label}' if model_label else '')   # "Web search · gpt-5 · Work"
@@ -42803,6 +45599,325 @@ def specialized_capability_label(capability: str) -> str:
     return str(capability or '').replace('_', ' ').title()
 
 
+# ── a step asks the person and waits for the answer (2026-11-25) ───────────────────────────────
+# Ryan: "那我们也改成来回问的形态可以吗？……特别注意远程信息如何实现来回问的问答传送，然后一定时间超时之后按推荐自动
+# 进行". A step's model may answer with a fenced ```ask_user block instead of its result; the app shows the
+# question (the conversation, the plan panel, a notification; a remote sender's status card; the iPhone's
+# Note), waits, and gives the answer back as the next message of the same model call. Nobody answers within
+# ASK_USER_WAIT_SECONDS → the recommended answer is used (an autonomous run uses it at once). The wait is on
+# the step's worker thread, so the Mac left alone still goes on. An answer is never an approval.
+ASK_USER_WAIT_SECONDS = 10 * 60
+ASK_USER_MAX_ROUNDS = 6
+_ASK_USER_BLOCK_RE = re.compile(r'```[ \t]*ask_user[^\n]*\n(.*?)```', re.S | re.I)
+
+ASK_USER_STEP_RULE = (
+    'Asking the person:\n'
+    '- When this step cannot be done well without a decision of the person or a fact only they know, ask '
+    'instead of guessing: return ONLY one fenced block\n'
+    '```ask_user\n{"question": "...", "choices": ["...", "..."], "recommended": "...", "why": "..."}\n```\n'
+    '  question: one thing at a time, short, in the language of the user\'s request; choices: 2-4 short options '
+    'when it is a choice, [] for an open question; recommended: the option you would take (or your best answer); '
+    'why: one short line on why you recommend it.\n'
+    '- The app shows the question and sends the answer back as the next message. When nobody answers in time, '
+    'the recommended answer is used and the message says so: go on with it, and say in your result which '
+    'answers were defaults.\n'
+    '- Do not ask what the request, the context or earlier answers already settle; an answer never allows '
+    'anything that needs approval.'
+)
+
+
+def extract_ask_user_request(text) -> dict | None:
+    """The question of a step's ```ask_user block: {question, choices, recommended, why} or None."""
+    found = _ASK_USER_BLOCK_RE.search(str(text or ''))
+    if not found:
+        return None
+    body = found.group(1).strip()
+    try:
+        data = json.loads(body)
+    except ValueError:
+        data = {'question': body}
+    if not isinstance(data, dict):
+        return None
+    question = ' '.join(str(data.get('question', '') or '').split())[:2000]
+    if not question:
+        return None
+    choices = []
+    for item in data.get('choices') or []:
+        choice = ' '.join(str(item or '').split())[:300]
+        if choice and choice not in choices:
+            choices.append(choice)
+    choices = choices[:6]
+    recommended = ' '.join(str(data.get('recommended', '') or '').split())[:600]
+    if not recommended and choices:
+        recommended = choices[0]
+    return {'question': question, 'choices': choices, 'recommended': recommended,
+            'why': ' '.join(str(data.get('why', '') or '').split())[:400]}
+
+
+def ask_user_answer_from_text(request: dict, text: str) -> str:
+    """What the person typed → the answer: "2" (or "2." / "#2") is the second choice, a choice's own words
+    are that choice, anything else is the answer as written."""
+    text = str(text or '').strip()
+    choices = list((request or {}).get('choices') or [])
+    found = re.fullmatch(r'[#＃]?\s*(\d{1,2})\s*[.)、．]?', text)
+    if found and choices:
+        index = int(found.group(1)) - 1
+        if 0 <= index < len(choices):
+            return choices[index]
+    for choice in choices:
+        if text.casefold() == choice.casefold():
+            return choice
+    return text
+
+
+def settle_user_question(request: dict, answer: str, source: str) -> bool:
+    """The first answer wins (the person here, a remote device, the time running out, Stop); later ones are
+    ignored. Any thread."""
+    lock = request.get('lock')
+    if lock is None:
+        return False
+    with lock:
+        if request.get('settled'):
+            return False
+        request['answer'] = str(answer or '')
+        request['source'] = str(source or 'user')
+        request['settled'] = True
+    event = request.get('event')
+    if event is not None:
+        event.set()
+    return True
+
+
+def format_ask_user_feedback(request: dict) -> str:
+    answer = str(request.get('answer', '') or '').strip()
+    source = str(request.get('source', '') or 'user')
+    if source == 'timeout':
+        return (f'No answer came within {int(ASK_USER_WAIT_SECONDS // 60)} minutes, so the recommended answer is used: '
+                f'"{answer}". Go on with it, and say in your result that this was a default.')
+    if source == 'autonomous':
+        return (f'This task runs by itself and nobody can answer now, so the recommended answer is used: "{answer}". '
+                'Go on with it, and say in your result that this was a default.')
+    if source == 'no_more':
+        return 'Do not ask more questions now: decide the rest yourself, say what you assumed, and finish the step.'
+    return f'The person answered: "{answer}". Go on.'
+
+
+def ask_user_card_text(request: dict) -> str:
+    """The question in the conversation while it waits (the live preview is plain text): the choices
+    numbered, the recommended one marked; the answer is a number or any text, sent from the prompt."""
+    lines = ['❓ ' + str(request.get('question', '') or '').strip()]
+    choices = list(request.get('choices') or [])
+    recommended = str(request.get('recommended', '') or '').strip()
+    for index, choice in enumerate(choices, start=1):
+        lines.append(f'   {index}. {choice}' + (f'  ({_tr("recommended")})' if choice == recommended else ''))
+    if not choices and recommended:
+        lines.append('   ' + _tr('Recommended: {answer}').format(answer=recommended))
+    why = str(request.get('why', '') or '').strip()
+    if why:
+        lines.append('   ' + why)
+    hint = _tr('Send a number to choose, or type your answer.') if choices else _tr('Type your answer and send it.')
+    try:
+        until = datetime.datetime.fromisoformat(str(request.get('expires_at', '') or '')).strftime('%H:%M')
+    except ValueError:
+        until = ''
+    if until:
+        hint += ' ' + _tr('No answer by {time}: the recommended answer is used.').format(time=until)
+    lines.append('→ ' + hint)
+    return '\n'.join(lines)
+
+
+# ── the built-in skill "skill-creator" (2026-11-25) ─────────────────────────────────────────────
+# Ryan: "我还需要一个……生成 skills 的 tool……看看 Claude 怎么生成 skill 的，然后帮我做" — then: like Claude, called
+# with //skill-creator in the prompt, asking back and forth (ask_user), test runs side by side, the description
+# tuned. It is Claude's skill-creator brought to Broccoli: a skill that comes with Broccoli (read only; the
+# person's own skill of the same name wins; it can be switched off like another app's skill) plus four things
+# its step may ask the app for (fenced JSON blocks, like ask_user): skill_test, skill_trigger_eval, skill_save,
+# skill_done. The draft lives in the conversation's attachments folder (skill-creator/draft.md), so the next
+# turn goes on from it; while a draft is open the conversation's next messages go to skill-creator by itself.
+SKILL_CREATOR_NAME = 'skill-creator'
+SKILL_CREATOR_DESCRIPTION = (
+    'Make a new skill for Broccoli, or improve one: asks what it should do, writes it, test-runs it with and '
+    'without the skill side by side, tunes its description so it is chosen at the right times, and saves it in '
+    'Settings › Skills. Use it whenever the person wants to make, write, improve or test a skill, or to turn '
+    'what was just done in this conversation into a skill ("save this way of working", "make this a skill").'
+)
+SKILL_CREATOR_BODY = r'''# Skill creator
+
+You help the person make a skill for Broccoli: fixed instructions the Agent follows whenever a request fits.
+A skill is read by an Agent that remembers nothing of this conversation, so it must stand on its own.
+You work over several turns; each turn you get the earlier turns and the current draft (if any). Find where
+things stand and take the next step. Keep your replies short and in the language of the person.
+
+## The steps
+1. **Understand what is wanted.** What should the skill make the Agent do? When should it be used (what would
+   the person say)? What should the result look like? If the person says "turn this into a skill", take the
+   steps, tools, corrections and formats from the conversation first, then ask only for what is missing.
+   Ask one question at a time with an ask_user block (choices + your recommendation). Do not ask what you can
+   take from the conversation. Three or four questions are usually enough.
+2. **Write the draft.** Put the whole skill in one block that starts with FOUR backticks:
+   ````skill_draft
+   ---
+   name: short-name-with-hyphens
+   description: what it does AND when to use it
+   ---
+   (the instructions, Markdown)
+   ````
+   The app keeps it; write the block again (whole) each time it changes. Show the person what changed.
+3. **Test it.** Propose 2–3 realistic test requests (what the person would really type) with ask_user
+   (choices: "Use these" / "Change them"). Then ask the app to run them:
+   ```skill_test
+   {"prompts": ["...", "..."]}
+   ```
+   The app runs each request with the current draft and without any skill and gives you both answers. Show
+   them side by side (for each request: the request, then "With the skill" and "Without"), say what the skill
+   changed, and ask what to improve. Improve the draft and test again until the person is happy.
+4. **Tune the description** (after the person is happy with the results). Write 20 realistic requests:
+   10 that should use the skill (different wordings, some not naming it) and 10 that should not — near
+   misses that share words with it but need something else, not obviously unrelated ones. Show them with
+   ask_user ("Use these" / "Change them"), then:
+   ```skill_trigger_eval
+   {"queries": [{"query": "...", "should_trigger": true}, {"query": "...", "should_trigger": false}]}
+   ```
+   The app tests whether Broccoli would choose the skill for each (3 times each), rewrites the description up
+   to 5 times, keeps 40% of the requests for scoring only, and gives you each description with its scores.
+   Show the person the old and the best description with their scores; with their yes, put the best one in a
+   new draft block.
+5. **Save it.** When the person agrees (or says save), write the final draft block if it changed, then:
+   ```skill_save
+   {}
+   ```
+   The app asks the person once more and saves it in Settings › Skills (a skill of the same name of their own
+   is replaced). If the person wants to stop without saving:
+   ```skill_done
+   {}
+   ```
+
+Only one request block (ask_user, skill_test, skill_trigger_eval, skill_save, skill_done) per reply; a draft
+block may come with it. The person can always skip a step ("just save it").
+
+## Writing a good skill
+- **Description** = the only thing the Agent sees when it chooses a skill. Say what it does and the situations
+  to use it in, in the words people would use; be a little pushy ("use it whenever …, even if they do not say
+  'skill'"). Name what it is NOT for when there is a near neighbour. At most about 500 characters.
+- **Instructions**: the steps in order, in the imperative. Explain why a step matters instead of shouting
+  MUST; the Agent is smart and follows reasons better than rules. Say what the result looks like (a template
+  or an example input → output when the format matters), what needs the person's yes first, what to do when a
+  step fails, and the limits. Keep it general, not tied to the test examples. Well under 500 lines.
+- No passwords, keys or personal data in a skill. Nothing that would surprise the person if they read it.
+'''
+SKILL_CREATOR_REQUEST_KINDS = ('skill_test', 'skill_trigger_eval', 'skill_save', 'skill_done')
+SKILL_CREATOR_MAX_TEST_PROMPTS = 4
+SKILL_CREATOR_TEST_ANSWER_CHARS = 3000
+SKILL_CREATOR_TRIGGER_RUNS = 3
+SKILL_CREATOR_TRIGGER_ROUNDS = 5
+SKILL_CREATOR_MAX_QUERIES = 30
+SKILL_CREATOR_DESCRIPTION_MAX_CHARS = 600
+_SKILL_DRAFT_BLOCK_RE = re.compile(r'````[ \t]*skill_draft[^\n]*\n(.*?)\n[ \t]*````', re.S | re.I)
+_STEP_REQUEST_BLOCK_RE = re.compile(r'```[ \t]*(' + '|'.join(SKILL_CREATOR_REQUEST_KINDS) + r')[ \t]*\n(.*?)```', re.S | re.I)
+
+
+def builtin_skill_records() -> list[dict]:
+    """The skills Broccoli itself brings (read only)."""
+    raw = f'---\nname: {SKILL_CREATOR_NAME}\ndescription: {SKILL_CREATOR_DESCRIPTION}\n---\n{SKILL_CREATOR_BODY}'
+    record = normalize_skill_record({'raw_text': raw, 'enabled': True}, 1)
+    record.update({'app': True, 'builtin': True, 'file': ''})
+    return [record]
+
+
+def is_skill_creator(record: dict | None) -> bool:
+    return bool((record or {}).get('builtin')) and str((record or {}).get('name', '') or '') == SKILL_CREATOR_NAME
+
+
+def extract_skill_draft(text) -> str:
+    """The last ````skill_draft block of a reply (the whole SKILL.md text), or ''."""
+    found = _SKILL_DRAFT_BLOCK_RE.findall(str(text or ''))
+    return found[-1].strip() if found else ''
+
+
+def extract_step_request(text, kinds=SKILL_CREATOR_REQUEST_KINDS):
+    """(kind, data) of the first request block of a reply, or None. The data is a dict ({} when not JSON)."""
+    for match in _STEP_REQUEST_BLOCK_RE.finditer(str(text or '')):
+        kind = match.group(1).lower()
+        if kind not in kinds:
+            continue
+        try:
+            data = json.loads(match.group(2).strip() or '{}')
+        except ValueError:
+            data = {}
+        return kind, (data if isinstance(data, dict) else {})
+    return None
+
+
+def skill_creator_dir(conversation_path: str) -> str:
+    return os.path.join(conversation_attachment_dir(conversation_path), 'skill-creator')
+
+
+def skill_creator_read_draft(conversation_path: str) -> str:
+    try:
+        with open(os.path.join(skill_creator_dir(conversation_path), 'draft.md'), encoding='utf-8') as handle:
+            return handle.read().strip()
+    except (OSError, TypeError):
+        return ''
+
+
+def skill_creator_write_draft(conversation_path: str, text: str) -> bool:
+    text = str(text or '').strip()
+    if not conversation_path or not text:
+        return False
+    folder = skill_creator_dir(conversation_path)
+    os.makedirs(folder, exist_ok=True)
+    write_text_file(os.path.join(folder, 'draft.md'), text + '\n')
+    return True
+
+
+def skill_creator_session_active(conversation_path: str) -> bool:
+    try:
+        with open(os.path.join(skill_creator_dir(conversation_path), 'state.json'), encoding='utf-8') as handle:
+            return bool(json.load(handle).get('active'))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def skill_creator_set_active(conversation_path: str, active: bool, **fields) -> None:
+    if not conversation_path:
+        return
+    folder = skill_creator_dir(conversation_path)
+    os.makedirs(folder, exist_ok=True)
+    state = dict(fields, active=bool(active), updated_at=datetime.datetime.now().isoformat(timespec='seconds'))
+    write_text_file(os.path.join(folder, 'state.json'), json.dumps(state, ensure_ascii=False))
+
+
+def skill_trigger_split(queries: list) -> tuple:
+    """(train, test): 60 / 40 of the should- and should-not-trigger requests each, the same split every time."""
+    train, test = [], []
+    for wanted in (True, False):
+        group = sorted((item for item in queries if bool(item.get('should_trigger')) is wanted),
+                       key=lambda item: hashlib.sha1(item['query'].encode('utf-8')).hexdigest())
+        cut = max(1, int(round(len(group) * 0.6))) if len(group) > 1 else len(group)
+        train += group[:cut]
+        test += group[cut:]
+    return train, test
+
+
+def skill_trigger_messages(catalog: str, name: str, description: str, query: str) -> list[dict]:
+    """The question the planner's model answers for one request: would this skill be used?"""
+    lines = [line for line in str(catalog or '').splitlines() if not line.startswith(f'- {name}:')]
+    lines.append(f'- {name}: {description}')
+    return [
+        {'role': 'system', 'content': (
+            'You plan the steps of a desktop assistant. It can use these skills (name: when to use it):\n'
+            + '\n'.join(lines) + '\n\nA skill is used only when the request really needs it; simple requests are '
+            'answered directly.')},
+        {'role': 'user', 'content': f'Request: {query}\n\nWould you use the skill "{name}" for this request? '
+                                    'Answer with exactly YES or NO.'},
+    ]
+
+
+def skill_trigger_said_yes(answer: str) -> bool:
+    words = re.findall(r'[A-Za-z]+', str(answer or '').upper())
+    return bool(words) and words[0] == 'YES'
+
+
 def build_skill_step_messages(skill: dict,
                               goal: str,
                               question_text: str,
@@ -42810,7 +45925,8 @@ def build_skill_step_messages(skill: dict,
                               previous_results: list[dict],
                               downstream_extract: str = '',
                               step_context: str = '',
-                              archive_context: dict | None = None) -> list[dict]:
+                              archive_context: dict | None = None,
+                              can_ask: bool = False) -> list[dict]:
     skill_name = sanitize_skill_name(skill.get('name', ''), 'Skill')
     skill_description = str(skill.get('description', '') or '').strip()
     skill_body = str(skill.get('raw_text', '') or '').strip()
@@ -42834,7 +45950,8 @@ def build_skill_step_messages(skill: dict,
         '- Return a single fenced code block in a configured runner language that performs the check. The app will run it in a background worker and send you the real stdout/stderr before finalizing this skill step.\n'
         f'- {code_runner_catalog_text()}\n'
         '- After receiving execution output, correct any earlier numbers using the real stdout/stderr.\n\n'
-        f'Skill name: {skill_name}\n'
+        + (ASK_USER_STEP_RULE + '\n\n' if can_ask else '')
+        + f'Skill name: {skill_name}\n'
         + (f'Skill description: {skill_description}\n\n' if skill_description else '\n')
         + 'Skill instructions:\n'
         + skill_body
@@ -44594,14 +47711,47 @@ def normalize_agent_supplement_records(supplements: list[dict] | None) -> list[d
         text = str(item.get('text', '') or '').strip()
         if not text:
             continue
-        normalized.append(
-            {
-                'id': str(item.get('id', '') or '').strip(),
-                'text': text,
-                'created_at': str(item.get('created_at', '') or '').strip(),
-            }
-        )
+        record = {
+            'id': str(item.get('id', '') or '').strip(),
+            'text': text,
+            'created_at': str(item.get('created_at', '') or '').strip(),
+        }
+        files = [str(path) for path in (item.get('send_files') or []) if str(path or '').strip()]
+        if files:
+            record['send_files'] = files
+        normalized.append(record)
     return normalized
+
+
+# Files that come with a note or a queued prompt (2026-11-24, Ryan: "不管是 note 或者是这个队列，如果有附件被加上去
+# 的话，那就应该也是要一起发出去的啊，只是说等一下发出去而已"). A note's text files (an output with its comments …)
+# go into the note itself, so a running step reads them at once; other files (pictures …) go with the follow-up turn.
+NOTE_TEXT_FILE_SUFFIXES = {'.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.yaml', '.yml', '.xml', '.html', '.htm',
+                           '.log', '.tex', '.rst', '.ini', '.toml', '.py', '.js', '.ts', '.css', '.sql', '.sh', '.swift',
+                           '.java', '.c', '.cpp', '.h', '.go', '.rs', '.rb', '.php'}
+NOTE_ATTACHMENT_INLINE_MAX_CHARS = 12000
+
+
+def note_attachment_parts(paths) -> tuple:
+    """(text to add to the note, files to send with the follow-up turn)."""
+    blocks, files, used = [], [], 0
+    for path in [str(item) for item in (paths or []) if str(item or '').strip()]:
+        text = None
+        try:
+            if Path(path).suffix.lower() in NOTE_TEXT_FILE_SUFFIXES and os.path.getsize(path) <= 400_000:
+                text = Path(path).read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            text = None
+        room = NOTE_ATTACHMENT_INLINE_MAX_CHARS - used
+        if text is None or room <= 200:
+            files.append(path)
+            continue
+        clipped = text if len(text) <= room else text[:room].rstrip() + '\n…'
+        used += len(clipped)
+        blocks.append(f'--- {os.path.basename(path)} ---\n{clipped.strip()}')
+    if files:
+        blocks.append('Files attached with this note: ' + ', '.join(f'{os.path.basename(path)} ({path})' for path in files))
+    return ('Attached with this note:\n\n' + '\n\n'.join(blocks)) if blocks else '', files
 
 
 def build_agent_supplement_instruction_block(supplements: list[dict] | None, *, continuation: bool = False) -> str:
@@ -45013,6 +48163,11 @@ class AsyncPreflightThread(threading.Thread):
                 active_profile = load_active_settings_profile()
                 # another person's task (their shared folder): their memory, none of the owner's
                 guest_share = guest_share_for_request(self.config.get('remote_request'))
+                # asked from another Mac / the iPhone: where the user is and how files reach them
+                if guest_share is None:
+                    origin_note = remote_origin_context_note(self.config.get('remote_request'))
+                    if origin_note:
+                        context_blocks.append(origin_note)
                 # the group's other conversations are background too (2026-11-15, Ryan)
                 if guest_share is None and conversation_path:
                     group_conversations_note = timed('group_conversations', lambda: conversation_group_siblings_note(
@@ -45071,9 +48226,12 @@ class AsyncPreflightThread(threading.Thread):
                         )
                 if not skip_retrieval_for_blank_prompt and guest_share is None:
                     progress(_tr('Preparing external context and MCP sources'))
+                    mcp_sources_asked = []
                     external_context = timed('external_context', lambda: owner._build_external_context_prompt_context(
                         question_text, progress_callback=progress,
-                        extra_sources=self.config.get('group_context_sources') or []))
+                        extra_sources=self.config.get('group_context_sources') or [],
+                        used_mcp_sources=mcp_sources_asked))
+                    note_mcp_sources_used(self.config.get('run_id', ''), mcp_sources_asked)
                     if external_context:
                         context_blocks.append(external_context)
                 if not skip_retrieval_for_blank_prompt and active_profile.get('remember_memory', True):
@@ -48586,6 +51744,7 @@ class AsyncChatThread(threading.Thread):
                         ))
                         result = call_mcp_source_tool(tool_meta['source'], tool_meta['tool_name'], arguments)
                         result_text = _mcp_tool_result_to_text(result)
+                        note_mcp_sources_used(self.config.get('run_id', ''), [tool_meta.get('source_name', '')])
                         if tool_meta.get('connector'):
                             result_text = open_connector_compact_result(tool_meta['tool_name'], result_text)
                     except Exception as exc:
@@ -51454,11 +54613,26 @@ def load_or_create_agent_automation_token() -> str:
                     'updated_at': datetime.datetime.now().isoformat(timespec='seconds'),
                     'schema': {
                         'title': 'optional task title',
-                        'prompt': 'required user instruction',
+                        'prompt': 'required user instruction (not with "stage": then an optional draft)',
                         'source': 'optional external automation source',
                         'metadata': 'optional object',
                         'show': 'optional true: open the new conversation in front (default: stays in the background)',
                         'group': 'optional group name: the new conversation is put in the group of that name (made if there is none)',
+                        # 2026-11-21, all optional; a request without them works exactly as before
+                        'attachments': 'optional list of local file paths sent with the question (pictures, PDFs, text …)',
+                        'thread': 'optional name: requests of one source with the same thread go into ONE conversation, one after another',
+                        'id': 'optional id of this request (one is made when missing); the 202 answer repeats it',
+                        'reply_to': 'optional folder: when the run ends, <folder>/<id>.json is written {id, thread, status, title, conversation, answer, finished_at}',
+                        # 2026-11-24
+                        'stage': 'optional true: hand over material, NOT a question — Broccoli comes out with a blank conversation (joins "group" when sent), the "attachments" in its tray, the cursor in the prompt; nothing runs until the person asks. Needs "attachments"; "prompt" becomes a draft',
+                        # 2026-11-25
+                        'write_back': 'optional, with "stage", "reply_to" and "id": {"marker": "⟦WRITE HERE⟧"} — the first attachment is a document with that marker at a spot; the person says in Broccoli what to write, the model is told to answer with only the text for that spot, and when that first answer ends <reply_to>/<id>.json gets it ("staged" first, then the end status). Started over / another conversation opened before asking = status "cancelled"',
+                    },
+                    'live_transcript': {
+                        'about': 'finished sentences of voice input, one JSON object per line {t, text, source}; written only while a subscriber file is fresh',
+                        'file': LIVE_TRANSCRIPT_FILE,
+                        'subscribe': 'write <subscribers>/<your name>.json = {"until": <unix seconds>} and renew it; delete it to stop',
+                        'subscribers': LIVE_TRANSCRIPT_SUBSCRIBERS_DIR,
                     },
                 },
                 handle,
@@ -51472,6 +54646,85 @@ def load_or_create_agent_automation_token() -> str:
 
 class AgentAutomationSignals(QObject):
     received = pyqtSignal(dict)
+
+
+# ── the live transcript of voice input, for other programs (2026-11-21) ─────────────────────────────
+# Another program on this Mac may follow what is being dictated / recorded (e.g. a note-taking app that
+# summarises a lecture while it is heard). Nothing is written unless somebody asked: a subscriber puts
+# <subscribers>/<name>.json = {"until": unix seconds} and keeps renewing it; while one is fresh, every
+# finished sentence (the sessions' `final`, never the still-changing text) is appended to live.jsonl as
+# {"t": ISO time, "text": …, "source": "microphone" | "system"}. The file is cut back when it grows large.
+# Writing happens on a thread of its own; the interface thread only puts the sentence in a queue.
+LIVE_TRANSCRIPT_DIR = os.path.join(BROCCOLI_APP_DATA_DIR, 'LiveTranscript')
+LIVE_TRANSCRIPT_FILE = os.path.join(LIVE_TRANSCRIPT_DIR, 'live.jsonl')
+LIVE_TRANSCRIPT_SUBSCRIBERS_DIR = os.path.join(LIVE_TRANSCRIPT_DIR, 'subscribers')
+LIVE_TRANSCRIPT_MAX_BYTES = 2_000_000
+
+
+class LiveTranscriptFeed:
+    def __init__(self, folder: str = LIVE_TRANSCRIPT_DIR):
+        self.folder = folder
+        self.file = os.path.join(folder, 'live.jsonl')
+        self.subscribers = os.path.join(folder, 'subscribers')
+        self._queue = queue.Queue()
+        self._checked = 0.0
+        self._wanted = False
+        self._thread = None
+
+    def wanted(self) -> bool:
+        """Somebody's subscription is fresh (looked up at most every 2 seconds)."""
+        now = time.time()
+        if now - self._checked < 2.0:
+            return self._wanted
+        self._checked = now
+        wanted = False
+        try:
+            for name in os.listdir(self.subscribers):
+                if not name.endswith('.json'):
+                    continue
+                try:
+                    with open(os.path.join(self.subscribers, name), encoding='utf-8') as handle:
+                        if float((json.load(handle) or {}).get('until', 0) or 0) > now:
+                            wanted = True
+                            break
+                except Exception:
+                    continue
+        except OSError:
+            wanted = False
+        self._wanted = wanted
+        return wanted
+
+    def take(self, session, text):
+        """voice_input.FINAL_TAPS: a finished sentence (interface thread — only queues it)."""
+        text = str(text or '').strip()
+        if not text or not self.wanted():
+            return
+        system = str(getattr(session, '_source', '') or '') == str(getattr(voice_input, 'VOICE_SOURCE_SYSTEM', 'system'))
+        self._queue.put({'t': datetime.datetime.now().isoformat(timespec='seconds'), 'text': text,
+                         'source': 'system' if system else 'microphone'})
+        if self._thread is None or not self._thread.is_alive():
+            self._thread = threading.Thread(target=self._write_loop, daemon=True, name='broccoli-live-transcript')
+            self._thread.start()
+
+    def _write_loop(self):
+        while True:
+            try:
+                item = self._queue.get(timeout=20)
+            except queue.Empty:
+                return
+            try:
+                os.makedirs(self.folder, exist_ok=True)
+                if os.path.exists(self.file) and os.path.getsize(self.file) > LIVE_TRANSCRIPT_MAX_BYTES:
+                    with open(self.file, 'rb') as handle:
+                        handle.seek(-LIVE_TRANSCRIPT_MAX_BYTES // 2, os.SEEK_END)
+                        tail = handle.read().split(b'\n', 1)[-1]
+                    with open(self.file + '.tmp', 'wb') as handle:
+                        handle.write(tail)
+                    os.replace(self.file + '.tmp', self.file)
+                with open(self.file, 'a', encoding='utf-8') as handle:
+                    handle.write(json.dumps(item, ensure_ascii=False) + '\n')
+            except Exception:
+                logging.exception('Writing the live transcript failed.')
 
 
 class AgentAutomationServer(threading.Thread):
@@ -51540,12 +54793,15 @@ class AgentAutomationServer(threading.Thread):
                 except Exception:
                     payload = {}
                 prompt = str(payload.get('prompt', '') or payload.get('instruction', '') or '').strip()
-                if not prompt:
+                staged = payload.get('stage') is True and isinstance(payload.get('attachments'), list) and bool(payload.get('attachments'))
+                if not prompt and not staged:     # (material handed over to be asked about needs no question)
                     self._send_json(400, {'ok': False, 'error': 'missing_prompt'})
                     return
                 payload['received_at'] = datetime.datetime.now().isoformat(timespec='seconds')
+                request_id = re.sub(r'[^A-Za-z0-9._-]+', '_', str(payload.get('id', '') or '').strip())[:80] or uuid.uuid4().hex
+                payload['id'] = request_id
                 signals.received.emit(payload)
-                self._send_json(202, {'ok': True, 'status': 'accepted'})
+                self._send_json(202, {'ok': True, 'status': 'accepted', 'id': request_id})
 
         class ReusableTCPServer(socketserver.TCPServer):
             allow_reuse_address = True
@@ -52181,6 +55437,11 @@ menu = style_broccoli_context_menu(QMenu())
 
 action3 = QAction(_tr("🥦 Start Broccoli!"))
 menu.addAction(action3)
+# the editor and the reader, each with the conversation it goes with (2026-11-25)
+companion_editor_menu = style_broccoli_context_menu(QMenu(_tr("📝 Editor")))
+companion_reader_menu = style_broccoli_context_menu(QMenu(_tr("📖 Reader")))
+menu.addMenu(companion_editor_menu)
+menu.addMenu(companion_reader_menu)
 
 
 menu.addSeparator()
@@ -54409,10 +57670,14 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
     if (host.includes('gemini.google.com')) return 'Gemini';
     if (host.includes('copilot.microsoft.com') || host.includes('copilot.com')) return 'Copilot';
     if (host.includes('chat.z.ai') || host === 'z.ai' || host.endsWith('.z.ai')) return 'Z.ai';
-    if (host.includes('kimi.com')) return 'Kimi';
+    if (host.includes('kimi.com') || host.includes('kimi.ai')) return 'Kimi';
     if (host.includes('qwen')) return 'Qwen';
     if (host.includes('perplexity')) return 'Perplexity';
     if (host.includes('grok')) return 'Grok';
+    if (host.includes('deepseek.com')) return 'DeepSeek';
+    if (host.includes('lumo.proton.me')) return 'Lumo';
+    if (host.includes('doubao.com')) return 'Doubao';
+    if (host.includes('yuanbao.tencent.com')) return 'Yuanbao';
     return 'Web';
   })();
   const serviceKey = serviceName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'web';
@@ -54431,15 +57696,23 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
   // with that message's own id. No data-turn / data-message-author-role.
   const CHATGPT_BLOCK_SELECTOR = '[data-turn-key]';
   const CHATGPT_UNIT_SELECTOR = "[data-chatgpt-search-unit-key$=':user'], [data-chatgpt-search-unit-key$=':assistant']";
-  const CLAUDE_MESSAGE_SELECTOR = ".font-claude-response:not(#markdown-artifact), [data-testid='user-message']";
+  // 2026-11: the answer wrapper is [data-testid='assistant-message'] (no .font-claude-response any more).
+  const CLAUDE_MESSAGE_SELECTOR = ".font-claude-response:not(#markdown-artifact), [data-testid='assistant-message'], [data-testid='user-message']";
   const CLAUDE_USER_MESSAGE_SELECTOR = "[data-testid='user-message']";
   const CLAUDE_THINKING_BLOCK_CLASS = 'transition-all';
   const CLAUDE_ARTIFACT_BLOCK_CELL = '.artifact-block-cell';
-  const COPILOT_MESSAGE_SELECTOR = '.group\\/user-message, .group\\/ai-message';
-  const COPILOT_USER_MESSAGE_SELECTOR = '.group\\/user-message';
+  // The second pair is the Microsoft 365 chat page that copilot.com shows to signed-in work accounts.
+  const COPILOT_MESSAGE_SELECTOR = '.group\\/user-message, .group\\/ai-message, [data-testid="chatQuestion"], [data-testid="markdown-reply"]';
+  const COPILOT_USER_MESSAGE_SELECTOR = '.group\\/user-message, [data-testid="chatQuestion"]';
+  const COPILOT_USER_CONTENT_SELECTOR = '[data-content="user-message"], [data-testid="chatOutput"], .fai-UserMessage__message';
+  const copilotAnswerTarget = (item) => (item.matches('[data-testid="markdown-reply"]')
+    ? item : item.querySelector('.group\\/ai-message-item'));
   const GROK_MESSAGE_SELECTOR = "div[id^='response-']";
-  const GROK_CONTENT_SELECTOR = '.response-content-markdown';
-  const GROK_USER_INDICATOR = '.items-end';
+  // 2026-11: the question bubble has no .response-content-markdown and the row no .items-end.
+  const GROK_USER_BUBBLE_SELECTOR = '[data-testid="user-message"]';
+  const GROK_CONTENT_SELECTOR = '.response-content-markdown, [data-testid="user-message"]';
+  const GROK_USER_INDICATOR = '.items-end, :has([data-testid="user-message"])';
+  const grokIsUserRow = (item) => item.matches(GROK_USER_INDICATOR);
   const GEMINI_MESSAGE_ITEM_SELECTOR = 'user-query, model-response';
 
   const normalizedKey = (value) => clean(value).toLowerCase().replace(/\s+/g, ' ');
@@ -54542,7 +57815,10 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
     return items.map((li, idx) => {
       const marker = ordered ? `${idx + 1}. ` : '- ';
       const prefix = '  '.repeat(depth) + marker;
-      const content = clean(mdChildren(li, depth + 1)).replace(/\n/g, '\n' + '  '.repeat(depth + 1));
+      let content = clean(mdChildren(li, depth + 1));
+      // A page that writes the item's own number into its text (Yuanbao: "1.Apple"): once is enough.
+      if (ordered) content = content.replace(new RegExp('^' + (idx + 1) + '[.)、]\\s*'), '');
+      content = content.replace(/\n/g, '\n' + '  '.repeat(depth + 1));
       return prefix + content;
     }).join('\n') + '\n\n';
   };
@@ -54670,8 +57946,38 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
       return '\n' + marker + payload.language + '\n' + payload.text + '\n' + marker + '\n\n';
     }
     if (tag === 'code') {
+      // A highlighted block drawn without <pre> (Lumo): <code class="language-python"> on its own.
+      const blockLanguage = String(node.getAttribute('class') || '')
+        .match(/(?:^|\s)(?:language-|lang-)([A-Za-z][A-Za-z0-9#+._-]{0,24})(?:\s|$)/i);
+      if (blockLanguage) {
+        const blockText = String(node.innerText || node.textContent || '').replace(/\n+$/g, '');
+        const marker = codeFenceMarker(blockText);
+        return '\n' + marker + String(blockLanguage[1] || '').toLowerCase() + '\n' + blockText + '\n' + marker + '\n\n';
+      }
       const text = String(node.innerText || node.textContent || '').replace(/`/g, '\\`');
       return '`' + text + '`';
+    }
+    if (/code-?block/i.test(cls) && node.querySelector && !node.querySelector('pre, code')) {
+      // A code block drawn as an editor (Copilot's Microsoft 365 page): a header with the
+      // language, then a read-only text box whose lines are plain blocks.
+      const box = node.querySelector('[role="textbox"]');
+      if (box) {
+        const linesOf = (el) => {
+          const blocks = Array.from(el.children || []).filter((child) => /^(DIV|P)$/.test(child.tagName));
+          if (!blocks.length) return [String(el.textContent || '')];
+          return blocks.flatMap((child) => linesOf(child));
+        };
+        const blockText = linesOf(box).filter((line, index, all) => line.trim() || (index > 0 && index < all.length - 1))
+          .join('\n').replace(/\n+$/g, '');
+        if (blockText.trim()) {
+          const label = Array.from(node.querySelectorAll('span, div'))
+            .filter((item) => !box.contains(item) && !item.contains(box) && !item.children.length)
+            .map((item) => clean(item.textContent || ''))
+            .find((value) => /^[A-Za-z][A-Za-z0-9#+._-]{0,24}$/.test(value)) || '';
+          const marker = codeFenceMarker(blockText);
+          return '\n' + marker + label.toLowerCase() + '\n' + blockText + '\n' + marker + '\n\n';
+        }
+      }
     }
     if (tag === 'blockquote') {
       const body = clean(mdChildren(node, depth));
@@ -54751,9 +58057,46 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
     out += value.slice(last);
     return out;
   };
+  // A code block's title bar ("python") that came out as a line of its own right above the
+  // block: it is the block's language, not text of the answer.
+  const CODE_LANGUAGE_LABELS = new Set(('python py javascript js typescript ts jsx tsx bash sh shell zsh '
+    + 'powershell json html css scss sql java c cpp c++ c# csharp go rust ruby php swift kotlin scala dart '
+    + 'lua perl r matlab yaml yml xml toml ini markdown md latex tex diff dockerfile makefile text '
+    + 'plaintext objective-c objc haskell elixir vue svelte graphql').split(' '));
+  const mergeLanguageLabelIntoFence = (text) => {
+    const value = String(text || '');
+    if (!value.includes('```')) return value;
+    const lines = value.split('\n');
+    const out = [];
+    let fence = null;
+    for (const line of lines) {
+      const marker = line.trim().match(/^(`{3,}|~{3,})(.*)$/);
+      if (!marker) { out.push(line); continue; }
+      if (fence) {
+        if (marker[1][0] === fence.ch && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+        out.push(line);
+        continue;
+      }
+      fence = { ch: marker[1][0], length: marker[1].length };
+      let at = out.length - 1;
+      while (at >= 0 && !out[at].trim()) at -= 1;
+      const label = at >= 0 ? out[at].trim().toLowerCase() : '';
+      const info = marker[2].trim().toLowerCase();
+      if (label && CODE_LANGUAGE_LABELS.has(label) && (!info || info === label)) {
+        out.length = at;
+        if (out.length && out[out.length - 1].trim()) out.push('');
+        out.push(marker[1] + label);
+      } else {
+        out.push(line);
+      }
+    }
+    return out.join('\n');
+  };
   const contentFromElement = (el, role = 'assistant') => {
     if (!el) return '';
-    if (role === 'assistant') return fillEmptyFencesFromNode(cloneMarkdown(el) || cloneText(el), el);
+    if (role === 'assistant') {
+      return mergeLanguageLabelIntoFence(fillEmptyFencesFromNode(cloneMarkdown(el) || cloneText(el), el));
+    }
     return cloneText(el);
   };
   const stripNoiseLines = (text) => {
@@ -55858,6 +59201,12 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
       let content = role === 'user'
         ? String(item.contentText || '').trim()
         : (contentFromElement(item.contentHtml, 'assistant') || String(item.contentText || '').trim());
+      if (role === 'user' && item.contentHtml) {
+        // What the eye sees: without a visually hidden heading that repeats the question
+        // (Gemini) or says "You" (Grok), and without the bubble's buttons.
+        const shown = cloneText(item.contentHtml).replace(/^you said\s+/i, '').trim();
+        if (shown && shown.length < content.length && content.includes(shown)) content = shown;
+      }
       const externalPrompt = role === 'user' && looksLikeBroccoliExternalPrompt(content);
       if (externalPrompt) content = displayTextFromBroccoliExternalPrompt(content) || content;
       messages.push(withRowMeta({
@@ -56001,8 +59350,8 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
       const isUser = node.matches(COPILOT_USER_MESSAGE_SELECTOR);
       const role = isUser ? 'user' : 'assistant';
       const target = isUser
-        ? (node.querySelector('[data-content="user-message"]') || node)
-        : (node.querySelector('.group\\/ai-message-item') || node);
+        ? (node.querySelector(COPILOT_USER_CONTENT_SELECTOR) || node)
+        : (copilotAnswerTarget(node) || node);
       const content = contentFromElement(target, role);
       if (!content) continue;
       messages.push(stage2Message(node, rootIndex, role, content,
@@ -56016,7 +59365,7 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
     const messages = [];
     const nodes = [];
     for (const [rootIndex, node] of roots.entries()) {
-      const isUser = node.matches(GROK_USER_INDICATOR);
+      const isUser = grokIsUserRow(node);
       const role = isUser ? 'user' : 'assistant';
       const target = node.querySelector(GROK_CONTENT_SELECTOR);
       if (!target) continue;
@@ -56078,7 +59427,70 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
     return buildResult(messages, serviceKey + '-strict', false, messages.length ? 'strict_site_parser_ok' : 'strict_no_nodes');
   };
 
+  // Sites whose page marks the question and the answer with their own names: one rule per
+  // site says where each sits. `skip` = a container whose matches do not count (the reasoning
+  // shown above an answer, the question bubble for a selector both share). What these rules
+  // find is taken as it is (see `parser_precise` below); a site whose page changed finds
+  // nothing here and goes on to the general rule as before.
+  const SIMPLE_SITE_RULES = [
+    { test: () => host.includes('perplexity'),
+      user: '[class*="group/user-bubble"] [class*="whitespace-pre-wrap"]',
+      assistant: 'main .prose, [class*="prose"][class*="break-words"]', skip: '[class*="group/user-bubble"]' },
+    { test: () => host.includes('lumo.proton.me'),
+      user: '.user-msg-container .lumo-markdown',
+      assistant: '.assistant-msg-container .progressive-markdown-content' },
+    { test: () => host.includes('kimi.com') || host.includes('kimi.ai'),
+      user: '.segment-user .user-content',
+      assistant: '.segment:not(.segment-user) .markdown-container', skip: '[class*="think"], [class*="reason"]',
+      drop: '.segment-code-header, .sticky-release' },   // a code block's "Python  Copy" bar
+    { test: () => host.includes('deepseek.com'),
+      user: '.ds-message .ds-collapsible-text',
+      assistant: '.ds-message .ds-assistant-message-main-content, .ds-message > .ds-markdown',
+      skip: '.ds-think-content' },
+    { test: () => host.includes('chat.z.ai') || host === 'z.ai' || host.endsWith('.z.ai'),
+      user: '.user-message .chat-user',
+      assistant: '.chat-assistant #response-content-container, .chat-assistant .chat-markdown',
+      skip: '[class*="thinking"], [class*="reasoning"]' },
+    { test: () => host.includes('doubao.com'),
+      user: '[class*="send-msg-bubble"] [data-testid="message_text_content"]',
+      assistant: '[data-testid="message_text_content"]', skip: '[class*="send-msg-bubble"]' },
+    { test: () => host.includes('yuanbao.tencent.com'),
+      user: '.agent-chat__bubble--human .hyc-content-text',
+      assistant: '.agent-chat__bubble--ai .hyc-content-md, .agent-chat__speech-text .hyc-content-md',
+      skip: '[class*="think"]' },
+  ];
+  const parseSimpleSiteStrict = (rule) => {
+    const pick = (selector, skip) => dedupeNodes(Array.from(document.querySelectorAll(selector))
+      .filter((node) => !(skip && node.closest(skip))));
+    const users = pick(rule.user, '');
+    const answers = pick(rule.assistant, rule.skip || '');
+    const roles = new Map();
+    users.forEach((node) => roles.set(node, 'user'));
+    answers.forEach((node) => { if (!roles.has(node)) roles.set(node, 'assistant'); });
+    const messages = [];
+    for (const node of sortDom(Array.from(roles.keys()))) {
+      const role = roles.get(node);
+      let source = node;
+      if (rule.drop && node.querySelector(rule.drop)) {
+        source = node.cloneNode(true);
+        source.querySelectorAll(rule.drop).forEach((item) => item.remove());
+      }
+      const content = contentFromElement(source, role);
+      if (!content) continue;
+      messages.push({ role, content, source: serviceName, parser_node: serviceKey + '-site-' + role });
+    }
+    const result = buildResult(messages, serviceKey + '-site', false,
+      messages.length ? 'strict_site_parser_ok' : 'strict_no_nodes');
+    result.parser_precise = true;
+    return result;
+  };
+
   const parseStrictBySite = () => {
+    const simpleRule = SIMPLE_SITE_RULES.find((rule) => rule.test());
+    if (simpleRule) {
+      const simple = parseSimpleSiteStrict(simpleRule);
+      if (Number((simple.parser_quality || {}).message_count || 0) > 0) return simple;
+    }
     if (isChatGPTHostname) return parseChatGPTStrict();
     if (host.includes('claude.ai')) return parseClaudeStrict();
     if (host.includes('gemini.google.com')) return parseGeminiStrict();
@@ -57745,6 +61157,12 @@ _WEB_CONVERSATION_CAPTURE_JS_TEMPLATE = r"""
 
   const strict = parseStrictBySite();
   const strictQuality = strict.parser_quality || {};
+  // A site's own rule named the question and the answer exactly: a short answer is a short
+  // answer, not a reason to prefer the whole page's text.
+  if (strict.parser_precise && strictQuality.ok && Number(strictQuality.assistant_count || 0) > 0) {
+    strict.parser_fallback_used = false;
+    return attachVisibleMainText(strict);
+  }
   // Authoritative tier-4: when the strict per-site parser found no real answer (custom /
   // localhost UI) and we know the exact prompt forwarded to this @target, locate it in the
   // page text and return just the answer. This must SHORT-CIRCUIT -- it cannot go through
@@ -58614,12 +62032,17 @@ def web_chat_ready_probe_js(mode: str = 'response') -> str:
             if (isNonSendControl(text)) return false;
             return /(send message|send-button|submit|发送|送信)/.test(text);
         });
+        // 2026-11 Grok renamed the control from "Submit" to "Send" (and the name follows the
+        // UI language), so the name is no longer what identifies it: the page's own marker
+        // data-testid="chat-submit" is. A control carrying that marker but named like a stop
+        // or voice control is not the send button.
         const grokSendButtons = visibleButtons.filter(btn => {
             if (disabled(btn)) return false;
             const label = String(btn.getAttribute('aria-label') || '').trim().toLowerCase();
             const testid = String(btn.getAttribute('data-testid') || '').trim().toLowerCase();
             const type = String(btn.getAttribute('type') || '').trim().toLowerCase();
-            return label === 'submit' && (testid === 'chat-submit' || type === 'submit');
+            if (isNonSendControl(label)) return false;
+            return testid === 'chat-submit' || (type === 'submit' && /^(submit|send)$/.test(label));
         });
         const perplexitySendButtons = visibleButtons.filter(btn => {
             if (disabled(btn)) return false;
@@ -58768,6 +62191,10 @@ def web_chat_ready_probe_js(mode: str = 'response') -> str:
 	            if (responseBusyNode) return sendPayload({ busy: true, reason: service + '-response-busy-visible' });
 	            if (stopNode) return sendPayload({ busy: true, reason: 'generation-stop-visible' });
             if (sendAvailable) return sendPayload({ ready: true, reason: sendReason });
+            // A known site whose own rule no longer finds its send button (the site renamed
+            // it) falls back to the general rule here — after every busy check above, so an
+            // upload or a running answer still holds the send.
+            if (genericSendButtons.length > 0) return sendPayload({ ready: true, reason: service + '-general-button-ready' });
             if (composerReady) return sendPayload({ ready: false, reason: service + '-composer-ready-no-send' });
             return sendPayload({ ready: false, reason: labels.length ? service + '-send-not-ready: ' + labels.join(' | ') : service + '-no-visible-buttons' });
         }
@@ -60267,7 +63694,11 @@ class WebViewPanel(QWidget):
         self._views      = []
         self._active_idx = 0
         self._icon_fetcher    = _IconFetcher()
-        self._pill_icon_size  = {}   # idx -> int: tracks best icon size so we only upgrade
+        # Icons are tracked per web view, never per position: a download can take seconds,
+        # and tabs get moved or closed meanwhile.
+        self._pill_icon_size  = {}   # view -> int: tracks best icon size so we only upgrade
+        self._icon_requests   = {}   # request number -> (view, host the icon was asked for)
+        self._icon_request_seq = 0
         self._icon_fetcher.icon_ready.connect(
             self._on_hq_icon,
             Qt.ConnectionType.QueuedConnection,
@@ -61039,6 +64470,7 @@ class WebViewPanel(QWidget):
             self._stack.removeWidget(view)
             view.deleteLater()
             self._automation_locks.pop(view, None)
+            self._pill_icon_size.pop(view, None)
             if self._prompt_dock is not None and hasattr(self._prompt_dock, 'shift_target_indices_after_delete'):
                 self._prompt_dock.shift_target_indices_after_delete(idx)
             if not self._views:
@@ -61058,7 +64490,7 @@ class WebViewPanel(QWidget):
         if 0 <= idx < len(self._sites):
             self._sites[idx] = {'url': '', 'label': _tr('New Tab')}
             self._save_sites()
-        self._pill_icon_size.pop(idx, None)
+        self._pill_icon_size.pop(self._views[idx], None)
         self._apply_blank_placeholder(self._views[idx])   # 渲染欢迎文字，url 回到 about:blank
         self._active_idx = idx
         self._stack.setCurrentIndex(idx)
@@ -61136,18 +64568,8 @@ class WebViewPanel(QWidget):
         self._stack.setCurrentIndex(self._active_idx)
         self._save_sites()
         self._refresh_lifecycle_states()
-        # 交换重排了索引：尺寸守卫按旧索引记录的值会拒绝新位置的图标，
-        # 在途的 icon 事件也可能已按旧索引落位。清守卫后按当前对应关系
-        # 立即重设全部 pill 图标，并重新抓一轮高清图标。
-        self._pill_icon_size.clear()
-        for idx, item_view in enumerate(self._views):
-            if item_view is None:
-                continue
-            try:
-                self._on_icon(idx, item_view.icon())
-            except Exception:
-                pass
-            self._fetch_hq_icon(idx)
+        # Each pill carries its own icon and moved with it; icon downloads still on their
+        # way are matched to their web view when they arrive, so nothing is reset here.
         self.view_switched.emit()
 
     # ── view 信号接线：索引按 view 身份实时求值 ─────────────────
@@ -61242,13 +64664,35 @@ class WebViewPanel(QWidget):
         """Run JS to find the best icon URL declared in <head>, then download it."""
         if 0 <= idx < len(self._views):
             view = self._views[idx]
+            if view is None:
+                return
+            host = self._view_host(view)
             def _got_url(url_str):
                 if url_str:
-                    self._icon_fetcher.fetch(idx, url_str)
+                    self._request_icon(view, url_str, host)
             try:
                 view.page().runJavaScript(_ICON_JS, _got_url)
             except Exception:
                 pass
+
+    @staticmethod
+    def _view_host(view) -> str:
+        try:
+            return str(view.url().host() or '')
+        except Exception:
+            return ''
+
+    def _request_icon(self, view, icon_url, host=None):
+        """Download an icon for this web view (not for a position in the bar)."""
+        if view is None or not icon_url:
+            return
+        self._icon_request_seq += 1
+        token = self._icon_request_seq
+        self._icon_requests[token] = (view, self._view_host(view) if host is None else str(host))
+        if len(self._icon_requests) > 200:   # downloads that failed never report back
+            for old in sorted(self._icon_requests)[:-100]:
+                self._icon_requests.pop(old, None)
+        self._icon_fetcher.fetch(token, icon_url)
 
     @staticmethod
     def _is_local_host(host: str) -> bool:
@@ -61267,8 +64711,14 @@ class WebViewPanel(QWidget):
             return True
         return False
 
-    def _on_hq_icon(self, idx, data):
+    def _on_hq_icon(self, token, data):
         """Receive downloaded icon bytes (main thread); only upgrade, never downgrade."""
+        view, host = self._icon_requests.pop(token, (None, ''))
+        if view is None:
+            return
+        idx = self._view_index(view)          # where that web view is NOW
+        if idx < 0 or self._view_host(view) != host:
+            return                            # tab closed, or it went to another site meanwhile
         if 0 <= idx < len(self._nav._pills):
             try:
                 from PyQt6.QtGui import QPixmap
@@ -61278,15 +64728,16 @@ class WebViewPanel(QWidget):
                 # fully transparent in Qt: keep the browser's own icon instead of a blank one.
                 if not pix.isNull() and broccoli_pixmap_has_visible_content(pix):
                     new_size = max(pix.width(), pix.height())
-                    if new_size >= self._pill_icon_size.get(idx, 0):
-                        self._pill_icon_size[idx] = new_size
+                    if new_size >= self._pill_icon_size.get(view, 0):
+                        self._pill_icon_size[view] = new_size
                         self._nav._pills[idx].set_icon(pix)
             except Exception:
                 pass
 
     def _on_url(self, idx, url):
         # Reset size tracker on navigation so the new page's icon can replace the old one
-        self._pill_icon_size.pop(idx, None)
+        if 0 <= idx < len(self._views):
+            self._pill_icon_size.pop(self._views[idx], None)
         try:
             self.view_url_changed.emit(int(idx), url.toString())
         except Exception:
@@ -61313,7 +64764,7 @@ class WebViewPanel(QWidget):
                 host = self._views[idx].url().host()
                 if host and not self._is_local_host(host):
                     s2 = f'https://www.google.com/s2/favicons?domain={host}&sz=128'
-                    self._icon_fetcher.fetch(idx, s2)
+                    self._request_icon(self._views[idx], s2, host)
         if idx == self._active_idx:
             self.active_load_finished.emit(ok)
 
@@ -68094,6 +71545,9 @@ class _DeepDigMenu(QWidget):
 class ScreenshotSelectionOverlay(QWidget):
     screenshot_confirmed = pyqtSignal(str)
     overlay_closed = pyqtSignal()
+    # 2026-11-24 (Ryan: "我有多个外接屏，似乎都没法在别的外接屏上截屏"): one overlay per screen; the
+    # first press on one of them (a drag starts) makes it THE overlay and the other screens' ones close
+    selection_started = pyqtSignal()
 
     BTN_D = 38
     BTN_GAP = 8
@@ -69003,7 +72457,12 @@ class ScreenshotSelectionOverlay(QWidget):
         os.makedirs(SCREENSHOT_CAPTURE_DIR, exist_ok=True)
         stamp = datetime.datetime.now().strftime('%Y-%m-%dT%H-%M-%S-%f')
         path = os.path.join(SCREENSHOT_CAPTURE_DIR, f'Broccoli-Capture_{stamp}.png')
-        self._run_screencapture_async(['-x', path], path, on_done)
+        # the screen this overlay is on (a bare `screencapture file` takes only the MAIN display)
+        self._run_screencapture_async(['-x', '-R', self._screen_rect_arg(), path], path, on_done)
+
+    def _screen_rect_arg(self) -> str:
+        g = self._screen_geometry
+        return f"{g.x()},{g.y()},{g.width()},{g.height()}"
 
     def _capture_to_path(self) -> str | None:
         sel = self._selection_global_rect()
@@ -69033,7 +72492,7 @@ class ScreenshotSelectionOverlay(QWidget):
         path = os.path.join(SCREENSHOT_CAPTURE_DIR, f'Broccoli-Capture_{stamp}.png')
         try:
             proc = subprocess.run(
-                ['screencapture', '-x', path],
+                ['screencapture', '-x', '-R', self._screen_rect_arg(), path],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -69134,6 +72593,8 @@ class ScreenshotSelectionOverlay(QWidget):
             return
         self._drawing = True
         self._origin = event.pos()
+        self.activateWindow()            # Esc reaches the screen the area is dragged on
+        self.selection_started.emit()
         # review fix (FIX-44): remember the live selection — a click too small to
         # be a drag must not strand a frozen snapshot (the repaint is gated on a
         # valid selection, so clearing it would hide the snapshot for good while
@@ -69682,6 +73143,23 @@ class AssistantPromptInlineEdit(QPlainTextEdit):
             self._apply_theme()
 
 
+# What floats above a bottom bar (style book 3: "浮在栏 / 胶囊上方的东西，看得见的边缘到下面那条栏的距离一律 10")
+# ends BAR_FLOAT_GAP above the bar's top — measured from the AssistantBar itself, whichever button opened it
+# (2026-11-25, Ryan: "它离底部的这个距离也太短了，它不符合我们样式书上的要求……应该有一个共同的距离"; the web
+# tab's site list sat 4 above its button, i.e. 6 into the bar, the queue panel 4, the / list 0).
+BAR_FLOAT_GAP = 10
+
+
+def bar_float_bottom(anchor, win) -> int:
+    """The y (in `win`) where the visible bottom edge of something floating above `anchor`'s bar goes;
+    not in a bar: BAR_FLOAT_GAP above the anchor itself."""
+    bar = anchor
+    while bar is not None and not isinstance(bar, AssistantBar):
+        bar = bar.parentWidget()
+    reference = bar if bar is not None else anchor
+    return reference.mapTo(win, QPoint(0, 0)).y() - BAR_FLOAT_GAP
+
+
 class AssistantPromptPopup(QFrame):
     """Floating multi-line editor shown above the assistant bar when prompt wraps."""
     def __init__(self, parent=None):
@@ -69765,7 +73243,7 @@ class AssistantPromptPopup(QFrame):
     # The attachment tray sits 10 px above the bottom bar (its wrap's 4 px margin + the page
     # layout's 6 px spacing); the editor keeps the same distance to the BAR (it used to be
     # placed 10 px above the text box inside the bar, which sits 8 px lower: 2 px left).
-    GAP_TO_BAR = 10
+    GAP_TO_BAR = BAR_FLOAT_GAP
 
     def target_geometry_for(self, anchor_widget: QWidget) -> QRect:
         win = self.window()
@@ -69952,6 +73430,9 @@ class AgentQueuePanel(QFrame):
             label = f'{index}. {status_text} · {prompt[:90]}'
             if len(prompt) > 90:
                 label += '...'
+            files = [str(path) for path in (item.get('attachments') or []) if str(path or '').strip()]
+            if files:
+                label += ' 📎 ' + ', '.join(os.path.basename(path) for path in files[:3]) + (' …' if len(files) > 3 else '')
             list_item = QListWidgetItem(label)
             list_item.setData(Qt.ItemDataRole.UserRole, str(item.get('id', '') or ''))
             self.queue_list.addItem(list_item)
@@ -69978,7 +73459,7 @@ class AgentQueuePanel(QFrame):
         anchor_rect = QRect(anchor_widget.mapTo(win, QPoint(0, 0)), anchor_widget.size())
         width = max(300, min(480, win.width() - 20))
         x = max(10, min(anchor_rect.right() - width, win.width() - width - 10))
-        y = max(10, anchor_rect.y() - panel_h - 10)
+        y = max(10, bar_float_bottom(anchor_widget, win) - panel_h)
         self.setGeometry(x, y, width, panel_h)
         self.show()
         self.raise_()
@@ -71302,10 +74783,12 @@ class ActivityPanel(QFrame):
     conversation_requested = pyqtSignal(str)
     write_requested = pyqtSignal(str, str, bool)
     language_chosen = pyqtSignal(str)
+    share_requested = pyqtSignal(str)    # the report (or the selected part) as an HTML fragment → the share picture
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._theme_updating = False
+        self._report_markdown = ''
         self._panel_bg = QColor('#FFFFFF')
         self._panel_radius = FLOATING_PANEL_SMOOTH_RADIUS
         self.index = {'days': {}}
@@ -71413,7 +74896,13 @@ class ActivityPanel(QFrame):
         self.meta_label.setWordWrap(False)
         self.write_button = MacNormalButton(_tr('Write now'), self)
         self.write_button.clicked.connect(self._on_write)
+        # Ryan 2026-11-25: "每天的汇报…我是希望他可以截图分享的…什么都没有选中直接点击分享…全部的内容形成一条长图，
+        # 选中了一部分内容…只把选中的那一部分去生成图片" — the picture is made by the Agent page's own Share
+        self.share_button = MacNormalButton(_tr('Share'), self)
+        self.share_button.setToolTip(_tr('A picture of this report — of the selected text, when some is selected'))
+        self.share_button.clicked.connect(self._on_share)
         footer.addWidget(self.meta_label, 1)
+        footer.addWidget(self.share_button, 0)
         footer.addWidget(self.write_button, 0)
         body.addLayout(footer)
         layout.addLayout(body, 1)
@@ -71491,6 +74980,26 @@ class ActivityPanel(QFrame):
                 return
             self.conversation_requested.emit(path)
 
+    def share_fragment(self) -> str:
+        """What Share makes a picture of, as HTML: the selected text when some is selected, else the whole
+        report under its title. '' = there is no report."""
+        if not self._report_markdown.strip():
+            return ''
+        cursor = self.report_view.textCursor()
+        if cursor.hasSelection():
+            selected = cursor.selection().toMarkdown().strip()
+            if not selected:
+                selected = cursor.selectedText().replace('\u2029', '\n').strip()
+            if selected:
+                return markdown2_html(selected, extras=['tables', 'fenced-code-blocks', 'break-on-newline', 'cuddled-lists'])
+        body = markdown2_html(self._report_markdown, extras=['tables', 'fenced-code-blocks', 'break-on-newline', 'cuddled-lists'])
+        return '<h2>%s</h2>\n%s' % (html.escape(self.report_title.text()), body)
+
+    def _on_share(self):
+        fragment = self.share_fragment()
+        if fragment:
+            self.share_requested.emit(fragment)
+
     def set_busy(self, kind: str, key: str, on: bool, status: str = ''):
         if on:
             self.busy.add((kind, key))
@@ -71520,6 +75029,8 @@ class ActivityPanel(QFrame):
         activity = self.has_activity(kind, key)
         busy = (kind, key) in self.busy
         self._links = []
+        self._report_markdown = str(report['text'] or '') if report is not None else ''
+        self.share_button.setEnabled(bool(self._report_markdown.strip()))
         if report is not None:
             body = report['text']
             conversations = [item for item in (report['meta'].get('conversations') or []) if isinstance(item, dict)]
@@ -71581,7 +75092,7 @@ class ActivityPanel(QFrame):
             self.kind_bar.set_theme('dark' if dark else 'light')
             if hasattr(self.language_combo, '_update_style'):
                 self.language_combo._update_style()
-            for button in (self.prev_button, self.next_button, self.write_button):
+            for button in (self.prev_button, self.next_button, self.share_button, self.write_button):
                 button.update_theme()
             self.refresh()
         finally:
@@ -72099,7 +75610,8 @@ class AgentPlanPanel(QFrame):
             suffixes.append(_tr('Compare {n}').format(n=compare_count))
         if verify_count:
             suffixes.append(_tr('Verify {n}').format(n=verify_count))
-        executed = model_profile_label(step.get('executed_model', ''), step.get('executed_profile', ''))
+        executed = model_profile_label(step.get('executed_model', ''), step.get('executed_profile', ''),
+                                       step.get('executed_mcp'))
         if executed:
             suffixes.append(executed)   # the model (and profile) that ran it
         elif profile:
@@ -72660,7 +76172,7 @@ class AgentPlanPanel(QFrame):
         if anchor_widget is not None:
             anchor_rect = QRect(anchor_widget.mapTo(win, QPoint(0, 0)), anchor_widget.size())
             x = max(10, min(anchor_rect.x(), win.width() - width - 10))
-            y = max(10, anchor_rect.y() - height - 10)
+            y = max(10, bar_float_bottom(anchor_widget, win) - height)
         else:
             x = max(10, (win.width() - width) // 2)
             y = max(10, win.height() - height - 64)
@@ -72890,7 +76402,7 @@ class SlashCommandPopup(QFrame):
         anchor_rect = QRect(anchor_widget.mapTo(win, QPoint(0, 0)), anchor_widget.size())
         width = min(max(320, anchor_rect.width()), max(320, win.width() - 20))
         x = max(10, min(anchor_rect.x(), win.width() - width - 10))
-        y = max(10, anchor_rect.y() - self.height() - 8)
+        y = max(10, bar_float_bottom(anchor_widget, win) - self.height())
         new_geo = QRect(x, y, width, self.height())
         # The floating prompt editor (white box above the bar) opens on the same keystroke;
         # sit above it instead of half under it.
@@ -72900,7 +76412,7 @@ class SlashCommandPopup(QFrame):
             box = getattr(editor, '_target_geometry', QRect())
             box = box if box.isValid() else editor.geometry()
             if box.intersects(new_geo):
-                new_geo.moveTop(max(10, box.y() - self.height() - 8))
+                new_geo.moveTop(max(10, box.y() - self.height() - BAR_FLOAT_GAP))
         # Only move when the geometry actually changed (height OR anchor moved) so a redundant
         # refresh does not reposition the frame out from under the cursor.
         if self.geometry() != new_geo:
@@ -73738,6 +77250,13 @@ class CircleDictation:
         self.done = False           # the words are final (the copy button copies them)
         self.stoppable = False      # it goes on after the press was let go: the card has a stop button
         self.tidying = False        # the listening is over and the words are being worked on (no chooser any more)
+        self.no_insert = False      # "Don't Insert": heard (and written down, and in the live transcript) but put nowhere
+        # the words edited on the card (2026-11-22, style book 5.1.18)
+        self.held = False           # clicked into before they were delivered: they wait for ✓
+        self.waiting = False        # the listening is over and they wait for ✓
+        self.delivered = False      # they have been delivered (typed in / copied / kept only)
+        self.learned = []           # [(heard, meant)] learned from this recording's edits so far
+        self.learned_note = ''      # "Learned: …", shown before the small line
 
 
 class VoiceCorrectionWatcher(QObject):
@@ -73913,8 +77432,40 @@ def local_speech_engine():
     store = local_speech_store()
     with _LOCAL_MODELS['lock']:
         if _LOCAL_MODELS.get('engine') is None:
-            _LOCAL_MODELS['engine'] = local_speech.SpeechEngine(store)
+            engine = _LOCAL_MODELS['engine'] = local_speech.SpeechEngine(store)
+            engine.sound_options = voice_sound_options       # (asked when a listening or a file starts)
+            engine.sound_models = voice_sound_models_dir()
         return _LOCAL_MODELS['engine']
+
+
+def voice_sound_options() -> dict:
+    """How the sound is treated before a downloaded speech model hears it (Settings → Voice input;
+    2026-11-21, Ryan: "三样是不是都可以做成开关"). Apple's own recognizer is not touched by these."""
+    try:
+        globals_store = load_settings_store().get('globals', {})
+    except Exception:
+        globals_store = {}
+    return {
+        'detector': bool(globals_store.get(VOICE_SOUND_DETECTOR_KEY, True)),
+        'gain': bool(globals_store.get(VOICE_SOUND_GAIN_KEY, True)),
+        'denoise': bool(globals_store.get(VOICE_SOUND_DENOISE_KEY, False)),
+    }
+
+
+def voice_sound_models_dir() -> str:
+    """The folder with the voice detector's and the noise remover's small models (shipped beside
+    the dictation helper): in the packaged app or next to this file; '' when this copy has none."""
+    folders = []
+    meipass = str(getattr(sys, '_MEIPASS', '') or '')
+    if meipass:
+        folders.append(os.path.join(meipass, VOICE_INPUT_FOLDER))
+    folders += [
+        os.path.join(BUNDLED_RESOURCES_DIR, VOICE_INPUT_FOLDER),
+        os.path.join(os.path.dirname(BUNDLED_RESOURCES_DIR), 'Frameworks', VOICE_INPUT_FOLDER),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), VOICE_INPUT_FOLDER),
+    ]
+    return next((folder for folder in folders if os.path.isfile(os.path.join(folder, local_speech.VAD_MODEL_FILE))
+                 or os.path.isfile(os.path.join(folder, local_speech.DENOISE_MODEL_FILE))), '')
 
 
 def local_speech_model_id_for_dictation() -> str:
@@ -73944,9 +77495,110 @@ def voice_session_for(controller):
     model_id = local_speech_model_id_for_dictation()
     if not model_id:
         return None
-    return voice_input.LocalVoiceSession(
+    return voice_live_session(voice_input.LocalVoiceSession(
         voice_helper_path(), local_speech_engine(), model_id, voice_input_locale().split('-')[0].lower(),
-        voice_input_device(), audio_file=controller.audio_file, parent=controller)
+        voice_input_device(), audio_file=controller.audio_file, parent=controller))
+
+
+# ── the language and the model, picked on the circle's card while it listens (2026-11-21, Ryan: "在这个
+# 地方加上两个下拉栏，可以快速切换目标语言和使用的模型"; style book 5.1.17). Both choosers write the ordinary
+# settings (Voice input → Language; Model roles → the "Speech to text" row), so what is picked is
+# also what is used next time. The circle's listening uses the change at once, for everything said so
+# far too (2026-11-22, Ryan: "只要这个下拉栏变过，我们当前正在输入的这个东西它立马就要变……难道我还要把这个东西重说
+# 一遍吗"): voice_input.SwitchingVoiceSession hears the kept sound again with the new choice and the
+# words on the card are replaced. (A prompt box's downloaded-model listening takes it from its next
+# sentence on: the choosers are only on the circle's card.)
+_VOICE_LIVE_SESSIONS = weakref.WeakSet()
+
+
+def voice_live_session(session):
+    """Remembers a downloaded-model listening so that the card's choosers can reach it."""
+    try:
+        _VOICE_LIVE_SESSIONS.add(session)
+    except TypeError:
+        pass
+    return session
+
+
+def voice_switch_live_sessions(model_id: str = '', language=None) -> int:
+    """Hands a new model / language to every downloaded-model listening that is going on; how many."""
+    count = 0
+    for session in list(_VOICE_LIVE_SESSIONS):
+        try:
+            if session.is_running():
+                session.switch(model_id, language)
+                count += 1
+        except Exception:        # (a session whose Qt object is gone)
+            continue
+    return count
+
+
+def voice_language_choices(store=None) -> tuple:
+    """([(language key, name)], the key in use) for the chooser on the circle's card:
+    '' = automatic (the first language of Settings → Languages)."""
+    choices = [('', _tr('Automatic'))] + [(key, name) for name, key in voice_input_languages()]
+    picked = str((store or load_settings_store()).get('globals', {}).get(VOICE_INPUT_LANGUAGE_KEY, '') or '')
+    return choices, (picked if picked in dict(choices) else '')
+
+
+def voice_set_language_choice(key: str):
+    update_settings_globals({VOICE_INPUT_LANGUAGE_KEY: str(key or '')})
+    voice_switch_live_sessions('', voice_input_locale().split('-')[0].lower())
+
+
+def voice_speech_choices(store=None) -> tuple:
+    """([(model id, name)], the id in use) for the chooser on the circle's card: the speech models
+    on this Mac — Apple's own when it has its profile, then every downloaded one."""
+    store = store or load_settings_store()
+    choices = []
+    try:
+        state = local_models.load_state(LOCAL_MODELS_STATE_PATH)
+        if any(local_model_profile_id(profile, state) == local_models.APPLE_SPEECH_MODEL
+               for profile in store.get('profiles') or [] if isinstance(profile, dict)):
+            choices.append((local_models.APPLE_SPEECH_MODEL, 'Apple Speech'))
+        # (asked without loading the runtime: this runs on the GUI thread when the card opens)
+        if importlib.util.find_spec('sherpa_onnx') is not None:
+            choices += [(entry['id'], entry['name']) for entry in local_speech.SPEECH_MODELS
+                        if local_speech_store().is_installed(entry['id'])]
+    except Exception:
+        logging.exception('Listing the speech models for the circle\'s card failed.')
+    in_use = local_speech_model_id_for_dictation() or local_models.APPLE_SPEECH_MODEL
+    return choices, (in_use if in_use in dict(choices) else '')
+
+
+def voice_set_speech_choice(model_id: str) -> bool:
+    """The picked model becomes the first model on this Mac in the "Speech to text" row: it takes
+    the place of the one that was first; profiles that are not on this Mac keep their places."""
+    model_id = str(model_id or '')
+    if not model_id:
+        return False
+    if model_id != local_models.APPLE_SPEECH_MODEL:
+        add_local_speech_profile(model_id)         # (it has one already, unless it was deleted)
+    done = []
+
+    def mutate(store):
+        state = local_models.load_state(LOCAL_MODELS_STATE_PATH)
+        local = {str(profile.get('name', '') or ''): local_model_profile_id(profile, state)
+                 for profile in store.get('profiles') or [] if isinstance(profile, dict)}
+        name = next((name for name, found in local.items() if name and found == model_id), '')
+        if not name:
+            return
+        globals_store = store['globals']
+        candidates = normalize_specialized_profile_candidates(globals_store.get('specialized_profile_candidates'))
+        firsts = normalize_specialized_profiles(globals_store.get('specialized_profiles'))
+        row = list(candidates.get('speech_to_text') or ([firsts['speech_to_text']] if firsts.get('speech_to_text') else []))
+        row = [other for other in row if other != name]
+        place = next((index for index, other in enumerate(row) if local.get(other)), len(row))
+        row.insert(place, name)
+        candidates['speech_to_text'] = row
+        firsts['speech_to_text'] = row[0]
+        globals_store['specialized_profile_candidates'] = candidates
+        globals_store['specialized_profiles'] = firsts
+        done.append(name)
+    update_settings_store(mutate)
+    if done:        # (Apple Speech: '' — a switching listening reads the choice from the settings)
+        voice_switch_live_sessions('' if model_id == local_models.APPLE_SPEECH_MODEL else model_id, None)
+    return bool(done)
 
 
 class LocalSpeechSignals(QObject):
@@ -74481,12 +78133,14 @@ class ExternalTabSwitchButton(AssistantCircleButton):
             panel.switch_site_delta(self._direction)
         self.refresh()
 
+    POPUP_PAD = 6
+
     def _popup_stylesheet(self) -> str:
         dark = is_dark_theme(app)
         return f"""
             QFrame#ExternalTabSwitchPopup {{
                 background: {'#2D2D2D' if dark else 'white'};
-                border-radius: 15px;
+                border-radius: {int(round(glass_corner_radius(BAR_ACCESSORY_SMOOTH_RADIUS)))}px;
             }}
         """
 
@@ -74514,7 +78168,8 @@ class ExternalTabSwitchButton(AssistantCircleButton):
         shadow.setColor(QColor(0, 0, 0, 40))
         popup.setGraphicsEffect(shadow)
         layout = QVBoxLayout(popup)
-        layout.setContentsMargins(6, 3, 6, 3)
+        # the same room on every side (it was 3 above and below, the capsules touching the edge)
+        layout.setContentsMargins(self.POPUP_PAD, self.POPUP_PAD, self.POPUP_PAD, self.POPUP_PAD)
         layout.setSpacing(4)
         popup.installEventFilter(self)
         popup.hide()
@@ -74557,13 +78212,14 @@ class ExternalTabSwitchButton(AssistantCircleButton):
             if btn_fm.horizontalAdvance(full_text) > text_area_w:
                 elided = btn_fm.elidedText(full_text, Qt.TextElideMode.ElideMiddle, text_area_w)
             btn.setText(elided)
-            btn.setFixedWidth(max(0, popup_w - 12))
+            btn.setFixedWidth(max(0, popup_w - 2 * self.POPUP_PAD))
         self._hide_timer.stop()
-        popup_h = len(options) * 28 + (len(options) - 1) * 4 + 6
+        popup_h = len(options) * 28 + (len(options) - 1) * 4 + 2 * self.POPUP_PAD
         popup.setFixedSize(popup_w, popup_h)
-        pos_win = self.mapTo(win, QPoint(0, -popup_h - 4))
+        pos_win = self.mapTo(win, QPoint(0, 0))
         x = max(10, min(pos_win.x(), win_w - popup_w - 10))
-        popup.setGeometry(x, pos_win.y(), popup_w, popup_h)
+        y = max(10, bar_float_bottom(self, win) - popup_h)       # 10 above the bar, not 4 above this button
+        popup.setGeometry(x, y, popup_w, popup_h)
         popup.show()
         popup.raise_()
 
@@ -75762,6 +79418,12 @@ class ExternalPromptDock(QWidget):
         self.prompt_edit = AssistantPromptInlineEdit(self)
         self.prompt_edit.setPlaceholderText(_tr('Prompt this web page...'))
         self.prompt_edit.setObjectName('edit')
+        # The box is the part that gives way (style book 5.1.14: the mic takes its 20 points from
+        # the box, nothing else moves). Qt's own floor for a text box is 96 points, which at the
+        # default window width is more than the bar has left once the mic is there, so Send was
+        # pushed out of the bar and onto the › button. Any text opens the floating editor, so a
+        # short box in the bar loses nothing.
+        self.prompt_edit.setMinimumWidth(40)
         self._prompt_popup = AssistantPromptPopup(self.window())
         self._prompt_popup.edit.setPlaceholderText(_tr('Prompt this web page...'))
         self._prompt_syncing = False
@@ -82181,6 +85843,10 @@ def notes_mirror_notice_text(outcome: str, reason_code: str = '', subject: str =
         return ''
     if outcome == 'waiting_local_action':
         return _tr('Waiting for you to approve an action in Broccoli on the Mac. The answer will arrive as a separate note.')
+    if outcome == 'waiting_user_input':
+        return _tr('Broccoli on the Mac needs your answer to go on. In the Shortcut, choose this conversation and send '
+                   'your answer (a number picks that choice). With no answer within 10 minutes it goes on with the '
+                   'recommended one. The full answer arrives as a separate note.')
     if outcome == 'cancelled':
         return _tr('Stopped on the Mac before the answer was finished.')
     if outcome == 'not_text':
@@ -82214,7 +85880,7 @@ class NotesMirrorJobManager:
     # Run/attempt states that end a phone question; each gets its Note.
     NOTE_TERMINAL_STATES = ('completed', 'failed', 'cancelled', 'rejected', 'needs_reconciliation',
                             'waiting_for_user')   # an autonomous run that needs the user
-    NOTE_OUTCOMES = NOTE_TERMINAL_STATES + ('waiting_local_action', 'not_text')
+    NOTE_OUTCOMES = NOTE_TERMINAL_STATES + ('waiting_local_action', 'not_text', 'waiting_user_input')
     FOLDER_PATH = ('Broccoli',)
     # One reminder per Note, in Broccoli's own list. It goes off a minute after the Note
     # is written (time for the Note to reach the phone) and is ticked off a day later.
@@ -82508,6 +86174,30 @@ class NotesMirrorJobManager:
             record=record,
         )
 
+    def enqueue_question_notice(self, run: dict, question: dict) -> dict:
+        """A step asks (2026-11-25): one Note per question, with its choices; the iPhone answers by sending
+        its answer to the same conversation (a number picks that choice)."""
+        config = run.get('config') if isinstance((run or {}).get('config'), dict) else {}
+        request = config.get('remote_request') if isinstance(config.get('remote_request'), dict) else {}
+        if not self._is_shortcut_request(request):
+            return {'status': 'ignored', 'reason': 'not_ios_shortcut'}
+        recommended = str(question.get('recommended', '') or '')
+        lines = [str(question.get('question', '') or '')]
+        choices = list(question.get('choices') or [])
+        if choices:
+            lines.append('')
+            lines += ['{}. {}{}'.format(index, choice, (' — ' + _tr('recommended')) if choice == recommended else '')
+                      for index, choice in enumerate(choices, start=1)]
+        elif recommended:
+            lines += ['', _tr('Recommended: {answer}').format(answer=recommended)]
+        attempt_id = str(run.get('attempt_id', '') or request.get('attempt_id', '') or '')
+        return self.enqueue_for_request(
+            dict(request, task_id=str(run.get('task_id', '') or request.get('task_id', '') or ''), attempt_id=attempt_id),
+            'waiting_user_input',
+            completion_event_id='ask-' + _cloud_file_component(question.get('interaction_id', ''), 'ask'),
+            answer='\n'.join(lines),
+        )
+
     def enqueue_waiting_notice(self, run: dict) -> dict:
         """A phone question now waits for a click on this Mac. One Note per attempt says
         so; the answer still comes as its own Note afterwards."""
@@ -82693,7 +86383,8 @@ class NotesMirrorJobManager:
             str(job.get('question', '') or ''),
             str(job.get('answer', '') or ''),
             notice=notes_mirror_notice_text(outcome, str(job.get('reason_code', '') or ''), str(job.get('subject', '') or '')),
-            answer_heading=_tr('Answer') if outcome == 'completed' else _tr('Partial answer (incomplete)'),
+            answer_heading=(_tr('Answer') if outcome == 'completed' else
+                            _tr('A question from the Mac') if outcome == 'waiting_user_input' else _tr('Partial answer (incomplete)')),
             files=job.get('files'),
         )
 
@@ -90610,8 +94301,8 @@ def circle_answer_status_text(text: str) -> str:
 
 class CircleAnswerButton(TranslationGlassButton):
     """A round button on the answer card (style book 5.1: a glass disc, 22): ✕, "open in the main
-    window", "ask a follow-up" (a speech bubble), or "copy" (two sheets; a tick for a moment once
-    it has copied)."""
+    window", "ask a follow-up" (a speech bubble), "copy" (two sheets; a tick for a moment once
+    it has copied), or "done" (a tick: the dictated words are edited, 2026-11-22)."""
 
     def __init__(self, kind: str, parent=None):
         super().__init__('', 11, parent)
@@ -90620,7 +94311,8 @@ class CircleAnswerButton(TranslationGlassButton):
         self.setFixedSize(CIRCLE_ANSWER_BUTTON, CIRCLE_ANSWER_BUTTON)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setToolTip({'open': _tr('Open in main window'), 'ask': _tr('Ask a follow-up'),
-                         'copy': _tr('Copy'), 'stop': _tr('Stop')}.get(kind) or _tr('Close'))
+                         'copy': _tr('Copy'), 'stop': _tr('Stop'),
+                         'done': _tr('Done editing (⌘↩)')}.get(kind) or _tr('Close'))
         self.setAccessibleName(self.toolTip())
 
     drag_started = pyqtSignal()     # pressed and pulled away (the copy button: the whole text goes along)
@@ -90674,7 +94366,7 @@ class CircleAnswerButton(TranslationGlassButton):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor(VOICE_MIC_RED))
                 painter.drawRoundedRect(QRectF(c.x() - 3.4, c.y() - 3.4, 6.8, 6.8), 1.6, 1.6)
-            elif self._kind == 'copy' and self._ticked:     # a tick
+            elif self._kind == 'done' or (self._kind == 'copy' and self._ticked):     # a tick
                 painter.drawLine(QPointF(c.x() - 4.0, c.y() + 0.2), QPointF(c.x() - 1.2, c.y() + 3.0))
                 painter.drawLine(QPointF(c.x() - 1.2, c.y() + 3.0), QPointF(c.x() + 4.2, c.y() - 3.2))
             elif self._kind == 'copy':                      # two sheets, the front one lower right
@@ -90729,22 +94421,47 @@ class CircleTidyChooser(TranslationGlassButton):
 
     def __init__(self, parent=None):
         super().__init__('', 11, parent)
+        self.max_width = self.MAX_W          # the card narrows it when three choosers share the strip
         self.setFixedHeight(CIRCLE_ANSWER_BUTTON)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         font = QFont(self.font())
         font.setPixelSize(11)
         self.setFont(font)
-        self.setToolTip(_tr('How the words are tidied when this recording ends'))
+        self.setToolTip(self._hint())
         self.clicked.connect(self._open_menu)
-        self.refresh()
+        self._label = ''
+        self.count = 0                       # how many there are to choose between (read when shown)
+        self.on_chosen = None                # set by the circle: (key) → the recording under way follows it
+
+    # what a kind of chooser answers (the tidy one here; language and model below)
+    def _hint(self) -> str:
+        return _tr('How the words are tidied when this recording ends')
+
+    def _choices(self) -> tuple:
+        return voice_tidy_choices()
+
+    def _text_for(self, name: str) -> str:
+        return _tr('Tidy: {name}').format(name=name)
+
+    def _pick(self, key: str):
+        voice_set_tidy_choice(key)
+
+    def _separator_after(self, key: str, choices: list) -> bool:
+        return key == '' and len(choices) > 2
+
+    def wanted_width(self) -> int:
+        return self.fontMetrics().horizontalAdvance(self._label) + 30     # 9 left, 12 for the chevron, 9 right
 
     def refresh(self):
-        choices, key = voice_tidy_choices()
-        label = dict(choices).get(key, '')
-        self._label = _tr('Tidy: {name}').format(name=label)
+        """Reads the settings again (when the card shows the strip, and after a choice)."""
+        choices, key = self._choices()
+        self.count = len(choices)
+        self._label = self._text_for(dict(choices).get(key, ''))
         self.setAccessibleName(self._label)
-        wanted = self.fontMetrics().horizontalAdvance(self._label) + 30     # 9 left, 12 for the chevron, 9 right
-        self.setFixedWidth(max(60, min(self.MAX_W, wanted)))
+        self.fit()
+
+    def fit(self):
+        self.setFixedWidth(max(60, min(int(self.max_width), self.wanted_width())))
         self.update()
 
     def label(self) -> str:
@@ -90755,11 +94472,20 @@ class CircleTidyChooser(TranslationGlassButton):
         self.update()
 
     def choose(self, key: str):
-        voice_set_tidy_choice(key)
+        self._pick(key)
+        self.max_width = self.MAX_W
         self.refresh()
+        card = self.parent()
+        if hasattr(card, '_lay_choosers'):
+            card._lay_choosers()             # another name is another width: the row is laid again
+        if callable(self.on_chosen):
+            try:
+                self.on_chosen(key)
+            except Exception:
+                logging.exception('Telling the recording about a chooser failed.')
 
     def _open_menu(self):
-        choices, in_use = voice_tidy_choices()
+        choices, in_use = self._choices()
         menu = style_broccoli_context_menu(QMenu(self))
         actions = {}
         for key, label in choices:
@@ -90767,8 +94493,8 @@ class CircleTidyChooser(TranslationGlassButton):
             action.setCheckable(True)
             action.setChecked(key == in_use)
             actions[action] = key
-            if key == '':
-                menu.addSeparator() if len(choices) > 2 else None
+            if self._separator_after(key, choices):
+                menu.addSeparator()
         chosen = menu.exec(self.mapToGlobal(QPoint(0, self.height() + 2)))
         if chosen in actions:
             self.choose(actions[chosen])
@@ -90794,7 +94520,100 @@ class CircleTidyChooser(TranslationGlassButton):
             painter.end()
 
 
-CIRCLE_TIDY_ROOM = 28      # the strip at the card's bottom for the chooser: the text view ends above it
+class CircleLanguageChooser(CircleTidyChooser):
+    """The language that is listened in, beside the tidy chooser (2026-11-21; same capsule)."""
+
+    def _hint(self) -> str:
+        return _tr('The language you speak. A change is used at once: what you have said so far is heard again in it.')
+
+    def _choices(self) -> tuple:
+        return voice_language_choices()
+
+    def _text_for(self, name: str) -> str:
+        return name
+
+    def _pick(self, key: str):
+        voice_set_language_choice(key)
+
+    def _separator_after(self, key: str, choices: list) -> bool:
+        return key == '' and len(choices) > 1
+
+
+class CircleSpeechModelChooser(CircleTidyChooser):
+    """The speech model that listens, beside the language chooser (2026-11-21; same capsule)."""
+
+    def _hint(self) -> str:
+        return _tr('The speech model that listens. A change is used at once: what you have said so far is heard '
+                   'again by it.')
+
+    def _choices(self) -> tuple:
+        return voice_speech_choices()
+
+    def _text_for(self, name: str) -> str:
+        return name
+
+    def _pick(self, key: str):
+        voice_set_speech_choice(key)
+
+    def _separator_after(self, key: str, choices: list) -> bool:
+        return False
+
+
+class CircleInsertToggle(CircleTidyChooser):
+    """The last capsule of the strip (2026-11-21, Ryan: "在这个地方加一个取消的按钮，因为我在 watermelon 里既然帮我
+    总结了，就不需要这个实时的语音输入插入了"): this recording is heard as usual — written down, and handed to the
+    programs that follow the live transcript — but not typed into the app in front (nor copied). A click again
+    takes it back. Same capsule, no chevron; the words say what a click does."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.on = False
+        self.on_change = None               # set by the circle: (bool) → the recording is told
+        self.clicked.disconnect()
+        self.clicked.connect(self.toggle)
+
+    def _hint(self) -> str:
+        return _tr('Keep listening, but do not put the words into the app in front (another app that follows '
+                   'the live transcript still gets them)')
+
+    def _choices(self) -> tuple:
+        return [('', '')], ''
+
+    def _text_for(self, name: str) -> str:
+        return _tr('Insert After All') if getattr(self, 'on', False) else _tr("Don't Insert")
+
+    def wanted_width(self) -> int:
+        return self.fontMetrics().horizontalAdvance(self._label) + 18      # no chevron
+
+    def set_on(self, on: bool):
+        if bool(on) != self.on:
+            self.on = bool(on)
+            self.refresh()
+            card = self.parent()
+            if hasattr(card, '_lay_choosers'):
+                card._lay_choosers()
+
+    def toggle(self):
+        self.set_on(not self.on)
+        if callable(self.on_change):
+            self.on_change(self.on)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = QRectF(self.rect()).adjusted(3, 3, -3, -3)
+            self._paint_surface(painter, rect)
+            painter.setPen(self._text_color)
+            painter.setFont(self.font())
+            room = QRectF(rect.left() + 6, rect.top(), rect.width() - 12, rect.height())
+            shown = self.fontMetrics().elidedText(self._label, Qt.TextElideMode.ElideRight, int(room.width()))
+            painter.drawText(room, int(Qt.AlignmentFlag.AlignCenter), shown)
+        finally:
+            painter.end()
+
+
+CIRCLE_TIDY_ROOM = 28      # the strip at the card's bottom for the choosers: the text view ends above it
 
 
 class CircleAnswerCard(QWidget):
@@ -90806,6 +94625,12 @@ class CircleAnswerCard(QWidget):
     append_requested = pyqtSignal(str)  # right click → "Append selection to prompt": into the circle's input box
     stop_requested = pyqtSignal()       # the stop button of a recording that goes on after the press
     wanted_changed = pyqtSignal()
+    # the dictated words edited on the card (2026-11-22, Ryan: "直接把这个输出框……变成一个可以编辑的输出框……Brockley
+    # 他也可以从这个输出框里面的修改直接去学习哪些是说对了哪些是说错了"; style book 5.1.18)
+    edit_started = pyqtSignal()         # a click into the words: they can be typed into now
+    edit_done = pyqtSignal()            # ✓ / ⌘↩: the edit is finished
+    edit_cancelled = pyqtSignal()       # Esc: the edit is taken back
+    take_keyboard = True   # (on-screen checks turn it off: they must never take Ryan's keyboard)
 
     def __init__(self):
         super().__init__(None)   # never a child of the main window (winId poison)
@@ -90836,6 +94661,22 @@ class CircleAnswerCard(QWidget):
         self.view.document().setDocumentMargin(0)
         self.view.anchorClicked.connect(self._open_link)
         self.view.setAccessibleName(_tr('Answer'))
+        self.view.setUndoRedoEnabled(False)     # (an undo would take back the words written in by the recognizer)
+        self.view.setAcceptRichText(False)
+        # editing the dictated words: the card's text stands for a hidden box the recording writes into
+        # (`bind_source`); while it is edited the two are kept equal change by change, both ways
+        self._source = None             # the hidden box (QPlainTextEdit) with the dictated words
+        self._final_end_for = None      # () → where the final words end in it (None: all of it is final)
+        self._apply_edit = None         # (at, removed, text) → bool: the user's edit, made in the hidden box
+        self.on_keyboard_back = None    # () → the circle gives the keyboard back to the app it came from
+        self._editing = False
+        self._range_start = 0           # where the words start in the card's text (after the buttons' room)
+        self._mirror = ''               # the words as the card's text has them (= the hidden box's)
+        self._mirror_busy = False
+        self._repair_pending = False
+        self._text_format = None
+        self._activated_app = False     # Broccoli had to come forward to get the keyboard
+        self.view.document().contentsChange.connect(self._on_view_change)
         # 2026-11-12 (Ryan: "输出框里的内容它如果复制的话复制不上"): the card never takes the keyboard, so
         # ⌘C went to the app in front. A right click offers Copy / Copy All; ⌘C with the pointer on
         # the card copies what is selected (heard by the key listener, see copy_if_pointed).
@@ -90849,14 +94690,23 @@ class CircleAnswerCard(QWidget):
         self.stop_button = CircleAnswerButton('stop', self)
         self._stop_shown = False
         self.stop_button.clicked.connect(self.stop_requested.emit)
+        self.done_button = CircleAnswerButton('done', self)      # (while the dictated words are edited)
+        self.done_button.clicked.connect(self.edit_done.emit)
         self.tidy_chooser = CircleTidyChooser(self)     # (dictation mode, while it listens: style book 5.1.17)
         self.tidy_chooser.hide()
+        self.language_chooser = CircleLanguageChooser(self)       # (2026-11-21: language and model beside it)
+        self.language_chooser.hide()
+        self.speech_chooser = CircleSpeechModelChooser(self)
+        self.speech_chooser.hide()
+        self.insert_toggle = CircleInsertToggle(self)            # (2026-11-21: "Don't Insert" at the end of the strip)
+        self.insert_toggle.hide()
         self._tidy_shown = False
         self.copy_button.clicked.connect(self._copy_clicked)
         self.copy_button.drag_started.connect(self._drag_all)
         self.copy_button.setToolTip(_tr('Copy (drag it to put the whole text somewhere)'))
         self._drag_press = None         # a press on the selected words: a drag of them may follow
         self.view.viewport().installEventFilter(self)
+        self.view.installEventFilter(self)      # (Esc and ⌘↩ while the words are edited)
         self.ask_button.clicked.connect(self.ask_requested.emit)
         self.open_button.clicked.connect(self.open_requested.emit)
         self.close_button.clicked.connect(self.close_requested.emit)
@@ -90909,8 +94759,21 @@ class CircleAnswerCard(QWidget):
     def eventFilter(self, obj, event):
         """A drag that starts on the selected words takes them along as plain text (a press anywhere
         else selects, as before)."""
+        if obj is self.view and self._editing and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.edit_cancelled.emit()
+                return True
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.edit_done.emit()           # ⌘↩ (Qt calls ⌘ "Control" on the Mac)
+                return True
         if obj is self.view.viewport():
             kind = event.type()
+            if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton \
+                    and not self._editing and self.can_edit():
+                # a click into the dictated words: they can be edited (the press goes on and puts the caret)
+                self._drag_press = None
+                self.begin_edit()
+                return False
             if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self._drag_press = None
                 selection = self.view.textCursor()
@@ -90947,6 +94810,8 @@ class CircleAnswerCard(QWidget):
         mode = 'dictation' if mode == 'dictation' else 'answer'
         if mode == self._mode:
             return
+        if self._editing:
+            self.end_edit()
         self._mode = mode
         if mode != 'dictation':
             self._stop_shown = False
@@ -90965,22 +94830,28 @@ class CircleAnswerCard(QWidget):
         self._lay_buttons()
         self._render()
 
-    def set_tidy_shown(self, shown: bool):
-        """The tidy chooser at the bottom of the card: while a dictation is still being heard."""
+    def set_tidy_shown(self, shown: bool, listening: bool = True):
+        """The strip of choosers at the bottom of the card: while a dictation is not done yet. Once the
+        listening is over (the words are being tidied) only the tidy chooser and "Don't Insert" stay:
+        the language and the model have nothing left to hear (2026-11-22)."""
         shown = bool(shown) and self._mode == 'dictation'
-        if shown == self._tidy_shown:
+        listening = bool(listening)
+        if shown == self._tidy_shown and listening == getattr(self, '_listening_choosers', True):
             return
         self._tidy_shown = shown
+        self._listening_choosers = listening
         if shown:
-            self.tidy_chooser.refresh()
+            for chooser in self.choosers():
+                chooser.refresh()
         self._lay_view()            # the text view ends above the chooser's strip
+        self._lay_choosers()
         self._render()
 
     def buttons_room(self) -> tuple:
         """(width, height) kept free of text at the top right for the buttons."""
         width, height = CIRCLE_ANSWER_BUTTONS_ROOM
         if self._mode == 'dictation':
-            return (width if self._stop_shown else width - 26), height
+            return (width if self._stop_shown else width - 26) + (26 if self._editing else 0), height
         return width + 26, height
 
     def _lay_buttons(self):
@@ -90991,19 +94862,49 @@ class CircleAnswerCard(QWidget):
         edge = int(round(CIRCLE_ANSWER_RADIUS - 11.0)) - 3
         right = self.width() - edge
         if self._mode == 'dictation':
-            order = [self.close_button, self.copy_button] + ([self.stop_button] if self._stop_shown else [])
+            order = ([self.close_button] + ([self.done_button] if self._editing else []) + [self.copy_button]
+                     + ([self.stop_button] if self._stop_shown else []))
         else:
             order = [self.close_button, self.open_button, self.ask_button, self.copy_button]
         for index, button in enumerate(order):
             button.move(right - (index + 1) * size + 2 * index, edge)
             button.raise_()
-        for button in (self.copy_button, self.ask_button, self.open_button, self.close_button, self.stop_button):
+        for button in (self.copy_button, self.ask_button, self.open_button, self.close_button, self.stop_button,
+                       self.done_button):
             button.setVisible(button in order and not self._folded)
         # the capsule (22 of the 28) in the bottom left corner: 9 from the left and from the bottom
         # edge, like the discs at the top right; the text ends 9 over it
-        self.tidy_chooser.move(edge, self.height() - edge - CIRCLE_ANSWER_BUTTON)
-        self.tidy_chooser.raise_()
-        self.tidy_chooser.setVisible(self._tidy_shown and not self._folded)
+        self._lay_choosers()
+
+    def choosers(self) -> list:
+        """The capsules of the bottom strip, left to right: how it is tidied, the language, the model, and
+        "Don't Insert"."""
+        return [self.tidy_chooser, self.language_chooser, self.speech_chooser, self.insert_toggle]
+
+    def _lay_choosers(self):
+        """Side by side from the bottom left corner (9 from the left and the bottom, like the discs).
+        All three fit at their own widths when they can; when they cannot, the widest ones give way
+        first (their names end in "…"), so that the row never passes the card's right edge. A model
+        chooser with nothing to choose between (one speech model on this Mac) is not shown."""
+        edge = int(round(CIRCLE_ANSWER_RADIUS - 11.0)) - 3
+        listening = getattr(self, '_listening_choosers', True)
+        shown = [chooser for chooser in self.choosers()
+                 if (chooser is not self.speech_chooser or chooser.count > 1)
+                 and (listening or chooser not in (self.language_chooser, self.speech_chooser))]
+        room = self.width() - 2 * edge
+        widths = {chooser: max(60, min(CircleTidyChooser.MAX_W, chooser.wanted_width())) for chooser in shown}
+        while sum(widths.values()) > room and max(widths.values()) > 60:
+            widest = max(widths, key=widths.get)
+            widths[widest] -= 1
+        x = edge
+        for chooser in self.choosers():
+            if chooser in widths:
+                chooser.max_width = widths[chooser]
+                chooser.fit()
+                chooser.move(x, self.height() - edge - CIRCLE_ANSWER_BUTTON)
+                chooser.raise_()
+                x += chooser.width()
+            chooser.setVisible(chooser in widths and self._tidy_shown and not self._folded)
 
     def copy_if_pointed(self):
         """⌘C was pressed somewhere: with something selected here and the pointer on the card, that
@@ -91070,6 +94971,13 @@ class CircleAnswerCard(QWidget):
         plain: the text as it is (dictated words are not Markdown). footer: a small fainter line
         under the text (not part of what "copy" copies)."""
         text, footer = str(text or ''), str(footer or '')
+        if self._editing:
+            # being edited: the words are kept equal to the hidden box change by change (never
+            # written over from here); only the small line under them is new
+            if footer != self._footer or text != self._mirror:
+                self._footer = footer
+                self._render()
+            return
         if text == self._text and bool(status) == self._status and bool(plain) == self._plain and footer == self._footer:
             return
         self._text, self._status, self._plain, self._footer = text, bool(status), bool(plain), footer
@@ -91077,6 +94985,9 @@ class CircleAnswerCard(QWidget):
         self._render()
 
     def _render(self):
+        if self._plain and not self._status and self._mode == 'dictation' and self._source is not None:
+            self._render_dictation()
+            return
         bar = self.view.verticalScrollBar()
         at_end = bar.maximum() > 0 and bar.value() > 0 and bar.value() >= bar.maximum() - 4   # scrolled to its end by hand
         colour = CIRCLE_DRIP_TEXT_LIGHT if self._text_light else CIRCLE_DRIP_TEXT_DARK
@@ -91114,6 +95025,334 @@ class CircleAnswerCard(QWidget):
         self._measure(7.0 if (not self._status and body.rstrip().endswith('</p>')) else 0.0)
         if at_end and not self._status:
             bar.setValue(bar.maximum())   # (it follows the answer only while it is being read at its end)
+
+    # ── editing the dictated words (2026-11-22, style book 5.1.18) ─────────────────────────
+    # The recording writes into a hidden box; the card shows its words. A click into them makes them
+    # editable: the card takes the keyboard (without bringing Broccoli forward — the same kind of window
+    # as the circle's input box), and from then on every change is carried over exactly, both ways:
+    # what the user types goes into the hidden box at its place (the recording is told, so what is
+    # said next goes after it and nothing is written twice), and what the recording writes appears in
+    # the card without moving the caret. The grey words still being spoken cannot be edited (a change
+    # there is put back at once); everything else can, while listening, while tidying and afterwards.
+    def bind_source(self, edit, final_end_for=None, apply_edit=None):
+        """The hidden box this card's dictated words stand for (None: plain text, not editable)."""
+        if self._editing:
+            self.end_edit()
+        old = self._source
+        if old is not None and old is not edit:
+            try:
+                old.document().contentsChange.disconnect(self._on_source_change)
+            except (TypeError, RuntimeError):
+                pass
+        self._source, self._final_end_for, self._apply_edit = edit, final_end_for, apply_edit
+        if edit is not None and edit is not old:
+            edit.document().contentsChange.connect(self._on_source_change)
+
+    def can_edit(self) -> bool:
+        return bool(self._mode == 'dictation' and self._plain and not self._status and self._source is not None
+                    and not self._folded and str(self._text or '').strip())
+
+    def editing(self) -> bool:
+        return self._editing
+
+    def begin_edit(self) -> bool:
+        if self._editing or not self.can_edit():
+            return False
+        self._editing = True
+        self.view.setReadOnly(False)
+        self.view.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
+        self.view.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self._lay_buttons()             # ✓ comes in
+        self._render()
+        self._take_keyboard()
+        self.edit_started.emit()
+        return True
+
+    def end_edit(self):
+        """Back to showing the words (the keyboard goes back to where it was)."""
+        if not self._editing:
+            return
+        self._editing = False
+        self._repair_pending = False
+        self.view.setReadOnly(True)
+        self.view.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.view.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._give_keyboard_back()
+        if self._source is not None:
+            try:
+                self._text = self._source.toPlainText()
+            except RuntimeError:
+                pass
+        self._lay_buttons()
+        self._render()
+
+    def _final_end(self):
+        try:
+            return self._final_end_for() if self._final_end_for is not None else None
+        except Exception:
+            return None
+
+    def _range_text(self) -> str:
+        """The words as the card's text has them now (between the buttons' room and the small line)."""
+        document = self.view.document()
+        cursor = QTextCursor(document)
+        cursor.setPosition(self._range_start)
+        cursor.setPosition(min(self._range_start + voice_input.u16_len(self._mirror), max(0, document.characterCount() - 1)),
+                           QTextCursor.MoveMode.KeepAnchor)
+        return cursor.selectedText().replace('\u2029', '\n').replace('\u2028', '\n')
+
+    def _render_dictation(self):
+        """The dictated words exactly as they are (spaces, line breaks — so that a place in them is the
+        same place in the hidden box), the room for the buttons before them, the small line after."""
+        import html as _html
+        text = self._text
+        if self._editing and self._source is not None:
+            try:
+                text = self._text = self._source.toPlainText()
+            except RuntimeError:
+                pass
+        document = self.view.document()
+        caret = self.view.textCursor()
+        keep = (caret.anchor() - self._range_start, caret.position() - self._range_start) if self._editing else None
+        bar = self.view.verticalScrollBar()
+        scrolled = bar.value()
+        colour = CIRCLE_DRIP_TEXT_LIGHT if self._text_light else CIRCLE_DRIP_TEXT_DARK
+        document.setDefaultStyleSheet(f'body {{ color: {colour}; }} p {{ margin-top: 0px; margin-bottom: 7px; }} '
+                                      f'.status {{ color: {colour}; }}')
+        room_w, room_h = self.buttons_room()
+        spacer = (f'<table style="float: right;" width="{room_w}" cellspacing="0" cellpadding="0">'
+                  f'<tr><td height="{room_h}"></td></tr></table>')
+        faint = 'rgba(242,242,247,0.62)' if self._text_light else 'rgba(32,36,43,0.58)'
+        footer = (f'<div style="font-size: 11px; color: {faint}; margin-top: 5px;">{_html.escape(self._footer)}</div>'
+                  if self._footer else '')
+        self._mirror_busy = True
+        try:
+            self.view.setHtml(spacer + '<div class="status">\ue000</div>' + footer)
+            found = document.find('\ue000')
+            self._range_start = found.selectionStart() if not found.isNull() else 0
+            if not found.isNull():
+                self._text_format = found.charFormat()
+                found.insertText(text, self._text_format)
+            self._mirror = text
+        finally:
+            self._mirror_busy = False
+        if keep is not None:
+            length = voice_input.u16_len(text)
+            cursor = QTextCursor(document)
+            cursor.setPosition(self._range_start + max(0, min(length, keep[0])))
+            cursor.setPosition(self._range_start + max(0, min(length, keep[1])), QTextCursor.MoveMode.KeepAnchor)
+            self.view.setTextCursor(cursor)
+        self.refresh_grey()
+        self._measure(0.0)
+        bar.setValue(min(scrolled, bar.maximum()))
+
+    def refresh_grey(self):
+        """The words still being spoken are drawn fainter (they may change, and cannot be edited yet)."""
+        end = self._final_end() if (self._source is not None and self._plain and not self._status) else None
+        length = voice_input.u16_len(self._mirror)
+        if end is None or end >= length:
+            if self.view.extraSelections():
+                self.view.setExtraSelections([])
+            return
+        selection = QTextEdit.ExtraSelection()
+        cursor = QTextCursor(self.view.document())
+        cursor.setPosition(self._range_start + max(0, end))
+        cursor.setPosition(self._range_start + length, QTextCursor.MoveMode.KeepAnchor)
+        selection.cursor = cursor
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(242, 242, 247, 150) if self._text_light else QColor(32, 36, 43, 140))
+        selection.format = fmt
+        self.view.setExtraSelections([selection])
+
+    def _on_source_change(self, _position, _removed, _added):
+        """The recording (or a taking back) changed the hidden box: the same change in the card's text."""
+        if not self._editing or self._mirror_busy:
+            return
+        try:
+            new = self._source.toPlainText()
+        except RuntimeError:
+            return
+        if self._repair_pending:
+            self._text = new                # (the repair shows it)
+            return
+        if new == self._mirror:
+            return
+        at, removed, inserted = voice_input.suffix_first_edit(self._mirror, new)
+        self._mirror_busy = True
+        try:
+            cursor = QTextCursor(self.view.document())
+            cursor.setPosition(self._range_start + at)
+            cursor.setPosition(self._range_start + at + removed, QTextCursor.MoveMode.KeepAnchor)
+            if self._text_format is not None:
+                cursor.insertText(inserted, self._text_format)
+            else:
+                cursor.insertText(inserted)
+        finally:
+            self._mirror_busy = False
+        self._mirror = self._text = new
+        self.copy_button.setEnabled(bool(new.strip()))
+        self.refresh_grey()
+        self._measure(0.0)
+
+    def _on_view_change(self, position, removed, added):
+        """The user typed (or pasted, or deleted) in the card's text: the same change in the hidden box —
+        or, when it is not one the words can take (the grey words being spoken, the buttons' room, the
+        small line), put back."""
+        if not self._editing or self._mirror_busy or self._repair_pending:
+            return
+        old = self._mirror
+        length = voice_input.u16_len(old)
+        at = position - self._range_start
+        if at < 0 or at + removed > length:
+            self._repair()
+            return
+        cursor = QTextCursor(self.view.document())
+        cursor.setPosition(position)
+        cursor.setPosition(min(position + added, max(0, self.view.document().characterCount() - 1)), QTextCursor.MoveMode.KeepAnchor)
+        typed = cursor.selectedText().replace('\u2029', '\n').replace('\u2028', '\n')
+        # Qt may tell a wider stretch than what changed: only what really changed is passed on
+        inner_at, inner_removed, inner_text = voice_input.suffix_first_edit(voice_input.u16_slice(old, at, at + removed), typed)
+        new = voice_input.u16_slice(old, 0, at) + typed + voice_input.u16_slice(old, at + removed, length)
+        if not inner_removed and not inner_text:
+            return                          # (only the look changed)
+        at += inner_at
+        final_end = self._final_end()
+        if final_end is not None and at + inner_removed > final_end:
+            self._repair()                  # the grey words are still being heard: not yet
+            return
+        self._mirror_busy = True
+        try:
+            done = bool(self._apply_edit(at, inner_removed, inner_text)) if self._apply_edit is not None else False
+        except Exception:
+            logging.exception('Carrying an edit of the dictated words over failed.')
+            done = False
+        finally:
+            self._mirror_busy = False
+        if not done:
+            self._repair()
+            return
+        self._mirror = self._text = new
+        self.copy_button.setEnabled(bool(new.strip()))
+        self.refresh_grey()
+        self._measure(0.0)
+
+    def _repair(self):
+        """Put the card's text back to the hidden box's words (a change they cannot take), a moment
+        later: not inside Qt's own handling of that change."""
+        if self._repair_pending:
+            return
+        self._repair_pending = True
+
+        def repair():
+            if not self._repair_pending:
+                return
+            self._repair_pending = False
+            if self._editing:
+                self._render()
+        QTimer.singleShot(0, repair)
+
+    # ── the keyboard while the words are edited ──
+    def _ns_view(self):
+        return objc.objc_object(c_void_p=int(self.winId()))
+
+    def _take_keyboard(self):
+        """Typing goes into the card now — Broccoli stays in the background (a non-activating window made
+        key, like the circle's input box); only if the system does not give it the keyboard that way
+        does Broccoli come forward (_ensure_keyboard)."""
+        self.view.setFocus(Qt.FocusReason.MouseFocusReason)
+        if not self.take_keyboard or AppKit is None or objc is None:
+            return
+        try:
+            handle = self.windowHandle()
+            if handle is not None:
+                handle.setFlag(Qt.WindowType.WindowDoesNotAcceptFocus, False)
+            window = _broccoli_own_ns_window(self)
+            if window is not None:
+                configure_nonactivating_ns_window(window)
+                make_ns_window_truly_nonactivating(window)
+                view = self._ns_view()
+                if window.firstResponder() != view:
+                    window.makeFirstResponder_(view)
+                window.makeKeyAndOrderFront_(None)   # key, not active
+        except Exception:
+            logging.exception('Giving the circle\'s card the keyboard failed.')
+        self.view.setFocus(Qt.FocusReason.MouseFocusReason)
+        self._connect_input_method()
+        QTimer.singleShot(100, self._ensure_keyboard)
+        QTimer.singleShot(120, self._connect_input_method)
+
+    def _connect_input_method(self):
+        """The input method listens to this window (see CircleDripInput.connect_input_method)."""
+        if not self._editing or AppKit is None or objc is None or not self.isVisible():
+            return
+        try:
+            context = self._ns_view().inputContext()
+            if context is not None and AppKit.NSTextInputContext.currentInputContext() != context:
+                context.activate()
+        except Exception:
+            logging.exception('Switching the input method on for the circle\'s card failed.')
+
+    def has_keyboard(self) -> bool:
+        handle = self.windowHandle()
+        if handle is None or QGuiApplication.focusWindow() is not handle:
+            return False
+        if AppKit is None or objc is None:
+            return True
+        try:
+            if AppKit.NSApplication.sharedApplication().isActive():
+                return True
+            window = _broccoli_own_ns_window(self)
+            return window is not None and bool(window.isKeyWindow()) and ns_window_prevents_activation(window) is True
+        except Exception:
+            return False
+
+    def _ensure_keyboard(self):
+        if not self._editing or not self.isVisible() or not self.take_keyboard or self.has_keyboard():
+            return
+        logging.warning('The circle\'s card did not get the keyboard without activating; Broccoli comes forward.')
+        self._activated_app = True
+        try:
+            if AppKit is not None:
+                AppKit.NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        except Exception:
+            pass
+        self.activateWindow()
+        try:
+            window = _broccoli_own_ns_window(self) if AppKit is not None and objc is not None else None
+            if window is not None:
+                window.makeKeyAndOrderFront_(None)
+        except Exception:
+            pass
+        self.view.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+
+    def _give_keyboard_back(self):
+        """The edit is over: the card never takes the keyboard again by itself, and the keyboard goes back
+        to the app that had it."""
+        self.view.clearFocus()
+        if not self.take_keyboard or AppKit is None or objc is None:
+            return
+        try:
+            handle = self.windowHandle()
+            if handle is not None:
+                handle.setFlag(Qt.WindowType.WindowDoesNotAcceptFocus, True)
+            window = _broccoli_own_ns_window(self)
+            if window is not None:
+                configure_nonactivating_ns_window(window)
+                make_ns_window_truly_nonactivating(window)
+                if window.isKeyWindow() and window.isVisible():
+                    # the key window goes away for a moment: the system gives the keyboard back to the
+                    # app in front; the card is back at once, never key again
+                    window.orderOut_(None)
+                    window.orderFrontRegardless()
+        except Exception:
+            logging.exception('Giving the keyboard back from the circle\'s card failed.')
+        if self._activated_app:
+            self._activated_app = False
+            try:
+                if self.on_keyboard_back is not None:
+                    self.on_keyboard_back()
+            except Exception:
+                logging.exception('Bringing the app that had the keyboard back failed.')
 
     def _measure(self, trailing: float = 0.0):
         document = self.view.document()
@@ -91168,7 +95407,9 @@ class CircleAnswerCard(QWidget):
             self.ask_button.set_light(self._text_light)
             self.open_button.set_light(self._text_light)
             self.close_button.set_light(self._text_light)
-            self.tidy_chooser.set_light(self._text_light)
+            self.done_button.set_light(self._text_light)
+            for chooser in self.choosers():
+                chooser.set_light(self._text_light)
             self._render()
 
     def text_light(self) -> bool:
@@ -91307,12 +95548,32 @@ class CircleAnswer(QObject):
         if self._card is None:
             card = self._card = CircleAnswerCard()
             card.stop_requested.connect(lambda: self._main._circle_record_end())
+            card.insert_toggle.on_change = lambda on: self._main._circle_record_set_no_insert(on)
+            # a tidy-up picked while the words are being tidied: the pass starts again with it (2026-11-22)
+            card.tidy_chooser.on_chosen = lambda _key: self._main._circle_record_retidy()
             card.open_requested.connect(self._open_in_main)
             card.close_requested.connect(lambda: self.close())
             card.ask_requested.connect(self._ask_follow_up)
             card.append_requested.connect(self._append_to_question)
             card.wanted_changed.connect(self._place)
+            # the dictated words edited on the card (2026-11-22, style book 5.1.18)
+            card.edit_started.connect(lambda: self._main._circle_record_edit_started())
+            card.edit_done.connect(lambda: self._main._circle_record_commit_edit())
+            card.edit_cancelled.connect(lambda: self._main._circle_record_commit_edit(cancel=True))
+            card.on_keyboard_back = lambda: self._main._circle_record_return_keyboard()
         return self._card
+
+    def _end_edit_first(self):
+        """The card is about to show something else or go: an edit of the dictated words under way is
+        finished first, as if ✓ had been pressed (the words are never lost)."""
+        card = self._card
+        if card is not None and card.editing():
+            try:
+                self._main._circle_record_commit_edit()
+            except Exception:
+                logging.exception('Finishing the edit of the dictated words failed.')
+            if card.editing():
+                card.end_edit()
 
     def card_rect(self):
         """Where the card is on the screen while it is out (for dialogs that go beside it), else None."""
@@ -91376,6 +95637,7 @@ class CircleAnswer(QObject):
     # ── what it shows ───────────────────────────────────────────────────────
     def follow(self, path: str, run, question: str, failed: bool = False):
         """A question was sent for this conversation: show its run (or that it could not start)."""
+        self._end_edit_first()
         self.path = str(path or '')
         self.question = str(question or '')
         self._run = run if isinstance(run, dict) else None
@@ -91384,6 +95646,7 @@ class CircleAnswer(QObject):
         self.mode, self._dictation = 'answer', None
         card = self.card()
         card.set_mode('answer')
+        card.bind_source(None)
         card.set_dark(is_dark_theme(app))
         if failed:
             self._final_shown = True
@@ -91400,11 +95663,15 @@ class CircleAnswer(QObject):
     def show_dictation(self, dictation):
         """What the circle is hearing (a CircleDictation): the card comes out over the circle like an
         answer and shows the words as they come, then where they went (style book 5.1.15)."""
+        self._end_edit_first()
         self.path, self.question, self._run = '', '', None
         self._final_shown, self._note = True, ''
         self.mode, self._dictation = 'dictation', dictation
         card = self.card()
         card.set_mode('dictation')
+        source = getattr(self._main, '_circle_voice_text', None)
+        card.bind_source(source, getattr(self._main, '_circle_record_final_end', None),
+                         getattr(self._main, '_circle_record_apply_edit', None))
         card.set_dark(is_dark_theme(app))
         self._show_dictation()
         self._poll.start()
@@ -91423,11 +95690,17 @@ class CircleAnswer(QObject):
         except Exception:
             text = ''
         card.set_stop_shown(bool(getattr(dictation, 'stoppable', False)))
-        card.set_tidy_shown(not bool(getattr(dictation, 'done', False)) and not bool(getattr(dictation, 'tidying', False)))
-        if text.strip():
-            card.set_content(text, plain=True, footer=dictation.footer)
+        card.insert_toggle.set_on(bool(getattr(dictation, 'no_insert', False)))
+        card.set_tidy_shown(not bool(getattr(dictation, 'done', False)),
+                            listening=not bool(getattr(dictation, 'tidying', False)))
+        footer = dictation.footer
+        if getattr(dictation, 'learned_note', ''):
+            footer = dictation.learned_note + (' · ' + footer if footer else '')
+        if text.strip() or card.editing():
+            card.set_content(text, plain=True, footer=footer)
         else:
-            card.set_content(dictation.placeholder or _tr('Listening…'), status=True, footer=dictation.footer)
+            card.set_content(dictation.placeholder or _tr('Listening…'), status=True, footer=footer)
+        card.refresh_grey()
 
     def note_queued(self):
         """A further question was put in line behind the running answer."""
@@ -91467,7 +95740,8 @@ class CircleAnswer(QObject):
             if self.state == 'open':
                 self._place()
                 dictation = self._dictation
-                if dictation is not None and dictation.close_at is not None and time.monotonic() >= dictation.close_at:
+                if dictation is not None and dictation.close_at is not None and time.monotonic() >= dictation.close_at \
+                        and not card.editing() and not getattr(dictation, 'waiting', False):
                     dictation.close_at = None
                     self.close()        # delivered: it goes back into the circle by itself
             return
@@ -91607,6 +95881,7 @@ class CircleAnswer(QObject):
         goes on (its answer is there when it is opened)."""
         if self.state == 'closed':
             return
+        self._end_edit_first()
         card = self._card
         if immediate or self.state == 'waiting' or card is None or not card.isVisible():
             self._finish_close(immediate=True)
@@ -104492,6 +108767,212 @@ def export_conversation_text(text: str, target: str, key: str = '') -> str:
     return key
 
 
+# ── Outputs panel › Save: the original, or another kind of file (2026-11-22, Ryan: "生成品的 save
+# 除了保留原格式之外，还应该可以保存为其他格式，比如 md 转 word") ──────────────────────────────────
+# What can be turned into what: written text (Markdown / plain text / text outputs), web pages and
+# word-processor files (Word, RTF, ODT: read with the system's textutil). Anything else (pictures,
+# spreadsheets, code…) keeps only "Original format". The file is written in a background thread.
+OUTPUT_SAVE_FORMATS = (
+    ('md', 'md', 'Markdown'),
+    ('docx', 'docx', 'Word document'),
+    ('pdf', 'pdf', 'PDF'),
+    ('html', 'html', 'Web page (HTML)'),
+    ('txt', 'txt', 'Plain text'),
+)
+OUTPUT_SAVE_TEXT_ENDINGS = ('md', 'markdown', 'txt', 'text')
+OUTPUT_SAVE_PAGE_ENDINGS = ('html', 'htm')
+OUTPUT_SAVE_RICH_ENDINGS = ('docx', 'doc', 'rtf', 'odt', 'webarchive')
+OUTPUT_SAVE_ORIGINAL = 'original'
+
+
+def output_save_source(output: dict) -> tuple[str, str, str]:
+    """(what it is, its file or '', its ending) for an output: 'markdown' (text written by the
+    model or a .md/.txt file), 'html', 'rich' (Word, RTF, ODT…) or '' (only the original)."""
+    output = output if isinstance(output, dict) else {}
+    path = output_display_path(output)
+    if path and not os.path.isfile(path):
+        path = ''
+    name = path or default_output_filename(output)
+    ending = os.path.splitext(name)[1].lower().lstrip('.')
+    kind = str(output.get('kind', 'text') or 'text').strip().lower()
+    if ending in OUTPUT_SAVE_RICH_ENDINGS and path:
+        return 'rich', path, ending
+    if ending in OUTPUT_SAVE_PAGE_ENDINGS and (path or str(output.get('content', '') or '').strip()):
+        return 'html', path, ending
+    if ending in OUTPUT_SAVE_TEXT_ENDINGS or (kind == 'text' and not path):
+        return 'markdown', path, ending or 'md'
+    return '', path, ending
+
+
+def output_save_choices(output: dict) -> list[tuple[str, str]]:
+    """The save window's kind list for an output, as (key, filter text): the original first, then
+    every kind it can be turned into that is not the same as the original."""
+    source, _path, ending = output_save_source(output)
+    original = '{} (*.{})'.format(_tr('Original format'), ending) if ending else _tr('Original format') + ' (*)'
+    choices = [(OUTPUT_SAVE_ORIGINAL, original)]
+    if source:
+        same = {'markdown': ('md', 'markdown', 'txt', 'text') if ending in ('md', 'markdown') else (ending,),
+                'html': OUTPUT_SAVE_PAGE_ENDINGS}.get(source, (ending,))
+        for key, extension, name in OUTPUT_SAVE_FORMATS:
+            if extension in same and not (source == 'markdown' and key == 'txt' and ending in ('md', 'markdown')):
+                continue
+            choices.append((key, '{} (*.{})'.format(_tr(name), extension)))
+    return choices
+
+
+def _output_text_from_file(path: str) -> str:
+    with open(path, 'rb') as handle:
+        data = handle.read()
+    for encoding in ('utf-8-sig', 'utf-16', 'gb18030', 'shift_jis'):
+        try:
+            return data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode('utf-8', 'replace')
+
+
+def _textutil_convert(source: str, kind: str, target: str) -> None:
+    """The system's own converter (/usr/bin/textutil, in every macOS): Word / RTF / ODT / HTML in,
+    html / docx / txt … out. Raises when it fails."""
+    command = ['/usr/bin/textutil', '-convert', kind]
+    if kind in ('html', 'txt'):
+        command += ['-encoding', 'UTF-8']
+    completed = subprocess.run(command + [source, '-output', target], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, timeout=120)
+    if completed.returncode != 0 or not os.path.isfile(target):
+        raise RuntimeError((completed.stderr or b'').decode('utf-8', 'replace').strip() or 'textutil failed')
+
+
+_OUTPUT_PAGE_STYLE = (
+    'body{font-family:-apple-system,"PingFang SC","Hiragino Sans",sans-serif;font-size:11pt;line-height:1.6;'
+    'color:#1d1d1f;max-width:46em;margin:0 auto}'
+    'h1,h2,h3{line-height:1.3}pre,code{font-family:Menlo,monospace;font-size:9.5pt}'
+    'pre{background:#f5f5f7;padding:8px 10px;border-radius:6px;white-space:pre-wrap}'
+    'table{border-collapse:collapse}th,td{border:1px solid #c7c7cc;padding:4px 8px}'
+    'blockquote{color:#555;border-left:3px solid #c7c7cc;margin-left:0;padding-left:12px}')
+
+
+def _output_markdown_html(text: str, title: str = '') -> str:
+    body = markdown2.markdown(str(text or ''), extras=['tables', 'fenced-code-blocks', 'strike', 'cuddled-lists'])
+    return ('<!doctype html>\n<html><head><meta charset="utf-8"><title>{}</title><style>{}</style></head>\n'
+            '<body>\n{}\n</body></html>\n').format(html.escape(title or ''), _OUTPUT_PAGE_STYLE, body)
+
+
+def _output_text_document(markup: str, is_html: bool):
+    from PyQt6.QtGui import QTextDocument
+    document = QTextDocument()
+    if is_html:
+        document.setHtml(markup)
+    else:
+        document.setMarkdown(markup)
+    return document
+
+
+def _output_write_pdf(document, target: str) -> None:
+    """Fallback only: Qt's own PDF writer draws Chinese right but maps many characters back to
+    look-alike radicals (小 → ⼩) for copying and searching; the web engine's PDF does not."""
+    from PyQt6.QtGui import QPdfWriter, QPageSize, QPageLayout
+    from PyQt6.QtCore import QMarginsF
+    writer = QPdfWriter(target)
+    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+    writer.setPageMargins(QMarginsF(18, 18, 18, 18), QPageLayout.Unit.Millimeter)
+    writer.setResolution(300)
+    writer.setCreator('Broccoli')
+    document.print(writer)
+
+
+def save_output_as(output: dict, target: str, key: str = OUTPUT_SAVE_ORIGINAL, *, pdf_from_html=None) -> str:
+    """Write one output to `target` as the kind `key` names (the ending typed wins when it is a
+    known kind; the original's ending = the original). Runs off the window's thread; the file is
+    built next to the target first so a failure never leaves half a file. Returns the kind.
+    pdf_from_html(page_file, pdf_file) prints a page to PDF and returns when done (the window's
+    web engine); without it Qt's own writer is used."""
+    source, path, ending = output_save_source(output)
+    content = str(output.get('content', '') or '')
+    typed = os.path.splitext(target)[1].lower().lstrip('.')
+    known = {extension: k for k, extension, _name in OUTPUT_SAVE_FORMATS}
+    if typed and typed == ending:
+        key = OUTPUT_SAVE_ORIGINAL
+    elif typed in known and source:
+        key = known[typed]
+    elif key != OUTPUT_SAVE_ORIGINAL:
+        extension = next((e for k, e, _n in OUTPUT_SAVE_FORMATS if k == key), '')
+        if not extension or not source:
+            key = OUTPUT_SAVE_ORIGINAL
+        elif typed != extension:
+            target += '.' + extension
+    if key == OUTPUT_SAVE_ORIGINAL and ending and not typed:
+        target += '.' + ending
+    folder = os.path.dirname(os.path.abspath(target))
+    temporary = os.path.join(folder, '.{}.tmp-{}{}'.format(os.path.basename(target), os.getpid(),
+                                                          os.path.splitext(target)[1]))
+    scratch = []
+    try:
+        if key == OUTPUT_SAVE_ORIGINAL:
+            if path:
+                shutil.copy2(path, temporary)
+            else:
+                write_text_file(temporary, content)
+        else:
+            # read the source as Markdown text or as a web page
+            if source == 'markdown':
+                markup, is_html = (_output_text_from_file(path) if path else content), False
+            elif source == 'html':
+                markup, is_html = (_output_text_from_file(path) if path else content), True
+            else:
+                page = os.path.join(folder, '.{}.page-{}.html'.format(os.path.basename(target), os.getpid()))
+                scratch.append(page)
+                _textutil_convert(path, 'html', page)
+                markup, is_html = _output_text_from_file(page), True
+            title = os.path.splitext(os.path.basename(target))[0]
+            # textutil and the web engine read a page without a declared encoding as Latin-1: such
+            # a page goes through a copy that says UTF-8 (its text was decoded above); a page that
+            # declares one is read where it is, so its pictures and styles next to it are found
+            own_page = ''
+            if is_html:
+                if re.search(r'<meta[^>]+charset', markup[:4096], re.IGNORECASE):
+                    own_page = path if source == 'html' and path else ''
+                else:
+                    markup = '<meta charset="utf-8">\n' + markup
+            if key == 'docx':
+                if is_html:
+                    page = own_page
+                    if not page:
+                        page = os.path.join(folder, '.{}.in-{}.html'.format(os.path.basename(target), os.getpid()))
+                        scratch.append(page)
+                        write_text_file(page, markup)
+                    _textutil_convert(page, 'docx', temporary)
+                else:
+                    markdown_to_docx(markup, temporary)
+            elif key == 'html':
+                write_text_file(temporary, markup if is_html else _output_markdown_html(markup, title))
+            elif key == 'md':
+                write_text_file(temporary, _output_text_document(markup, True).toMarkdown() if is_html else markup)
+            elif key == 'txt':
+                write_text_file(temporary, _output_text_document(markup, is_html).toPlainText())
+            elif key == 'pdf':
+                page_markup = markup if is_html else _output_markdown_html(markup, title)
+                if callable(pdf_from_html):
+                    if own_page:
+                        page = own_page
+                    else:
+                        page = os.path.join(folder, '.{}.print-{}.html'.format(os.path.basename(target), os.getpid()))
+                        scratch.append(page)
+                        write_text_file(page, page_markup)
+                    pdf_from_html(page, temporary)
+                else:
+                    _output_write_pdf(_output_text_document(page_markup, True), temporary)
+        os.replace(temporary, target)
+    finally:
+        for leftover in [temporary, *scratch]:
+            if os.path.exists(leftover):
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+    return key
+
+
 class MoveAndSendDeviceDialog(QDialog):
     """M4a target picker: deliberately chooses a device and nothing else.
 
@@ -104944,11 +109425,14 @@ class MyWidget(QWidget):  # 主窗口
     silent_screenshot_finished = pyqtSignal(object)
     computer_use_approval_requested = pyqtSignal(object)
     skill_code_permission_requested = pyqtSignal(object)   # a skill step's code, before it runs (2026-11-17)
+    user_question_requested = pyqtSignal(object)           # a step asks the person (2026-11-25)
+    user_question_settled = pyqtSignal(object)             # … and the time ran out / Stop (worker side)
     icloud_remote_task_received = pyqtSignal(object)
     icloud_migration_state_changed = pyqtSignal(object)
     icloud_remote_queue_check = pyqtSignal(str)
     remote_send_finished = pyqtSignal(object)   # a callable run on the main thread after a background send
     icloud_notes_state_changed = pyqtSignal(object)
+    memory_synced = pyqtSignal()   # the poll thread brought memory from the person's other Macs (2026-11-23)
     EDGE_AUTO_HIDE_PEEK_PX = 2
     EDGE_AUTO_HIDE_HOVER_BUFFER_MS = 650
     EDGE_AUTO_HIDE_CURSOR_BUFFER_PX = 12
@@ -104993,6 +109477,7 @@ class MyWidget(QWidget):  # 主窗口
             lambda callback: callback(),
             Qt.ConnectionType.QueuedConnection,
         )
+        self.memory_synced.connect(self._sync_settings_panel_memory_text, Qt.ConnectionType.QueuedConnection)
         # A file of the open conversation arrived from iCloud or a merged edit landed: the outputs
         # panel shows it (the listener runs on the transfer thread; the refresh on this one).
         cloud_file_transfers().add_listener(
@@ -105009,6 +109494,9 @@ class MyWidget(QWidget):  # 主窗口
         self._browser_bridge_server.start()
         self.skill_code_permission_requested.connect(
             self.on_skill_code_permission_requested, Qt.ConnectionType.QueuedConnection)
+        self._user_questions = {}
+        self.user_question_requested.connect(self.on_user_question_requested, Qt.ConnectionType.QueuedConnection)
+        self.user_question_settled.connect(self._on_user_question_settled, Qt.ConnectionType.QueuedConnection)
         self._agent_automation_signals = AgentAutomationSignals()
         self._agent_automation_signals.received.connect(self._on_external_agent_task_received)
         self._agent_automation_token = load_or_create_agent_automation_token()
@@ -105017,6 +109505,15 @@ class MyWidget(QWidget):  # 主窗口
             self._agent_automation_token,
         )
         self._agent_automation_server.start()
+        # 2026-11-21: outside requests may share a conversation (thread), wait their turn in it, and ask
+        # for the answer to be written to a folder; and the live transcript other programs may follow
+        self._external_threads = {}     # (source, thread) → (conversation path, made at)
+        self._external_pending = {}     # conversation path → [payload, …] waiting for the run in it to end
+        self._external_replies = {}     # conversation path → {'id', 'thread', 'reply_to', 'title'} of the run in it
+        self._pending_write_back = None   # 2026-11-25 staged "write here" waiting for the person's first message
+        self._write_back_notes = {}     # conversation path → the "answer only with the text for the spot" note
+        self._live_transcript = LiveTranscriptFeed()
+        voice_input.FINAL_TAPS.append(self._live_transcript.take)
         self._translation_popup_windows = []
         self._selection_ask_windows = []
         self._reload_userscripts()
@@ -105841,6 +110338,11 @@ class MyWidget(QWidget):  # 主窗口
         # the models on this Mac (Settings › Models › Local models): their endpoint and the built-in
         # models' profiles, on a worker thread a moment after the window
         QTimer.singleShot(5500, self.apply_local_models_start)
+        # Broccoli's own tools (2026-11-24): its Agent has them at once (in this process); other AI apps reach
+        # them through the family card + local service a moment after the window, unless switched off
+        broccoli_self_tools(self)
+        app.aboutToQuit.connect(self._stop_app_mcp_service)
+        QTimer.singleShot(2000, self.apply_app_mcp_service_settings)
         # Reap CLI subprocesses on EVERY catchable exit path, not just Qt's aboutToQuit:
         #  - atexit: any normal interpreter shutdown,
         #  - SIGTERM/SIGINT: `kill <pid>` / Ctrl-C (a QTimer keeps the interpreter awake so
@@ -106025,6 +110527,7 @@ class MyWidget(QWidget):  # 主窗口
         self._activity_panel.conversation_requested.connect(self._on_activity_conversation)
         self._activity_panel.write_requested.connect(self._on_activity_write)
         self._activity_panel.language_chosen.connect(self._on_activity_language)
+        self._activity_panel.share_requested.connect(lambda fragment: self._capture_html_fragment_as_share_image(fragment))
         report_signals().activity.connect(self._on_activity_index, Qt.ConnectionType.QueuedConnection)
         report_signals().changed.connect(self._on_report_changed, Qt.ConnectionType.QueuedConnection)
         report_signals().finished.connect(self._on_report_finished, Qt.ConnectionType.QueuedConnection)
@@ -107932,18 +112435,21 @@ class MyWidget(QWidget):  # 主窗口
         self._refresh_history_panel()
 
     def _agent_annotations_context_for_path(self, path: str) -> str:
+        # 2026-11-25: a staged "write here" conversation also carries its note until that answer has gone back
+        write_back_note = str((self.__dict__.get('_write_back_notes') or {}).get(str(path or '').strip(), '') or '')
         record = load_conversation_record(str(path or '').strip()) if str(path or '').strip() else None
         if not isinstance(record, dict):
-            return ''
+            return write_back_note
         # 收藏（favorite）是给用户自己看的书签，不进模型上下文。
         annotations = [
             item for item in list(record.get('agent_annotations') or [])
             if str((item or {}).get('type', '') or '').strip().lower() != 'favorite'
         ]
-        return format_agent_annotations_prompt_block(
+        block = format_agent_annotations_prompt_block(
             annotations,
             list(record.get('messages') or []),
         )
+        return '\n\n'.join(part for part in (write_back_note, block) if part)
 
     def _apply_agent_annotations_to_real2(self):
         if getattr(self, 'real2', None) is None:
@@ -113940,6 +118446,7 @@ class MyWidget(QWidget):  # 主窗口
                     v,
                     timeout_ms=8000,
                     caller='web_forward',
+                    key_fallback=True,
                 ),
             )
 
@@ -113999,6 +118506,7 @@ class MyWidget(QWidget):  # 主窗口
                         v,
                         timeout_ms=8000,
                         caller='web_cross_forward',
+                        key_fallback=True,
                     ),
                 )
 
@@ -114645,6 +119153,7 @@ class MyWidget(QWidget):  # 主窗口
                             v,
                             timeout_ms=5000,
                             caller='web_dock',
+                            key_fallback=True,     # text only on this path
                         ),
                     )
             if clear_after_send and not upload_paths and not image_items and has_pending_attachments:
@@ -114754,58 +119263,120 @@ class MyWidget(QWidget):  # 主窗口
         except Exception:
             return False
 
-    def _send_web_view_cmd_return(self, view: QWebEngineView):
-        log_broccoli_claude('sending Claude submit shortcut sequence')
+    # ── Last resort for sending: the keyboard (2026-11-25) ──────────────────────────────────
+    # When no send button could be recognised (a site renamed it, or it carries no name at all,
+    # like DeepSeek's), the prompt is sent the way a person would: with the prompt box focused,
+    # press the send shortcut. The key goes to the web page itself as a real key press (the page
+    # sees a trusted event) and never to the system, so it cannot land in another app, and the
+    # focus inside Broccoli stays where the user left it.
+    # One shortcut at a time, and after each the prompt box is looked at: emptied = sent, stop.
+    # Only if the text is still there is the next shortcut tried, so nothing is sent twice.
+    WEB_SEND_KEY_ATTEMPTS = (
+        ('command-return', Qt.KeyboardModifier.MetaModifier),      # the page sees metaKey
+        ('control-return', Qt.KeyboardModifier.ControlModifier),   # the page sees ctrlKey
+        ('return', Qt.KeyboardModifier.NoModifier),
+    )
+    WEB_SEND_KEY_CHECK_MS = 700
+
+    @staticmethod
+    def _web_composer_probe_js(focus: bool) -> str:
+        """JS giving the number of characters in the page's prompt box (-1: no box). With focus,
+        the box is focused first and the caret put at its end."""
+        return """
+        (function() {
+            const visible = (node) => {
+                if (!node) return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 8 && rect.height > 8 && style.display !== 'none'
+                    && style.visibility !== 'hidden' && Number(style.opacity || 1) > 0.01;
+            };
+            const input = Array.from(document.querySelectorAll('div[contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], textarea'))
+                .filter(visible)
+                .sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom)[0] || null;
+            if (!input) return -1;
+            const isArea = !!input.tagName && input.tagName.toLowerCase() === 'textarea';
+            if (__FOCUS__) {
+                input.focus();
+                try {
+                    if (isArea) {
+                        input.selectionStart = input.selectionEnd = String(input.value || '').length;
+                    } else if (window.getSelection && document.createRange) {
+                        const range = document.createRange();
+                        range.selectNodeContents(input);
+                        range.collapse(false);
+                        const selection = window.getSelection();
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                    }
+                } catch (err) {}
+            }
+            return String(isArea ? (input.value || '') : (input.innerText || input.textContent || '')).trim().length;
+        })()
+        """.replace('__FOCUS__', 'true' if focus else 'false')
+
+    @staticmethod
+    def _send_web_view_return_key(view: QWebEngineView, modifiers) -> bool:
+        """One real Return, with the given modifier, to the web page of this view."""
         try:
-            target = QApplication.focusWidget()
-            if target is None or (target is not view and not view.isAncestorOf(target)):
-                target = view.focusProxy() or view.childAt(QPoint(max(1, view.width() // 2), max(1, view.height() // 2))) or view
-            log_broccoli_claude(f'shortcut target={type(target).__name__}')
-            view.setFocus(Qt.FocusReason.ShortcutFocusReason)
-            target.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            target = view.focusProxy() or view
+            for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+                QApplication.sendEvent(target, PyQt6.QtGui.QKeyEvent(kind, Qt.Key.Key_Return, modifiers, '\r'))
+            return True
+        except Exception:
+            return False
 
-            def send_qt_key(key, modifiers, label):
-                log_broccoli_claude(f'Qt key event: {label}')
-                press = PyQt6.QtGui.QKeyEvent(
-                    QEvent.Type.KeyPress,
-                    key,
-                    modifiers,
-                    '\r',
-                )
-                release = PyQt6.QtGui.QKeyEvent(
-                    QEvent.Type.KeyRelease,
-                    key,
-                    modifiers,
-                    '\r',
-                )
-                QApplication.sendEvent(target, press)
-                QApplication.sendEvent(target, release)
+    def _submit_web_view_with_keys(self, view: QWebEngineView, callback=None):
+        """Send what is in the page's prompt box with the keyboard. callback(sent, how)."""
+        state = {'before': 0, 'index': 0, 'done': False}
 
-            # On macOS Qt maps Command to ControlModifier; keep MetaModifier as a fallback for embedded Chromium.
-            for qt_key_name, qt_key in (('Return', Qt.Key.Key_Return), ('Enter', Qt.Key.Key_Enter)):
-                send_qt_key(qt_key, Qt.KeyboardModifier.ControlModifier, f'Command+{qt_key_name}')
-                send_qt_key(qt_key, Qt.KeyboardModifier.MetaModifier, f'Meta+{qt_key_name}')
+        def finish(sent: bool, how: str):
+            if state['done']:
+                return
+            state['done'] = True
+            logging.info('web send by keys: sent=%s how=%s', bool(sent), how)
+            if callback:
+                callback(bool(sent), str(how or ''))
 
-            log_broccoli_claude('scheduling pyautogui submit fallback sequence')
-            QTimer.singleShot(180, lambda: (
-                log_broccoli_claude('pyautogui command+enter fallback fired'),
-                pyautogui.hotkey('command', 'enter')
-            ))
-            QTimer.singleShot(360, lambda: (
-                log_broccoli_claude('pyautogui ctrl+enter fallback fired'),
-                pyautogui.hotkey('ctrl', 'enter')
-            ))
-            QTimer.singleShot(540, lambda: (
-                log_broccoli_claude('pyautogui command+return fallback fired'),
-                pyautogui.hotkey('command', 'return')
-            ))
-        except Exception as exc:
-            log_broccoli_claude(f'shortcut send failed: {exc}')
+        def run(js, after):
             try:
-                pyautogui.hotkey('command', 'enter')
-                pyautogui.hotkey('ctrl', 'enter')
+                view.page().runJavaScript(js, after)
             except Exception:
-                pass
+                finish(False, 'no-page')
+
+        def after_press(result):
+            if isinstance(result, bool) or not isinstance(result, (int, float)):
+                finish(False, 'check-failed')     # unknown: never press again blindly
+                return
+            now = int(result)
+            if now == 0 or (now > 0 and now * 2 < state['before']):
+                finish(True, self.WEB_SEND_KEY_ATTEMPTS[state['index']][0])
+                return
+            if now < 0:
+                finish(False, 'check-failed')
+                return
+            state['index'] += 1
+            press()
+
+        def press():
+            if state['index'] >= len(self.WEB_SEND_KEY_ATTEMPTS):
+                finish(False, 'keys-not-accepted')
+                return
+            if not self._send_web_view_return_key(view, self.WEB_SEND_KEY_ATTEMPTS[state['index']][1]):
+                finish(False, 'key-not-delivered')
+                return
+            QTimer.singleShot(self.WEB_SEND_KEY_CHECK_MS,
+                              lambda: run(self._web_composer_probe_js(False), after_press))
+
+        def after_focus(result):
+            before = int(result) if isinstance(result, (int, float)) and not isinstance(result, bool) else -1
+            if before <= 0:
+                finish(False, 'no-text-in-prompt-box')
+                return
+            state['before'] = before
+            QTimer.singleShot(120, press)
+
+        run(self._web_composer_probe_js(True), after_focus)
 
     def _activate_web_composer(self, view: QWebEngineView, callback=None):
         js = """
@@ -114960,8 +119531,22 @@ class MyWidget(QWidget):  # 主窗口
                 selection.addRange(range);
             }}
             document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, t);
-            fireInputEvents(t);
+            const inserted = document.execCommand('insertText', false, t);
+            // Some editors (Lexical: Perplexity, Kimi) take the insertion over themselves: the
+            // command succeeds but the box does not show the words yet, only its empty line,
+            // and the editor writes them a moment later. Such an editor also acts on the
+            // "text was inserted" events below, so sending those too put the prompt in three
+            // times (measured on the real pages 2026-11-25: "hey" became "heyheyhey"). For
+            // them only the events that carry no text are sent.
+            const shownNow = observed();
+            const editorWritesItself = inserted && t.trim().length > 0
+                && shownNow.length > 0 && shownNow.trim().length === 0;
+            if (editorWritesItself) {{
+                input.dispatchEvent(new Event('change', {{ bubbles: true, cancelable: true, composed: true }}));
+                input.dispatchEvent(new KeyboardEvent('keyup', {{ key: ' ', code: 'Space', bubbles: true, composed: true }}));
+            }} else {{
+                fireInputEvents(t);
+            }}
             let value = observed();
             if (t.length > 0 && value.length === 0) {{
                 input.textContent = '';
@@ -115729,7 +120314,9 @@ class MyWidget(QWidget):  # 主窗口
                 const label = String(node.getAttribute('aria-label') || '').trim().toLowerCase();
                 const testid = String(node.getAttribute('data-testid') || '').trim().toLowerCase();
                 const type = String(node.getAttribute('type') || '').trim().toLowerCase();
-                return label === 'submit' && (testid === 'chat-submit' || type === 'submit');
+                // same rule as grokSendButtons in web_chat_ready_probe_js
+                if (/(stop|cancel|停止|中止|キャンセル|voice|mic|microphone|audio|dictate|dictation)/.test(label)) return false;
+                return testid === 'chat-submit' || (type === 'submit' && /^(submit|send)$/.test(label));
             });
             if (!btn) return null;
             const rect = btn.getBoundingClientRect();
@@ -115743,6 +120330,9 @@ class MyWidget(QWidget):  # 主窗口
         def after(result):
             if isinstance(result, dict) and result.get('x') is not None and result.get('y') is not None:
                 self._send_web_view_mouse_click(view, float(result.get('x')), float(result.get('y')))
+            else:
+                # the site's own button was not found: the general rule, not silence
+                self._click_general_web_view_send_button(view)
 
         try:
             view.page().runJavaScript(js, after)
@@ -115787,6 +120377,9 @@ class MyWidget(QWidget):  # 主窗口
         def after(result):
             if isinstance(result, dict) and result.get('x') is not None and result.get('y') is not None:
                 self._send_web_view_mouse_click(view, float(result.get('x')), float(result.get('y')))
+            else:
+                # the site's own button was not found: the general rule, not silence
+                self._click_general_web_view_send_button(view)
 
         try:
             view.page().runJavaScript(js, after)
@@ -115804,6 +120397,10 @@ class MyWidget(QWidget):  # 主窗口
         if self._is_perplexity_web_view(view):
             self._submit_perplexity_with_button(view)
             return
+        self._click_general_web_view_send_button(view)
+
+    def _click_general_web_view_send_button(self, view: QWebEngineView):
+        """The general rule: the visible button named send / submit, else Enter in the prompt box."""
         js = """
         (function() {
             const visible = (node) => {
@@ -115878,7 +120475,12 @@ class MyWidget(QWidget):  # 主窗口
                                          callback=None,
                                          show_error: bool = True,
                                          caller: str = '',
-                                         result_callback=None):
+                                         result_callback=None,
+                                         key_fallback: bool = False):
+        # key_fallback: for sends that carry text only. When the wait ends without a send
+        # button and the page is not busy, the prompt is sent with the keyboard
+        # (_submit_web_view_with_keys) before giving up. Sends with attachments leave it off:
+        # a button that is not ready there may mean a file is still uploading.
         claude = self._is_claude_web_view(view)
         caller = str(caller or '').strip()
 
@@ -115920,22 +120522,43 @@ class MyWidget(QWidget):  # 主窗口
                 if callback:
                     callback(True)
                 return
-            if claude:
-                log_broccoli_claude(f'auto send skipped after timeout; caller={caller or "unknown"}; last_reason={result.get("reason", "")}')
-            if show_error:
-                title, message = skipped_message()
-                show_broccoli_message(
-                    self,
-                    title,
-                    message,
-                )
-            if result_callback:
-                payload = dict(result)
-                payload['clicked'] = False
-                payload['caller'] = caller
-                result_callback(payload)
-            if callback:
-                callback(False)
+            def give_up():
+                if claude:
+                    log_broccoli_claude(f'auto send skipped after timeout; caller={caller or "unknown"}; last_reason={result.get("reason", "")}')
+                logging.info('web auto send skipped; caller=%s; last_reason=%s; diag=%s',
+                             caller or 'unknown', result.get('reason', ''), result.get('send_diag'))
+                if show_error:
+                    title, message = skipped_message()
+                    show_broccoli_message(
+                        self,
+                        title,
+                        message,
+                    )
+                if result_callback:
+                    payload = dict(result)
+                    payload['clicked'] = False
+                    payload['caller'] = caller
+                    result_callback(payload)
+                if callback:
+                    callback(False)
+
+            if key_fallback and not bool(result.get('busy')):
+                def after_keys(sent: bool, how: str):
+                    if not sent:
+                        give_up()
+                        return
+                    if result_callback:
+                        payload = dict(result)
+                        payload['clicked'] = True
+                        payload['caller'] = caller
+                        payload['reason'] = 'sent-by-keys:' + how
+                        result_callback(payload)
+                    if callback:
+                        callback(True)
+
+                self._submit_web_view_with_keys(view, after_keys)
+                return
+            give_up()
 
         wait_for_web_chat_ready(
             view,
@@ -116496,6 +121119,8 @@ class MyWidget(QWidget):  # 主窗口
             return
         settings = normalize_background_vision_settings(load_settings_store().get('globals', {}))
         append_background_vision_record(record, settings.get('background_vision_max_records', DEFAULT_BACKGROUND_VISION_MAX_RECORDS))
+        if bool(record.get('complete')) and str(record.get('brief', '') or '').strip():
+            append_activity_feed('vision', record['brief'], str(record.get('completed_at', '') or ''))
         if bool(settings.get('background_vision_show_overlay', True)) and bool(record.get('complete')):
             ttl_ms = int(settings.get('background_vision_toast_sec', DEFAULT_BACKGROUND_VISION_TOAST_SECONDS) or DEFAULT_BACKGROUND_VISION_TOAST_SECONDS) * 1000
             self._background_vision_toasts.show_record(record, ttl_ms=ttl_ms)
@@ -117026,8 +121651,11 @@ class MyWidget(QWidget):  # 主窗口
         if not outputs:
             return
         seen_ids = getattr(self, '_auto_shown_output_ids', set())
+        # Ids such as "out-1-0-text" repeat in every conversation: remembered per conversation, or
+        # the first answer of each later conversation never opened the panel (found 2026-11-22).
+        scope = str(self._tab_output_scope_key() or self._active_conversation_path or '')
         output_ids = [
-            str(output.get('id', '') or '').strip()
+            scope + '\x00' + str(output.get('id', '') or '').strip()
             for output in outputs
             if str(output.get('id', '') or '').strip()
         ]
@@ -117061,17 +121689,70 @@ class MyWidget(QWidget):  # 主窗口
         clipboard.setText(content or path)
 
     def _save_output_record_as(self, output: dict):
-        kind = str(output.get('kind', 'text')).strip().lower()
-        path = str(output.get('path', '') or '').strip()
-        default_name = default_output_filename(output)
-        target, _ = QFileDialog.getSaveFileName(self, _tr('Save output as'), default_name)
+        """Save: the system's save window with a kind list, "Original format" first, then what this
+        output can be turned into (2026-11-22: Markdown → Word, PDF, web page, plain text; Word →
+        Markdown, PDF…). The folder chosen last is offered again. Written in a background thread."""
+        output = copy.deepcopy(output) if isinstance(output, dict) else {}
+        choices = output_save_choices(output)
+        folder = str(settings_global_value('output_save_folder', '') or '')
+        if not folder or not os.path.isdir(folder):
+            folder = str(Path.home() / 'Documents') if (Path.home() / 'Documents').is_dir() else str(Path.home())
+        target, chosen = QFileDialog.getSaveFileName(
+            self, _tr('Save output as'), os.path.join(folder, default_output_filename(output)),
+            ';;'.join(text for _key, text in choices), choices[0][1])
         if not target:
             return
-        path = output_display_path(output) or path      # the file as it was at the turn shown
-        if path and os.path.exists(path):
-            shutil.copy2(path, target)
-            return
-        write_text_file(target, str(output.get('content', '') or ''))
+        key = next((k for k, text in choices if text == chosen), OUTPUT_SAVE_ORIGINAL)
+
+        def work():
+            try:
+                save_output_as(output, target, key, pdf_from_html=self._print_page_to_pdf_and_wait)
+                update_settings_globals({'output_save_folder': os.path.dirname(target)})
+            except Exception as exc:
+                logging.exception('Saving an output as a file failed.')
+                message = _tr('Could not save the file: {error}').format(error=exc)
+                self.remote_send_finished.emit(
+                    lambda: self._show_broccoli_message(_tr('Save output as'), message))
+
+        threading.Thread(target=work, name='broccoli-save-output', daemon=True).start()
+
+    def _print_page_to_pdf_and_wait(self, page_file: str, pdf_file: str, timeout: float = 120.0):
+        """Called from a background thread: the web engine prints a page file to PDF (the page is
+        loaded and printed on the window's thread, which never waits for it), this thread waits."""
+        done = threading.Event()
+        result = {'ok': False}
+
+        def start():
+            from PyQt6.QtWebEngineCore import QWebEnginePage
+            from PyQt6.QtGui import QPageLayout, QPageSize
+            from PyQt6.QtCore import QMarginsF
+            page = QWebEnginePage(self)
+            pages = getattr(self, '_pdf_print_pages', None)
+            if not isinstance(pages, set):
+                pages = self._pdf_print_pages = set()
+            pages.add(page)
+
+            def finish(ok):
+                result['ok'] = bool(ok)
+                pages.discard(page)
+                page.deleteLater()
+                done.set()
+
+            def loaded(ok):
+                if not ok:
+                    finish(False)
+                    return
+                layout = QPageLayout(QPageSize(QPageSize.PageSizeId.A4), QPageLayout.Orientation.Portrait,
+                                     QMarginsF(16, 16, 16, 16), QPageLayout.Unit.Millimeter)
+                page.printToPdf(pdf_file, layout)
+
+            page.loadFinished.connect(loaded)
+            page.pdfPrintingFinished.connect(lambda _path, ok: finish(ok))
+            page.load(QUrl.fromLocalFile(page_file))
+
+        self.remote_send_finished.emit(start)
+        if not done.wait(timeout) or not result['ok'] or not os.path.isfile(pdf_file):
+            raise RuntimeError('the page could not be printed to PDF')
 
     def _open_output_record_in_editor(self, output: dict):
         # no output (nothing generated yet): the editor opens all the same, with the files it had
@@ -117401,7 +122082,10 @@ class MyWidget(QWidget):  # 主窗口
                                                          archive_read_instruction: str = '',
                                                          enable_code_execution: bool = True,
                                                          retry_timeouts: bool = True,
-                                                         code_gate=None) -> tuple[str, list[dict]]:
+                                                         code_gate=None,
+                                                         ask_user=None,
+                                                         step_requests=None,
+                                                         output_hook=None) -> tuple[str, list[dict]]:
         # code_gate(language, code) -> ('', False) = run it; (why not, no more code?) = it is not
         # run and the model is told why (a skill step: reviewed, and approved when it changes things)
         current_messages = clone_messages_as_text(messages)
@@ -117426,8 +122110,58 @@ class MyWidget(QWidget):  # 主窗口
         seen_codes = set()
         archive_rounds = 0
         code_rounds = 0
+        ask_rounds = 0
+        request_rounds = 0
         store = load_settings_store()
-        for _round in range(CODE_EXECUTION_MAX_ROUNDS + (ARCHIVE_READ_MAX_ROUNDS if callable(archive_reader) else 0)):
+        # step_requests {kind: handler(data) → feedback} (2026-11-25, the built-in skill-creator: skill_test …);
+        # output_hook(output) sees every reply (it keeps the draft)
+        step_requests = step_requests if isinstance(step_requests, dict) and step_requests else None
+        for _round in range(CODE_EXECUTION_MAX_ROUNDS + (ARCHIVE_READ_MAX_ROUNDS if callable(archive_reader) else 0)
+                            + (ASK_USER_MAX_ROUNDS + 1 if callable(ask_user) else 0) + (8 if step_requests else 0)):
+            if callable(output_hook):
+                output_hook(output)
+            # ask_user(question) → the settled request (2026-11-25): the person's answer, or the recommended
+            # one when the time ran out; Stop raises ApprovalReviewCancelled
+            question = extract_ask_user_request(output) if callable(ask_user) else None
+            if question is not None:
+                if ask_rounds >= ASK_USER_MAX_ROUNDS:
+                    feedback = format_ask_user_feedback({'source': 'no_more'})
+                    ask_user = None
+                else:
+                    ask_rounds += 1
+                    try:
+                        feedback = format_ask_user_feedback(ask_user(question))
+                    except ApprovalReviewCancelled:
+                        break
+                current_messages.append({'role': 'assistant', 'content': output})
+                current_messages.append({'role': 'user', 'content': feedback})
+                output = self._run_profile_chat_completion(
+                    profile, current_messages, on_delta=on_delta, reasoning_effort=reasoning_effort,
+                    retry_timeouts=retry_timeouts,
+                )
+                continue
+            asked_for = extract_step_request(output, tuple(step_requests)) if step_requests else None
+            if asked_for is not None:
+                kind, data = asked_for
+                if request_rounds >= 8:
+                    break
+                request_rounds += 1
+                try:
+                    feedback = step_requests[kind](data)
+                except ApprovalReviewCancelled:
+                    break
+                except Exception as exc:
+                    logging.exception('A step request (%s) failed.', kind)
+                    feedback = f'{kind} failed: {exc}'
+                if feedback is None:          # the request ends the step (skill_done / a saved skill)
+                    break
+                current_messages.append({'role': 'assistant', 'content': output})
+                current_messages.append({'role': 'user', 'content': str(feedback)})
+                output = self._run_profile_chat_completion(
+                    profile, current_messages, on_delta=on_delta, reasoning_effort=reasoning_effort,
+                    retry_timeouts=retry_timeouts,
+                )
+                continue
             archive_request = extract_archive_read_request(output)
             if archive_request is not None and callable(archive_reader):
                 if archive_rounds >= ARCHIVE_READ_MAX_ROUNDS:
@@ -117476,6 +122210,8 @@ class MyWidget(QWidget):  # 主窗口
                 profile, current_messages, on_delta=on_delta, reasoning_effort=reasoning_effort,
                 retry_timeouts=retry_timeouts,
             )
+        if callable(output_hook):
+            output_hook(output)
         return output, executions
 
     def _specialized_output_dir(self) -> str:
@@ -117918,6 +122654,12 @@ class MyWidget(QWidget):  # 主窗口
         skills = load_skill_records_from_store(store, enabled_only=True)
         catalog = skill_catalog_text(skills)
         skill_names = {record.get('name', '') for record in skills}
+        planning_run = self._agent_run_for_id(run_id) if run_id else None
+        planning_path = str((planning_run or {}).get('conversation_path', '') or '')
+        if (planning_path and SKILL_CREATOR_NAME in skill_names and skill_creator_session_active(planning_path)
+                and not str(question_text or '').lstrip().startswith('/')):
+            # a skill is being made in this conversation (2026-11-25): the answer goes on with it
+            question_text = f'//{SKILL_CREATOR_NAME} ' + str(question_text or '')
         slash_segments = parse_specialized_slash_segments(question_text, skill_names)
         model_candidates = get_specialized_profile_candidates_from_store(store)
         try:
@@ -118162,6 +122904,424 @@ class MyWidget(QWidget):  # 主窗口
         reviewed['metadata'] = metadata
         return reviewed
 
+    # ── a step asks the person (2026-11-25, see ASK_USER_WAIT_SECONDS) ────────────────────────────
+    def _ask_user_gate(self, *, run_id: str, conversation_path: str, asker: str, stop_event=None, asked=None):
+        """Worker thread: ask(question) shows it, waits, and returns the settled request (answer + source)."""
+        def ask(question: dict) -> dict:
+            now = datetime.datetime.now()
+            request = dict(question)
+            request.update({
+                'interaction_id': new_broccoli_uuid('ask-'), 'run_id': run_id, 'conversation_path': conversation_path,
+                'asker': asker, 'event': threading.Event(), 'lock': threading.Lock(), 'answer': '', 'source': '',
+                'created_at': now.isoformat(timespec='seconds'),
+                'expires_at': (now + datetime.timedelta(seconds=ASK_USER_WAIT_SECONDS)).isoformat(timespec='seconds'),
+            })
+            if isinstance(asked, list):
+                asked.append(request)
+            self.user_question_requested.emit(request)
+            deadline = time.monotonic() + ASK_USER_WAIT_SECONDS
+            while not request['event'].wait(0.25):
+                if stop_event is not None and stop_event.is_set():
+                    if settle_user_question(request, '', 'stopped'):
+                        self.user_question_settled.emit(request)
+                    raise ApprovalReviewCancelled()
+                if time.monotonic() > deadline:
+                    if settle_user_question(request, request.get('recommended', ''), 'timeout'):
+                        self.user_question_settled.emit(request)
+                    break
+            return request
+        return ask
+
+    def _pending_user_question_for_path(self, path: str) -> dict | None:
+        path = str(path or '').strip()
+        for request in list(getattr(self, '_user_questions', {}).values()):
+            if str(request.get('conversation_path', '') or '').strip() == path and not request.get('settled'):
+                return request
+        return None
+
+    def on_user_question_requested(self, request: dict):
+        """GUI thread: the question goes up where the person (here or on another device) sees it."""
+        if not isinstance(request, dict) or request.get('settled'):
+            return
+        run_id = str(request.get('run_id', '') or '')
+        run = self._agent_run_for_id(run_id)
+        if run is None or autonomy_state_for_run(run_id) is not None:
+            # an autonomous run (or one that is gone): nobody will answer — the recommended answer, at once
+            if settle_user_question(request, request.get('recommended', ''), 'autonomous'):
+                self._on_user_question_settled(request)
+            return
+        if not hasattr(self, '_user_questions'):
+            self._user_questions = {}
+        self._user_questions[str(request.get('interaction_id', '') or '')] = request
+        _shadow_persist_approval_request(request, 'user_question', 'pending', run)
+        question = str(request.get('question', '') or '')
+        step = self._agent_plan_upsert_step(
+            run_id, capability='user_question', capability_label='Question', title='❓ ' + question[:140], goal=question,
+            status='running', source='question', started_ts=time.monotonic())
+        request['plan_step_id'] = str((step or {}).get('step_id', '') or '')
+        path = str(request.get('conversation_path', '') or run.get('conversation_path', '') or '')
+        title = str(self._agent_badge_title_for_path(path) or _tr('Agent conversation')).strip()
+        _mac_notifier.post('Broccoli', _tr('A question for you — {title}').format(title=title), path,
+                           sound=self._completion_alert_enabled(COMPLETION_SOUND_SETTING_KEY))
+        self._publish_user_question_remote(request, run)
+        self._render_agent_run_preview_if_active(run)
+        if path == str(self._active_conversation_path or '').strip():
+            self._apply_agent_running_button_mode(force=True)
+
+    def answer_user_question(self, interaction_id: str, answer: str, source: str = 'user') -> bool:
+        """The person's answer (the prompt sent, another device, a tool)."""
+        request = getattr(self, '_user_questions', {}).get(str(interaction_id or ''))
+        if not isinstance(request, dict) or not str(answer or '').strip():
+            return False
+        if not settle_user_question(request, str(answer).strip(), source):
+            return False
+        self._on_user_question_settled(request)
+        return True
+
+    def _on_user_question_settled(self, request: dict):
+        """GUI thread, after the first answer: the question leaves the screen, its answer is shown."""
+        interaction_id = str(request.get('interaction_id', '') or '')
+        getattr(self, '_user_questions', {}).pop(interaction_id, None)
+        run_id = str(request.get('run_id', '') or '')
+        run = self._agent_run_for_id(run_id)
+        source = str(request.get('source', '') or 'user')
+        answer = str(request.get('answer', '') or '')
+        if source == 'stopped':
+            line = _tr('Stopped before an answer came.')
+        elif source == 'timeout':
+            line = _tr('No answer in time — the recommended answer was used: {answer}').format(answer=answer)
+        elif source == 'autonomous':
+            line = _tr('Runs by itself — the recommended answer was used: {answer}').format(answer=answer)
+        else:
+            line = _tr('Answer: {answer}').format(answer=answer)
+        question = str(request.get('question', '') or '')
+        if request.get('plan_step_id') and run is not None:
+            self._agent_plan_upsert_step(run_id, request['plan_step_id'], status='finished' if source != 'stopped' else 'skipped',
+                                         output_excerpt=line)
+        elif run is not None and source == 'autonomous':
+            self._agent_plan_upsert_step(run_id, capability='user_question', capability_label='Question',
+                                         title='❓ ' + question[:140], goal=question, status='finished', source='question',
+                                         output_excerpt=line)
+        _shadow_persist_approval_request(request, 'user_question', 'answered' if source in ('user', 'remote') else source, run)
+        self._settle_user_question_remote(request, run)
+        if run is not None:
+            run.setdefault('status_lines', []).append('❓ ' + question[:200] + ' → ' + line)
+            self._render_agent_run_preview_if_active(run)
+            path = str(run.get('conversation_path', '') or '')
+            if path == str(self._active_conversation_path or '').strip():
+                self._apply_agent_running_button_mode(force=True)
+
+    def _answer_pending_question_from_prompt(self, text: str) -> bool:
+        """The prompt sent while the visible conversation's step waits for an answer is that answer."""
+        request = self._pending_user_question_for_path(str(self._active_conversation_path or ''))
+        text = str(text or '').strip()
+        if request is None or not text:
+            return False
+        return self.answer_user_question(request.get('interaction_id', ''), ask_user_answer_from_text(request, text))
+
+    @staticmethod
+    def _remote_request_of_run(run: dict | None) -> dict:
+        config = (run or {}).get('config') if isinstance((run or {}).get('config'), dict) else {}
+        return config.get('remote_request') if isinstance(config.get('remote_request'), dict) else {}
+
+    def _publish_remote_question_event(self, run: dict | None, event: dict):
+        """The asking run came from another device: the event goes to the conversation's iCloud events,
+        where the sending Mac reads it (off the window's thread)."""
+        remote = self._remote_request_of_run(run)
+        transport = getattr(self, '_icloud_task_transport', None)
+        if not remote or not isinstance(transport, ICloudTaskTransport):
+            return False
+        path = str((run or {}).get('conversation_path', '') or '')
+        event = dict(event, task_id=str(remote.get('task_id', '') or ''), attempt_id=str(remote.get('attempt_id', '') or ''))
+
+        def work():
+            try:
+                record = load_conversation_record(path, include_retrieval=False)
+                if isinstance(record, dict):
+                    transport.publish_event(record, event)
+            except FileExistsError:
+                pass
+            except Exception:
+                logging.exception('A question could not be published to the sending device.')
+        threading.Thread(target=work, name='broccoli-ask-publish', daemon=True).start()
+        return True
+
+    def _publish_user_question_remote(self, request: dict, run: dict | None):
+        """Another Mac sent the task: the question shows on its status card. The iPhone: a Note with the
+        question (it answers by sending its answer to the same conversation)."""
+        interaction_id = str(request.get('interaction_id', '') or '')
+        published = self._publish_remote_question_event(run, {
+            'event_type': 'interaction_request', 'interaction_id': interaction_id,
+            'question': str(request.get('question', '') or ''), 'choices': list(request.get('choices') or []),
+            'recommended': str(request.get('recommended', '') or ''), 'why': str(request.get('why', '') or ''),
+            'expires_at': str(request.get('expires_at', '') or ''),
+            'producer_seq': 'ask-' + _cloud_file_component(interaction_id, 'ask'),
+        })
+        manager = getattr(self, '_notes_mirror_job_manager', None)
+        if published and isinstance(manager, NotesMirrorJobManager):
+            try:
+                manager.enqueue_question_notice(run, request)
+            except Exception:
+                logging.exception('Could not queue the question Note for the iPhone.')
+        return published
+
+    def _settle_user_question_remote(self, request: dict, run: dict | None):
+        interaction_id = str(request.get('interaction_id', '') or '')
+        return self._publish_remote_question_event(run, {
+            'event_type': 'interaction_settled', 'interaction_id': interaction_id,
+            'answer': str(request.get('answer', '') or ''), 'source': str(request.get('source', '') or ''),
+            'producer_seq': 'ask-done-' + _cloud_file_component(interaction_id, 'ask'),
+        })
+
+    def _handle_remote_interaction_response(self, payload: dict) -> dict:
+        """iCloud poll thread: the sending Mac answered. The first answer wins; the rest of the work is on
+        the window's thread (the settled signal)."""
+        interaction_id = str((payload or {}).get('interaction_id', '') or '')
+        request = getattr(self, '_user_questions', {}).get(interaction_id)
+        answer = str((payload or {}).get('answer', '') or '').strip()
+        if not isinstance(request, dict) or not answer:
+            return {'status': 'interaction_unknown', 'interaction_id': interaction_id}
+        if settle_user_question(request, ask_user_answer_from_text(request, answer), 'remote'):
+            self.user_question_settled.emit(request)
+            return {'status': 'interaction_answered', 'interaction_id': interaction_id}
+        return {'status': 'interaction_already_answered', 'interaction_id': interaction_id}
+
+    # ---- the sending Mac: a question of the remote run ----
+    def _remote_question_state(self, task_id: str = '') -> tuple:
+        """(task state, its open question) for the open conversation's remote turn."""
+        service = getattr(self, '_remote_new_conversation_service', None)
+        if not isinstance(service, RemoteNewConversationService):
+            return None, None
+        task_id = task_id or (self._remote_task_for_path(str(getattr(self, '_active_conversation_path', '') or ''))
+                              or str(getattr(self, '_icloud_active_remote_task_id', '') or ''))
+        state = service.pending.get(str(task_id or ''))
+        question = state.get('remote_question') if isinstance(state, dict) else None
+        return state, (question if isinstance(question, dict) else None)
+
+    def _answer_remote_question(self, interaction_id: str, answer: str, task_id: str = '') -> bool:
+        state, question = self._remote_question_state(task_id)
+        lifecycle = getattr(self, '_remote_task_lifecycle_manager', None)
+        answer = str(answer or '').strip()
+        if question is None or not answer or not isinstance(lifecycle, RemoteTaskLifecycleManager) \
+                or str(question.get('interaction_id', '') or '') != str(interaction_id or question.get('interaction_id', '')):
+            return False
+        request = state.get('request') if isinstance(state.get('request'), dict) else {}
+        conversation = {
+            'id': str(request.get('conversation_id', '') or ''),
+            'route_epoch': int(request.get('route_epoch', 0) or 0),
+            'identity': {
+                'owner_user_id': str(request.get('owner_user_id', '') or BROCCOLI_LOCAL_USER_ID),
+                'owner_device_id': str(request.get('owner_device_id', '') or ''),
+                'origin_user_id': str(request.get('origin_user_id', '') or BROCCOLI_LOCAL_USER_ID),
+            },
+        }
+        answer = ask_user_answer_from_text(question, answer)
+        try:
+            lifecycle._publish_dual('interaction_response', conversation, str(request.get('task_id', '') or ''),
+                                    str(request.get('attempt_id', '') or ''), str(request.get('executor_id', '') or ''),
+                                    suffix=str(question.get('interaction_id', '') or ''),
+                                    fields={'interaction_id': str(question.get('interaction_id', '') or ''), 'answer': answer})
+        except Exception:
+            logging.exception('The answer could not be sent to the other Mac.')
+            return False
+        state.setdefault('answered_interactions', []).append(str(question.get('interaction_id', '') or ''))
+        state['remote_question'] = None
+        self._render_icloud_remote_status(state)
+        return True
+
+    # ── the built-in skill-creator's requests (2026-11-25, see SKILL_CREATOR_NAME) ──────────────────
+    def _skill_creator_requests(self, *, conversation_path: str, profile: dict, stop_event=None, ask=None) -> dict:
+        """Worker thread: {kind: handler(data) → what the model is told next (None = the step ends)}."""
+        def current_draft():
+            draft = skill_creator_read_draft(conversation_path)
+            record = normalize_skill_record({'raw_text': draft, 'enabled': True}, 1) if draft else None
+            if record is None or not record.get('has_frontmatter') or not record.get('frontmatter_name') \
+                    or not record.get('description'):
+                return None
+            return record
+
+        def no_draft():
+            return ('There is no complete draft yet: write the whole skill in a ````skill_draft block (with the '
+                    '--- name / description --- part) first, then ask again.')
+
+        def stopped():
+            if stop_event is not None and stop_event.is_set():
+                raise ApprovalReviewCancelled()
+
+        def test(data):
+            record = current_draft()
+            if record is None:
+                return no_draft()
+            prompts = [' '.join(str(item or '').split())[:2000] for item in (data.get('prompts') or []) if str(item or '').strip()]
+            prompts = prompts[:SKILL_CREATOR_MAX_TEST_PROMPTS]
+            if not prompts:
+                return 'skill_test needs "prompts": 1–4 realistic requests.'
+            stopped()
+            return self._skill_creator_run_tests(record, prompts, profile, conversation_path, stop_event)
+
+        def trigger(data):
+            record = current_draft()
+            if record is None:
+                return no_draft()
+            queries = []
+            for item in data.get('queries') or []:
+                if isinstance(item, dict) and str(item.get('query', '') or '').strip():
+                    queries.append({'query': ' '.join(str(item['query']).split())[:1500],
+                                    'should_trigger': bool(item.get('should_trigger'))})
+            queries = queries[:SKILL_CREATOR_MAX_QUERIES]
+            if len([q for q in queries if q['should_trigger']]) < 2 or len([q for q in queries if not q['should_trigger']]) < 2:
+                return 'skill_trigger_eval needs at least 2 requests that should use the skill and 2 that should not (about 10 each).'
+            stopped()
+            return self._skill_creator_trigger_eval(record, queries, profile, stop_event)
+
+        def save(_data):
+            record = current_draft()
+            if record is None:
+                return no_draft()
+            if callable(ask):
+                settled = ask({'question': _tr('Save the skill "{name}" in Settings › Skills?').format(name=record['name']),
+                               'choices': [_tr('Save'), _tr('Not yet')], 'recommended': _tr('Save'), 'why': ''})
+                if str(settled.get('answer', '') or '') != _tr('Save'):
+                    return 'The person did not want it saved yet. Ask what to change.'
+            result = self._skill_creator_save(record)
+            if result.startswith('Saved'):
+                skill_creator_set_active(conversation_path, False, saved_as=record['name'])
+            return result + ' Tell the person in one or two sentences; the skill is made.'
+
+        def done(_data):
+            skill_creator_set_active(conversation_path, False)
+            return None
+
+        return {'skill_test': test, 'skill_trigger_eval': trigger, 'skill_save': save, 'skill_done': done}
+
+    def _skill_creator_run_tests(self, record: dict, prompts: list, profile: dict, conversation_path: str,
+                                 stop_event=None) -> str:
+        """Each request twice: with the draft (as a skill step would run it) and with no skill; in parallel."""
+        jobs = []
+        for prompt in prompts:
+            with_skill = build_skill_step_messages(skill=record, goal=prompt, question_text=prompt, shared_context='',
+                                                   previous_results=[])
+            without = [{'role': 'system', 'content': 'You are a helpful assistant. Answer the request.'},
+                       {'role': 'user', 'content': prompt}]
+            jobs += [(prompt, 'with', with_skill), (prompt, 'without', without)]
+
+        def run(job):
+            if stop_event is not None and stop_event.is_set():
+                return job, ''
+            try:
+                return job, str(self._run_profile_chat_completion(profile, job[2]) or '')
+            except Exception as exc:
+                return job, f'(the run failed: {exc})'
+        answers = {}
+        with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as pool:
+            for (prompt, side, _messages), answer in pool.map(run, jobs):
+                answers[(prompt, side)] = answer
+        if stop_event is not None and stop_event.is_set():
+            raise ApprovalReviewCancelled()
+
+        def clip(text):
+            text = str(text or '').strip()
+            return text if len(text) <= SKILL_CREATOR_TEST_ANSWER_CHARS else text[:SKILL_CREATOR_TEST_ANSWER_CHARS].rstrip() + '\n…'
+        parts = ['Test results (each request run with the current draft and without any skill):']
+        for index, prompt in enumerate(prompts, start=1):
+            parts.append(f'REQUEST {index}: {prompt}\n--- WITH THE SKILL ---\n{clip(answers.get((prompt, "with")))}\n'
+                         f'--- WITHOUT ---\n{clip(answers.get((prompt, "without")))}')
+        text = '\n\n'.join(parts)
+        try:
+            folder = skill_creator_dir(conversation_path)
+            os.makedirs(folder, exist_ok=True)
+            write_text_file(os.path.join(folder, datetime.datetime.now().strftime('test-%Y%m%d-%H%M%S.md')), text)
+        except OSError:
+            pass
+        return text + ('\n\nShow these side by side to the person, say what the skill changed, and ask what to improve.')
+
+    def _skill_creator_trigger_eval(self, record: dict, queries: list, profile: dict, stop_event=None) -> str:
+        """Claude's description loop with Broccoli's own choosing: the planner's model, the same skill list."""
+        store = load_settings_store()
+        judge_profile = get_planner_profile_from_store(store)
+        others = [item for item in load_skill_records_from_store(store, enabled_only=True)
+                  if str(item.get('name', '') or '').lower() != record['name'].lower()]
+        catalog = skill_catalog_text(others)
+        train, test = skill_trigger_split(queries)
+
+        def score(description, items):
+            jobs = [(item, n) for item in items for n in range(SKILL_CREATOR_TRIGGER_RUNS)]
+
+            def judge(job):
+                if stop_event is not None and stop_event.is_set():
+                    return job, False
+                try:
+                    return job, skill_trigger_said_yes(self._run_profile_chat_completion(
+                        judge_profile, skill_trigger_messages(catalog, record['name'], description, job[0]['query'])))
+                except Exception:
+                    return job, False
+            yes = {}
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                for (item, _n), said in pool.map(judge, jobs):
+                    yes[item['query']] = yes.get(item['query'], 0) + (1 if said else 0)
+            if stop_event is not None and stop_event.is_set():
+                raise ApprovalReviewCancelled()
+            rows = []
+            for item in items:
+                rate = yes.get(item['query'], 0) / float(SKILL_CREATOR_TRIGGER_RUNS)
+                rows.append(dict(item, rate=rate, right=(rate >= 0.5) == item['should_trigger']))
+            return sum(1 for row in rows if row['right']), rows
+
+        description = record['description']
+        history = []
+        best = None
+        for round_index in range(SKILL_CREATOR_TRIGGER_ROUNDS + 1):
+            train_score, train_rows = score(description, train)
+            test_score, _test_rows = score(description, test) if test else (0, [])
+            history.append({'description': description, 'train': train_score, 'test': test_score})
+            if best is None or (test_score, train_score) > (best['test'], best['train']):
+                best = history[-1]
+            wrong = [row for row in train_rows if not row['right']]
+            if not wrong or round_index == SKILL_CREATOR_TRIGGER_ROUNDS:
+                break
+            failures = '\n'.join('- {} → should {}use it; chosen {}/{} times'.format(
+                row['query'], '' if row['should_trigger'] else 'NOT ', int(round(row['rate'] * SKILL_CREATOR_TRIGGER_RUNS)),
+                SKILL_CREATOR_TRIGGER_RUNS) for row in wrong)
+            tried = '\n'.join(f'- {item["description"]} (train {item["train"]}/{len(train)})' for item in history)
+            proposal = self._run_profile_chat_completion(profile, [
+                {'role': 'system', 'content': 'You improve the description of a skill: the one line an assistant reads '
+                                              'when it decides whether to use the skill.'},
+                {'role': 'user', 'content': (
+                    f'Skill "{record["name"]}". Its instructions begin:\n{record["body"][:1500]}\n\n'
+                    f'Descriptions tried so far:\n{tried}\n\nWith the last one, these requests went wrong:\n{failures}\n\n'
+                    f'Write a better description (at most {SKILL_CREATOR_DESCRIPTION_MAX_CHARS - 100} characters): what it '
+                    'does and the situations to use it in, in the words people use; name what it is not for when a near '
+                    'miss went wrong. Do not just list the requests above. Return only the description.')},
+            ])
+            proposal = ' '.join(str(proposal or '').strip().strip('"').split())[:SKILL_CREATOR_DESCRIPTION_MAX_CHARS]
+            if not proposal or proposal in [item['description'] for item in history]:
+                break
+            description = proposal
+        lines = [f'Description tuning: {len(train)} requests to improve on, {len(test)} kept for scoring only; '
+                 f'each asked {SKILL_CREATOR_TRIGGER_RUNS} times with the planner\'s model.']
+        for index, item in enumerate(history):
+            lines.append(f'{"Old" if index == 0 else "Try " + str(index)}: train {item["train"]}/{len(train)}, '
+                         f'scoring {item["test"]}/{len(test)} — {item["description"]}')
+        lines.append(f'BEST (by the scoring requests): {best["description"]}')
+        lines.append('Show the person the old and the best description with their scores; with their yes, write a new '
+                     'draft block with the best description.')
+        return '\n'.join(lines)
+
+    def _skill_creator_save(self, record: dict) -> str:
+        """The draft into Settings › Skills (Broccoli's own skill tools: refused while Settings is open)."""
+        tools = broccoli_self_tools()
+        if tools is None:
+            return 'Saving is not possible right now.'
+        args = {'name': record['name'], 'description': record['description'], 'instructions': record['body']}
+        mine = find_skill_record(normalize_skill_records(load_settings_store().get('globals', {}).get('skills', [])), record['name'])
+        try:
+            if mine is not None:
+                tools.update_skill(args)
+                return f'Saved: the skill {record["name"]!r} in Settings › Skills was replaced by the new version.'
+            return tools.create_skill(dict(args, enabled=True))
+        except SelfToolError as exc:
+            return f'Not saved: {exc}'
+
     # ── code a skill step runs (2026-11-17) ──────────────────────────────────────────────────
     # A skill is instructions somebody wrote — the person, or an app that brought its skill file —
     # and its step may answer with a program that Broccoli runs. Before it runs, the same review as
@@ -118331,6 +123491,22 @@ class MyWidget(QWidget):  # 主窗口
         ) or resolve_step_model_profile(store, SPECIALIZED_SKILL_CAPABILITY)   # Sub agent, then Default chat
         model_name = str(profile.get('model', '') or '').strip()
         executions = []
+        asked = []
+        creator = is_skill_creator(skill) and bool(conversation_path) and bool(parent_run_id)
+        ask_gate = self._ask_user_gate(run_id=str(parent_run_id or ''), conversation_path=str(conversation_path or ''),
+                                       asker=sanitize_skill_name(skill.get('name', skill_name), skill_name or 'Skill'),
+                                       stop_event=stop_event, asked=asked) if parent_run_id else None
+        step_requests = output_hook = None
+        if creator:
+            skill_creator_set_active(conversation_path, True)
+            draft = skill_creator_read_draft(conversation_path)
+            if draft:
+                step_context = (str(step_context or '').rstrip() + '\n\n' if str(step_context or '').strip() else '') + (
+                    'CURRENT DRAFT (kept by the app from earlier turns; change it by writing a whole new ````skill_draft '
+                    'block):\n````skill_draft\n' + draft + '\n````')
+            step_requests = self._skill_creator_requests(conversation_path=conversation_path, profile=profile,
+                                                         stop_event=stop_event, ask=ask_gate)
+            output_hook = lambda text, p=conversation_path: skill_creator_write_draft(p, extract_skill_draft(text))
         try:
             output, executions = self._run_profile_chat_completion_with_code_execution(
                 profile,
@@ -118343,10 +123519,14 @@ class MyWidget(QWidget):  # 主窗口
                     previous_results=previous_results,
                     downstream_extract=downstream_extract,
                     archive_context=archive_context,
+                    can_ask=bool(parent_run_id),
                 ),
                 reasoning_effort=reasoning_effort,
                 archive_reader=archive_reader,
                 archive_read_instruction=str((archive_context or {}).get('read_instruction', '') or ''),
+                ask_user=ask_gate,
+                step_requests=step_requests,
+                output_hook=output_hook,
                 code_gate=self._skill_code_gate(
                     skill_name=sanitize_skill_name(skill.get('name', skill_name), skill_name or 'Skill'),
                     question_text=question_text, goal=goal, conversation_path=str(conversation_path or ''),
@@ -118367,6 +123547,8 @@ class MyWidget(QWidget):  # 主窗口
                 'skill_description': str(skill.get('description', '') or '').strip(),
                 'execution_mode': 'default_main_model',
                 'code_executions': executions,
+                'questions': [{key: item.get(key) for key in ('question', 'choices', 'recommended', 'answer', 'source')}
+                              for item in asked],
             },
         }
 
@@ -120433,6 +125615,7 @@ class MyWidget(QWidget):  # 主窗口
             context_policy = normalize_specialized_step_context_policy(step.get('context_policy', 'auto'))
             step_context_query = ''
             step_context = ''
+            step_mcp_sources = []   # the MCP services this step's own lookup got data from
             step_context_resolution = {
                 'should_retrieve': False,
                 'effective_policy': 'none',
@@ -120484,6 +125667,7 @@ class MyWidget(QWidget):  # 主窗口
                             context_sources=step_context_resolution.get('sources') or SPECIALIZED_STEP_CONTEXT_SOURCES,
                             conversation_path=conversation_path,
                             progress_callback=progress_callback,
+                            used_mcp_sources=step_mcp_sources,
                         )
                     except Exception as exc:
                         progress(_tr('Step-specific context retrieval failed: {error}').format(error=exc))
@@ -120656,6 +125840,8 @@ class MyWidget(QWidget):  # 主窗口
                 if comparison_results:
                     metadata['plan_comparison_results'] = comparison_results
                 result['metadata'] = metadata
+                if step_mcp_sources:
+                    result['mcp_sources'] = unique_mcp_source_names(step_mcp_sources)   # shown after its model
                 fallback_from = str(metadata.get('fallback_from', '') or '')
                 progress(
                     _tr('Specialized step {n} output ready: {label}').format(n=executed_steps + 1, label=step_label)
@@ -120675,6 +125861,7 @@ class MyWidget(QWidget):  # 主窗口
                     'output_excerpt': specialized_progress_snippet(str(result.get('text_output', '') or '')),
                     'model_name': str(result.get('model_name', '') or ''),
                     'profile_name': str(result.get('profile_name', '') or ''),
+                    'mcp_sources': list(step_mcp_sources),
                 })
                 verification_review_results = []
                 if verification_branches:
@@ -120840,6 +126027,7 @@ class MyWidget(QWidget):  # 主窗口
                     'status': 'finished',
                     'model_name': str(result.get('model_name', '') or ''),
                     'profile_name': str(result.get('profile_name', '') or ''),
+                    'mcp_sources': list(step_mcp_sources),
                     'meets_goal': bool(review.get('meets_goal', False)),
                     'review_action': review_action,
                     'review_reason': review_reason,
@@ -121122,6 +126310,7 @@ class MyWidget(QWidget):  # 主窗口
             self.webfetch_panel.hide()
 
     def _history_panel_shown_rect(self):
+        self._fit_overlay_panel_height(self.history_panel)
         panel_w = self.history_panel.width()
         panel_h = self.history_panel.height()
         x = max(0, (self.qw3.width() - panel_w) // 2)
@@ -121138,6 +126327,7 @@ class MyWidget(QWidget):  # 主窗口
         return QRect(-shown.width() - 24, shown.y(), shown.width(), shown.height())
 
     def _links_panel_shown_rect(self):
+        self._fit_overlay_panel_height(self.links_panel)
         panel_w = self.links_panel.width()
         panel_h = self.links_panel.height()
         x = max(0, (self.qw3.width() - panel_w) // 2)
@@ -121388,9 +126578,10 @@ class MyWidget(QWidget):  # 主窗口
         return build_saved_memory_context(question_text, embedding_config, embedding_ok)
 
     def _build_external_context_prompt_context(self, question_text: str, progress_callback=None,
-                                               extra_sources=None) -> str:
+                                               extra_sources=None, used_mcp_sources=None) -> str:
         """extra_sources: the conversation's group folders (used whether or not the global
-        external-context switch is on — they belong to this conversation)."""
+        external-context switch is on — they belong to this conversation).
+        used_mcp_sources: a list that gets the names of the MCP services that gave data."""
         store = load_settings_store()
         globals_store = store.get('globals', {}) if isinstance(store, dict) else {}
         sources = []
@@ -121402,6 +126593,8 @@ class MyWidget(QWidget):  # 主窗口
         documents = collect_external_context_documents(sources, question_text, progress_callback)
         if not documents:
             return ''
+        if isinstance(used_mcp_sources, list):
+            used_mcp_sources.extend(mcp_source_names_of_documents(documents))
         max_chars = normalize_external_context_max_chars(
             globals_store.get('external_context_max_chars', DEFAULT_EXTERNAL_CONTEXT_MAX_CHARS)
         )
@@ -121628,7 +126821,8 @@ class MyWidget(QWidget):  # 主窗口
                                                   timeout: int,
                                                   context_sources: list[str] | tuple[str, ...] | set[str] | None = None,
                                                   conversation_path: str | None = None,
-                                                  progress_callback=None) -> str:
+                                                  progress_callback=None,
+                                                  used_mcp_sources=None) -> str:
         query = str(query_text or '').strip()
         if not query:
             return ''
@@ -121678,7 +126872,8 @@ class MyWidget(QWidget):  # 主窗口
 
         if 'external' in enabled_sources:
             progress(_tr('Retrieving step-specific external context and MCP sources'))
-            external_context = self._build_external_context_prompt_context(query, progress_callback=progress_callback)
+            external_context = self._build_external_context_prompt_context(
+                query, progress_callback=progress_callback, used_mcp_sources=used_mcp_sources)
             if external_context:
                 blocks.append(external_context)
 
@@ -121697,7 +126892,20 @@ class MyWidget(QWidget):  # 主窗口
             # started from a group's disc / menu: it belongs to that group from its first message
             set_conversation_group(conversation_id_from_path(record['path']), group_id)
             self._pending_new_conversation_group_id = ''
+        write_back = self.__dict__.get('_pending_write_back')
+        if write_back:
+            # staged "write here": this first message's answer goes back to the sender (2026-11-25)
+            self._pending_write_back = None
+            self._external_replies[record['path']] = dict(write_back['reply'])
+            self._write_back_notes[record['path']] = str(write_back.get('note', '') or '')
         self._refresh_history_panel()
+
+    def _cancel_pending_write_back(self):
+        """The blank staged conversation was left before anything was asked: the sender stops waiting."""
+        write_back = self.__dict__.get('_pending_write_back')
+        if write_back:
+            self._pending_write_back = None
+            self._write_external_reply(write_back['reply'], '', 'cancelled', '')
 
     def _materialize_unsaved_agent_page_before_new(self):
         if self._active_conversation_path:
@@ -121875,6 +127083,7 @@ class MyWidget(QWidget):  # 主窗口
         # 先启动“加载中”计时：后面读文件、发布到 iCloud 等都算进切换耗时。
         self._begin_conversation_switch_feedback()
         self._pending_new_conversation_group_id = ''
+        self._cancel_pending_write_back()
         self._pending_new_conversation_remote_target = None
         if ICLOUD_M7_UNIFIED_HISTORY_ENABLED:
             try:
@@ -122253,6 +127462,32 @@ class MyWidget(QWidget):  # 主窗口
         self.history_panel.remove_records(targets)
         flush_async_file_writes(5.0)
 
+    def apply_app_mcp_service_settings(self, enabled=None):
+        """Broccoli's tools for other AI apps: its card in the family folder and its local service, unless
+        Settings › External context switched them off (then the card goes, so nothing opens Broccoli for them)."""
+        tools = broccoli_self_tools(self)
+        if tools is None:
+            return
+        if enabled is None:
+            enabled = bool((load_settings_store().get('globals') or {}).get(APP_MCP_SERVICE_ENABLED_KEY, True))
+        host = tools.host
+        if enabled and not host.running:
+            launch = None
+            marker = '.app/Contents/MacOS/'
+            if getattr(sys, 'frozen', False) and marker in sys.executable:   # the packaged app can be opened again
+                launch = {'bundle_id': BROCCOLI_BUNDLE_ID, 'path': sys.executable.split(marker)[0] + '.app'}
+            try:
+                host.start(launch=launch)
+            except Exception:
+                logging.exception("Broccoli's tools for other AI apps could not be started.")
+        elif not enabled and host.running:
+            host.stop(remove_card=True)
+
+    def _stop_app_mcp_service(self):
+        tools = broccoli_self_tools()
+        if tools is not None:
+            tools.host.stop()
+
     def _after_conversations_changed(self):
         """After a restore or a deletion from Settings: the panels that list conversations."""
         self._refresh_history_panel()
@@ -122541,6 +127776,8 @@ class MyWidget(QWidget):  # 主窗口
 
             summaries = []
             for record in list_conversation_records():
+                if conversation_owned_elsewhere(record):
+                    continue   # its own Mac writes that day's note, and the notes sync (2026-11-23)
                 updated_at = str(record.get('updated_at', '')).strip()
                 if not updated_at:
                     continue
@@ -122610,8 +127847,11 @@ class MyWidget(QWidget):  # 主窗口
             def apply_rollup(fresh_store):
                 fresh_globals = fresh_store['globals']
                 updated_items = []
+                this_mac = _cloud_file_component(BROCCOLI_LOCAL_DEVICE_ID, 'device')
                 for item in normalize_memory_item_records(fresh_globals.get('memory_items', [])):
-                    if item.get('kind') == 'daily' and str(item.get('source_date', '')).strip() == rollup_day:
+                    # only this Mac's note of the day: another Mac's arrived through the memory sync
+                    if (item.get('kind') == 'daily' and str(item.get('source_date', '')).strip() == rollup_day
+                            and item.get('device', this_mac) == this_mac):
                         continue
                     updated_items.append(item)
                 if daily_note:
@@ -122621,6 +127861,7 @@ class MyWidget(QWidget):  # 主窗口
                             'created_at': now.isoformat(timespec='seconds'),
                             'kind': 'daily',
                             'source_date': rollup_day,
+                            'device': this_mac,
                         }
                     )
                 fresh_globals['memory_items'] = prune_memory_item_records(updated_items, retention_days, now=now)
@@ -122634,7 +127875,24 @@ class MyWidget(QWidget):  # 主窗口
         finally:
             self._daily_memory_rollup_running = False
 
+    # The centred 500-wide panels (Settings, History, Links, Favorites, the terminal's History and
+    # Favorites) are at most 760 tall, and never taller than the main window leaves room for, 24
+    # above and 24 below (2026-11-22, Ryan: "分辨率调大了之后这个设置窗口会变得无比大，save 按钮到看
+    # 不见的下面去了…怎么就只做主窗口一个？其他浮窗呢？"). The main window's height follows the
+    # screen; these followed nothing, so on a short screen their bottom (Save) was cut off.
+    OVERLAY_PANEL_MAX_HEIGHT = 760
+    OVERLAY_PANEL_MARGIN = 24
+    OVERLAY_PANEL_MIN_HEIGHT = 300
+
+    def _fit_overlay_panel_height(self, panel) -> int:
+        room = int(self.qw3.height()) - 2 * self.OVERLAY_PANEL_MARGIN
+        height = max(self.OVERLAY_PANEL_MIN_HEIGHT, min(self.OVERLAY_PANEL_MAX_HEIGHT, room))
+        if panel is not None and panel.height() != height:
+            panel.setFixedSize(panel.width(), height)
+        return height
+
     def _settings_panel_shown_rect(self):
+        self._fit_overlay_panel_height(self.settings_panel)
         panel_w = self.settings_panel.width()
         panel_h = self.settings_panel.height()
         x = max(0, (self.qw3.width() - panel_w) // 2)
@@ -122801,6 +128059,7 @@ class MyWidget(QWidget):  # 主窗口
 
     def _terminal_history_panel_shown_rect(self, panel=None):
         panel = panel or self._terminal_history_panel_for_active_session()
+        self._fit_overlay_panel_height(panel)
         panel_w = panel.width()
         panel_h = panel.height()
         x = max(0, (self.qw3.width() - panel_w) // 2)
@@ -122812,6 +128071,7 @@ class MyWidget(QWidget):  # 主窗口
         return QRect(-shown.width() - 24, shown.y(), shown.width(), shown.height())
 
     def _terminal_favorites_panel_shown_rect(self):
+        self._fit_overlay_panel_height(self.terminal_favorites_panel)
         panel_w = self.terminal_favorites_panel.width()
         panel_h = self.terminal_favorites_panel.height()
         x = max(0, (self.qw3.width() - panel_w) // 2)
@@ -123206,6 +128466,7 @@ class MyWidget(QWidget):  # 主窗口
 
     # ── Agent 聊天收藏浮窗（右缘触发，样式与 terminal 收藏一致，配色随主题）──
     def _agent_favorites_panel_shown_rect(self):
+        self._fit_overlay_panel_height(self.agent_favorites_panel)
         panel_w = self.agent_favorites_panel.width()
         panel_h = self.agent_favorites_panel.height()
         x = max(0, (self.qw3.width() - panel_w) // 2)
@@ -124717,6 +129978,8 @@ end run'''"""
             self._update_terminal_history_overlay_geometry()
         if hasattr(self, '_terminal_favorites_scrim'):
             self._update_terminal_favorites_overlay_geometry()
+        if hasattr(self, '_agent_favorites_scrim'):
+            self._update_agent_favorites_overlay_geometry()   # (was missing: it kept its old place)
         if hasattr(self, '_outputs_scrim'):
             self._update_outputs_overlay_geometry()
         if hasattr(self, '_share_scrim'):
@@ -125405,9 +130668,14 @@ end run'''"""
     def _circle_voice_controller(self):
         if getattr(self, '_circle_voice', None) is None:
             self._circle_voice_text = QPlainTextEdit()      # what is heard (never shown; the card reads it)
+            # the same words without the user's edits (what a correction is learned against), and as they
+            # were before the edit under way (Esc takes it back to these) — 2026-11-22, style book 5.1.18
+            self._circle_voice_heard = QPlainTextEdit()
+            self._circle_voice_kept = QPlainTextEdit()
             self._circle_voice = voice_input.VoiceInputController(
                 voice_helper_path, voice_input_locale, lambda: self._circle_voice_text, device_for=voice_input_device,
-                tidy_for=voice_tidy_function, session_for=voice_session_for, parent=self)
+                tidy_for=voice_tidy_function, session_for=self._circle_voice_session,
+                shadows_for=lambda: [self._circle_voice_heard, self._circle_voice_kept], parent=self)
             self._circle_voice.level.connect(self._on_circle_record_level)
             self._circle_voice.tone.connect(self._on_circle_record_tone)
             self._circle_voice.failed.connect(self._on_circle_record_failed)
@@ -125422,6 +130690,60 @@ end run'''"""
             self._circle_record_signals = VoiceCheckSignals(self)
             self._circle_record_signals.done.connect(self._on_circle_record_worker)
         return self._circle_voice
+
+    def _circle_voice_session(self, controller):
+        """The circle's listening: its model and language follow the card's choosers at once, and what
+        was said so far is heard again with the new choice (voice_input.SwitchingVoiceSession;
+        2026-11-22, Ryan: "你不能是从下一次开始再变……所以你必须得是立刻发生变化")."""
+        helper = voice_helper_path()
+        device = voice_input_device()
+        audio_file = str(getattr(controller, 'audio_file', '') or '')
+        holder = {}
+
+        def wanted():
+            return local_speech_model_id_for_dictation(), voice_input_locale()
+
+        def make(model_id, locale, save_path):
+            if model_id:
+                return voice_input.LocalVoiceSession(
+                    helper, local_speech_engine(), model_id, str(locale or '').split('-')[0].lower(), device,
+                    audio_file=audio_file, save_path=save_path, parent=holder.get('session'), keep_heard=True)
+            return voice_input.VoiceInputSession(helper, locale, device, audio_file=audio_file, save_path=save_path,
+                                                 parent=holder.get('session'))
+        session = holder['session'] = voice_input.SwitchingVoiceSession(
+            helper, wanted, make, engine=local_speech_engine, parent=controller)
+        session.redoing.connect(self._on_circle_record_redoing)
+        session.switch_failed.connect(self._on_circle_record_switch_failed)
+        return voice_live_session(session)
+
+    def _circle_record_live_footer(self) -> str:
+        """The small line while it listens: where the words will go, and how to stop it."""
+        dictation = getattr(self, '_circle_dictation', None)
+        if dictation is not None and dictation.no_insert:
+            line = _tr('→ Nowhere: only heard')
+        else:
+            line = self._circle_record_goal_line(getattr(self, '_circle_record_target', None), known=True)
+        if dictation is not None and dictation.stoppable:
+            line += ' · ' + _tr('click the circle to stop')
+        return line
+
+    def _on_circle_record_redoing(self, on: bool):
+        """A chooser was changed while it listens: what was said is being heard again with the new choice."""
+        dictation = getattr(self, '_circle_dictation', None)
+        if dictation is None or dictation.done or dictation.tidying:
+            return
+        dictation.footer = _tr('Hearing what you said again with the new choice…') if on else self._circle_record_live_footer()
+
+    def _on_circle_record_switch_failed(self, code: str):
+        dictation = getattr(self, '_circle_dictation', None)
+        if dictation is None or dictation.done:
+            return
+        dictation.footer = _tr('Could not switch: {reason}').format(reason=voice_error_text(code))
+
+    def _circle_record_retidy(self):
+        controller = getattr(self, '_circle_voice', None)
+        if controller is not None and controller.state() == 'tidying':
+            controller.retidy()
 
     def toggle_voice_input_by_shortcut(self):
         """The circle's voice input shortcut (Settings › Shortcuts & tools). Press: listening starts;
@@ -125535,9 +130857,12 @@ end run'''"""
         if not free and (body is None or not body.held):
             return False
         controller = self._circle_voice_controller()
+        self._circle_record_finish_edit()           # words of the last recording being edited: they go first
         self._collapsed_hover_since = None
         self._collapsed_hover_need_leave = True     # the pointer rests on the circle afterwards: no grid
         self._circle_voice_text.clear()
+        self._circle_voice_heard.clear()
+        self._circle_voice_kept.clear()
         self._circle_record_open = True
         self._circle_record_error = ''
         self._circle_record_heard = ''
@@ -125740,12 +131065,224 @@ end run'''"""
         if dictation is None:
             return
         dictation.done = True
+        if not str(getattr(self, '_circle_record_heard', '') or ''):
+            # what the recognizer gave, before the user's edits (the history keeps both)
+            self._circle_record_heard = self._circle_voice_heard.toPlainText().strip()
+        if dictation.held:
+            # clicked into before they went anywhere: they wait for ✓ (2026-11-22, style book 5.1.18)
+            dictation.waiting = True
+            dictation.close_at = None
+            dictation.footer = self._circle_record_wait_line()
+            return
         if not text:
             dictation.placeholder = self._circle_record_error or _tr('Nothing was heard.')
             dictation.footer = ''
             dictation.close_at = time.monotonic() + (6.0 if self._circle_record_error else 2.5)
             return
         self._circle_record_deliver(text)
+
+    def _circle_record_set_no_insert(self, on: bool):
+        """The card's "Don't Insert" (or "Insert After All"): this recording goes nowhere when it ends."""
+        dictation = getattr(self, '_circle_dictation', None)
+        if dictation is None or dictation.done:
+            return
+        dictation.no_insert = bool(on)
+        if on:
+            dictation.footer = _tr('→ Nowhere: only heard')
+        else:
+            dictation.footer = self._circle_record_goal_line(getattr(self, '_circle_record_target', None), known=True)
+        if dictation.stoppable:
+            dictation.footer += ' · ' + _tr('click the circle to stop')
+
+    # ── the dictated words edited on the card (2026-11-22, Ryan: "直接把这个输出框……变成一个可以编辑的输出框……
+    # Brockley 他也可以从这个输出框里面的修改直接去学习"、"只要他不会去……覆盖我之前的修改，他也不会去重复在说某句话说两遍"、
+    # "不管是生成的时候还是说已经更改完了之后，这个修改都可以拿来用来学习"; style book 5.1.18) ──
+    # A click into the words makes them editable, while it listens, while it tidies and after they went
+    # in. Clicked into before they went anywhere: they wait for ✓ (⌘↩), then go where they were going,
+    # as edited. After they went in: ✓ updates the copy on the clipboard and the dictation history (the
+    # other app keeps what it got). Esc takes the edit back. Every ✓ teaches Broccoli the small
+    # corrections in it (the same list as the corrections made in its own input box). What the user
+    # edited is never written over: no tidy-up and no hearing again with another model runs over it.
+    def _circle_record_final_end(self):
+        controller = getattr(self, '_circle_voice', None)
+        try:
+            return controller.final_end() if controller is not None else None
+        except RuntimeError:
+            return None
+
+    def _circle_record_apply_edit(self, at: int, removed: int, text: str) -> bool:
+        controller = getattr(self, '_circle_voice', None)
+        if controller is None:
+            return False
+        done = controller.apply_user_edit(at, removed, text)
+        if done and controller.state() == 'tidying' and controller.edited():
+            # edited while it was being tidied: the user's words win, the tidy-up is not waited for
+            QTimer.singleShot(0, lambda: controller.state() == 'tidying' and controller.cancel())
+        return done
+
+    def _circle_record_edit_started(self):
+        dictation = getattr(self, '_circle_dictation', None)
+        if dictation is None:
+            return
+        dictation.close_at = None                   # (the card stays while it is edited)
+        if not dictation.delivered:
+            dictation.held = True
+        else:
+            dictation.footer = _tr('Editing: press ✓ when done. Broccoli learns from what you change.')
+
+    def _circle_record_wait_line(self) -> str:
+        target, dictation = getattr(self, '_circle_record_target', None), getattr(self, '_circle_dictation', None)
+        if dictation is not None and dictation.no_insert:
+            return _tr('Press ✓ when it reads right.')
+        name = str(getattr(target, 'name', '') or '') if target is not None else ''
+        if name and (getattr(target, 'widget', None) is not None or getattr(target, 'pid', 0)):
+            return _tr('Press ✓ when it reads right: then it goes into {app}.').format(app=name)
+        return _tr('Press ✓ when it reads right: then it is copied.')
+
+    def _circle_record_finish_edit(self):
+        answer = getattr(self, '_circle_answer', None)
+        card = getattr(answer, '_card', None) if answer is not None else None
+        if card is not None and card.editing():
+            self._circle_record_commit_edit()
+
+    def _circle_record_commit_edit(self, cancel: bool = False):
+        """✓ / ⌘↩ (cancel=False) or Esc (cancel=True) on the card."""
+        answer = getattr(self, '_circle_answer', None)
+        card = getattr(answer, '_card', None) if answer is not None else None
+        if card is None or not card.editing():
+            return
+        controller = getattr(self, '_circle_voice', None)
+        dictation = getattr(self, '_circle_dictation', None)
+        now = self._circle_voice_text.toPlainText()
+        kept = self._circle_voice_kept.toPlainText()
+        if cancel:
+            if now != kept and controller is not None:
+                at, removed, text = voice_input.suffix_first_edit(now, kept)
+                controller.apply_user_edit(at, removed, text)
+            if controller is not None and self._circle_voice_text.toPlainText() == self._circle_voice_heard.toPlainText():
+                controller.forget_edits()           # all taken back: the words are the recognizer's again
+        elif now != kept and controller is not None:
+            at, removed, text = voice_input.suffix_first_edit(kept, now)
+            controller.apply_shadow_edit(1, self._circle_voice_kept, at, removed, text)
+        card.end_edit()
+        if dictation is None:
+            return
+        text = self._circle_voice_text.toPlainText().strip()
+        learned = [] if cancel else self._circle_record_learn(text)
+        if learned:
+            dictation.learned_note = _tr('Learned: {pairs}').format(
+                pairs=', '.join(f'{heard} → {meant}' for heard, meant in learned))
+        dictation.held = False
+        state = controller.state() if controller is not None else 'idle'
+        if dictation.waiting:
+            dictation.waiting = False
+            if not text:
+                dictation.placeholder = _tr('Nothing was heard.')
+                dictation.footer = ''
+                dictation.close_at = time.monotonic() + 2.5
+                return
+            self._circle_record_deliver(text)
+        elif state == 'tidying':
+            if controller.edited():
+                controller.cancel()                 # (→ idle: the words go in as edited)
+        elif state in ('starting', 'listening', 'stopping'):
+            pass                                    # they go in when the listening ends, as usual
+        elif dictation.delivered:
+            if not cancel and text and text != str(getattr(self, '_circle_record_delivering', '') or ''):
+                self._circle_record_update_delivered(text)
+            elif cancel:
+                dictation.footer = _tr('Kept as it was.')
+            dictation.close_at = time.monotonic() + 4.0
+
+    def _circle_record_learn(self, text: str) -> list:
+        """The small corrections in what the user made of the recognizer's words, kept (in the background)."""
+        dictation = getattr(self, '_circle_dictation', None)
+        baseline = self._circle_voice_heard.toPlainText().strip()
+        try:
+            pairs = voice_learn_pairs(baseline, text)
+        except Exception:
+            logging.exception('Finding the corrections in the edited words failed.')
+            return []
+        if dictation is not None:
+            pairs = [pair for pair in pairs if pair not in dictation.learned]
+        if not pairs:
+            return []
+        if dictation is not None:
+            dictation.learned.extend(pairs)
+
+        def keep(pairs=list(pairs)):                # (a settings write: not on the UI thread)
+            try:
+                voice_remember_corrections(pairs)
+            except Exception:
+                logging.exception('Keeping the corrections learned on the circle\'s card failed.')
+        threading.Thread(target=keep, name='voice-learn-card', daemon=True).start()
+        return pairs
+
+    def _circle_record_update_delivered(self, text: str):
+        """Edited after it went in: the copy on the clipboard and the dictation history follow; the app it
+        went into keeps what it got (the words cannot be found and replaced there safely)."""
+        dictation, target = getattr(self, '_circle_dictation', None), getattr(self, '_circle_record_target', None)
+        self._circle_record_delivering = text
+        copied = False
+        if dictation is not None and not dictation.no_insert and self._circle_record_copy_wanted():
+            QGuiApplication.clipboard().setText(text)
+            copied = True
+        path = str(getattr(self, '_circle_record_saved_path', '') or '')
+        if path:
+            try:
+                self._update_dictation_record(path, text)
+            except Exception:
+                logging.exception('Updating the dictation in the history failed.')
+        name = str(getattr(target, 'name', '') or '') if target is not None else ''
+        if dictation is None:
+            return
+        if dictation.no_insert or not name:
+            dictation.footer = _tr('Copied as you changed it.') if copied else _tr('Kept as you changed it.')
+        elif copied:
+            dictation.footer = _tr('Copied as you changed it. {app} still has the words as they were.').format(app=name)
+        else:
+            dictation.footer = _tr('Kept as you changed it. {app} still has the words as they were.').format(app=name)
+
+    def _update_dictation_record(self, path: str, final: str):
+        """The dictation's history entry: the answer is now the words as the user made them."""
+        record = load_conversation_record(path, include_retrieval=False) or {}
+        messages = [message for message in (record.get('messages') or []) if isinstance(message, dict)]
+        if not messages:
+            return
+        heard = messages[0]
+        kept = [heard]
+        final = str(final or '').strip()
+        if final and final != str(heard.get('content', '') or '').strip():
+            kept.append({'role': 'assistant', 'content': final, 'timestamp': current_chat_timestamp(),
+                         'source': f'{VOICE_DICTATION_SOURCE} · edited'})
+        record['messages'] = kept
+        record['rendered_markdown'] = render_chat_history_markdown(kept)
+        record['updated_at'] = datetime.datetime.now().isoformat(timespec='seconds')
+        write_conversation_record(path, record)
+        try:
+            self._refresh_history_panel()
+        except Exception:
+            pass
+
+    def _circle_record_return_keyboard(self):
+        """Broccoli had to come forward for the card to get the keyboard: the app that had it gets it back."""
+        target = getattr(self, '_circle_record_target', None)
+        if target is None:
+            return
+        widget = getattr(target, 'widget', None)
+        if widget is not None:
+            try:
+                widget.window().activateWindow()
+                widget.setFocus(Qt.FocusReason.OtherFocusReason)
+            except RuntimeError:
+                pass
+            return
+        pid = int(getattr(target, 'pid', 0) or 0)
+        if not pid or pid == os.getpid() or AppKit is None:
+            return
+        running = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        if running is not None:
+            running.activateWithOptions_(int(getattr(AppKit, 'NSApplicationActivateIgnoringOtherApps', 1 << 1)))
 
     def _circle_record_copy_wanted(self) -> bool:
         try:
@@ -125758,12 +131295,20 @@ end run'''"""
         when the recording began."""
         target, dictation = self._circle_record_target, self._circle_dictation
         self._circle_record_delivering = text
+        self._circle_record_saved_path = ''
+        if dictation is not None:
+            dictation.delivered = True
         try:
             if bool(load_settings_store().get('globals', {}).get(VOICE_INPUT_CIRCLE_HISTORY_KEY, True)):
                 self._save_dictation_record(heard=str(getattr(self, '_circle_record_heard', '') or '') or text, final=text,
                                             app_name=target.name if target is not None else '')
         except Exception:
             logging.exception('Keeping the dictation in the history failed.')
+        if dictation is not None and dictation.no_insert:
+            # "Don't Insert": heard and written down only — not typed anywhere, not copied
+            dictation.footer = _tr('Not inserted: only heard (kept in the dictation history)')
+            dictation.close_at = time.monotonic() + 3.0
+            return
         if self._circle_record_copy_wanted():
             QGuiApplication.clipboard().setText(text)
         if target is not None and target.widget is not None:
@@ -128534,7 +134079,8 @@ end run'''"""
             return
         outcome = agent_run_completion_outcome(run, task_state)
         for step in (lambda: self._browse_on_run_released(run, outcome),
-                     lambda: self._queue_mac_completion_reminder(run, outcome)):
+                     lambda: self._queue_mac_completion_reminder(run, outcome),
+                     lambda: self._external_request_released(run, outcome)):
             try:
                 step()
             except Exception:
@@ -128747,17 +134293,53 @@ end run'''"""
                         self._refresh_agent_plan_panel()
                 return
 
+    def _tray_paths_added_during_run(self, run) -> list:
+        """The tray's files that did not go with the running answer (the tray keeps those until it is done):
+        what was put there for the next note or queued prompt."""
+        tray = getattr(self, '_attachment_tray', None)
+        if tray is None:
+            return []
+        paths = [str(path) for path in tray.get_paths() if str(path or '').strip()]
+        if not isinstance(run, dict):
+            return paths
+        sent = set(run.get('tray_paths_at_start') or [])
+        config = run.get('config') if isinstance(run.get('config'), dict) else {}
+        for item in list(config.get('attachments') or []) + list(config.get('attachment_records') or []):
+            if isinstance(item, dict):
+                for key in ('path', 'stored_path'):
+                    if item.get(key):
+                        sent.add(str(item.get(key)))
+        return [path for path in paths if path not in sent]
+
+    def _take_tray_paths(self, paths: list):
+        """They go with the note / queued prompt now: their cards leave the tray (so the end of the running
+        answer does not clear them away, and they are not sent twice)."""
+        tray = getattr(self, '_attachment_tray', None)
+        if tray is None or not paths:
+            return
+        wanted = set(paths)
+        try:
+            for card in list(tray._cards):
+                if card._path in wanted:
+                    tray.remove_card(card)
+        except RuntimeError:
+            pass
+
     def _add_agent_supplement_to_run(self, run: dict, text: str, *, status_text: str = '',
-                                     title: str = 'User added an instruction'):
+                                     title: str = 'User added an instruction', attachments: list | None = None):
         """An added instruction for a running task (Add note; also a request the coordinator hands
-        over): the next checkpoint takes it, a long step reads it before its next model call."""
+        over): the next checkpoint takes it, a long step reads it before its next model call.
+        `attachments`: files that go with it (text files inside the note, the rest with the follow-up turn)."""
         supplements = run.setdefault('queued_supplements', [])
+        attached_text, send_files = note_attachment_parts(attachments)
         note = {
             'id': self._next_agent_queue_id(),
-            'text': text,
+            'text': (text + '\n\n' + attached_text) if attached_text else text,
             'task_id': str(run.get('task_id', '') or ''),
             'created_at': datetime.datetime.now().isoformat(timespec='seconds'),
         }
+        if send_files:
+            note['send_files'] = send_files
         supplements.append(note)
         # a long step running right now reads it before its next model call (Add note phase 2)
         live_notes = run.setdefault('live_notes', [])
@@ -128774,7 +134356,7 @@ end run'''"""
             capability='user_supplement',
             capability_label='User note',
             title=title,
-            goal=text,
+            goal=text + (' 📎 ' + ', '.join(os.path.basename(str(path)) for path in attachments) if attachments else ''),
             status='queued',
             source='supplement',
         )
@@ -128787,12 +134369,16 @@ end run'''"""
         if not text:
             return False
         mode = 'supplement' if str(mode or '') == 'supplement' else 'queue'
+        if self._answer_pending_question_from_prompt(text):
+            return False                     # it answered the step's question (2026-11-25)
         if mode == 'supplement':
             run = self._active_agent_run()
             if not isinstance(run, dict):
                 self._show_broccoli_message(_tr('Add note'), _tr('No running Agent answer to add a note to.'))
                 return
-            self._add_agent_supplement_to_run(run, text)
+            attachments = self._tray_paths_added_during_run(run)
+            self._add_agent_supplement_to_run(run, text, attachments=attachments)
+            self._take_tray_paths(attachments)
             return False
 
         path = self._active_agent_queue_path()
@@ -128803,13 +134389,16 @@ end run'''"""
             self._show_broccoli_message(_tr('Queue'), _tr('Queue is available while this Agent conversation is running.'))
             return False
         queue_items = self._agent_queue_for_path(path)
+        attachments = self._tray_paths_added_during_run(self._agent_run_for_path(path))
         queue_items.append({
             'id': self._next_agent_queue_id(),
             'prompt': text,
             'status': 'waiting',
             'task_id': str((self._agent_run_for_path(path) or {}).get('task_id', '') or ''),
             'created_at': datetime.datetime.now().isoformat(timespec='seconds'),
+            **({'attachments': attachments} if attachments else {}),
         })
+        self._take_tray_paths(attachments)
         _shadow_persist_queue(path, queue_items)
         run = self._agent_run_for_path(path)
         if isinstance(run, dict):
@@ -128975,7 +134564,8 @@ end run'''"""
         self._refresh_agent_queue_panel(path)
         if not prompt:
             return self._run_next_agent_queue_item(path)
-        if not self._start_agent_prompt_for_conversation(path, prompt, source='queue'):
+        attachments = [str(item_path) for item_path in (item.get('attachments') or []) if str(item_path or '').strip()]
+        if not self._start_agent_prompt_for_conversation(path, prompt, source='queue', attachment_paths=attachments or None):
             queue_items = self._agent_queue_for_path(path)
             item['status'] = 'waiting'
             queue_items.insert(0, item)
@@ -129007,7 +134597,10 @@ end run'''"""
         if self._agent_run_for_path(path) is not None:
             return
         prompt = self._build_agent_supplement_prompt(supplements)
-        if prompt and self._start_agent_prompt_for_conversation(path, prompt, source='supplement'):
+        files = []
+        for record in normalize_agent_supplement_records(supplements):
+            files.extend(path_item for path_item in record.get('send_files') or [] if path_item not in files)
+        if prompt and self._start_agent_prompt_for_conversation(path, prompt, source='supplement', attachment_paths=files or None):
             return
         self._run_next_agent_queue_item(path)
 
@@ -129031,6 +134624,10 @@ end run'''"""
         # (compare/verify), so the parent content and the @target status show together
         # instead of overwriting each other in the shared preview area.
         base = self._agent_run_preview_text_base(run)
+        waiting = [request for request in getattr(self, '_user_questions', {}).values()
+                   if str(request.get('run_id', '') or '') == str((run or {}).get('run_id', '') or '') and not request.get('settled')]
+        if waiting:
+            base = (str(base or '').rstrip() + '\n\n' + '\n\n'.join(ask_user_card_text(request) for request in waiting)).strip()
         substeps = run.get('_external_substeps') if isinstance(run, dict) else None
         if isinstance(substeps, dict) and substeps:
             blocks = []
@@ -129334,6 +134931,8 @@ end run'''"""
                 for source_key, step_key in (('model_name', 'executed_model'), ('profile_name', 'executed_profile')):
                     if payload.get(source_key):
                         plan_step[step_key] = str(payload.get(source_key, '') or '')
+                if payload.get('mcp_sources'):
+                    plan_step['executed_mcp'] = unique_mcp_source_names(payload.get('mcp_sources'))
                 for key in ('raw_chars', 'reviewed_chars'):
                     if key in payload:
                         try:
@@ -129438,6 +135037,8 @@ end run'''"""
         (the typed text joins the conversation's queue and runs after this answer)."""
         queue_mode = self._agent_prompt_has_request_text()
         label = _tr('📥 Queue') if queue_mode else _tr('⛔️ Stop')
+        if queue_mode and self._pending_user_question_for_path(str(self._active_conversation_path or '')) is not None:
+            label = _tr('💬 Reply')          # the typed text answers the step's question (2026-11-25)
         if not force and self.btn_sub1.text() == label:
             return
         try:
@@ -129467,6 +135068,10 @@ end run'''"""
         run = self._active_agent_run()
         text = self.text1.toPlainText().strip()
         if not isinstance(run, dict) or not self._agent_prompt_has_request_text():
+            self._refresh_agent_send_button_state()
+            return
+        if self._answer_pending_question_from_prompt(text):
+            self._clear_and_hide_agent_prompt_after_send()
             self._refresh_agent_send_button_state()
             return
         if self._on_agent_queue_panel_submitted('queue', text):
@@ -129509,6 +135114,13 @@ end run'''"""
             config['editor_planner_note'] = editor_planner_note(self)
         except Exception:
             config['editor_planner_note'] = ''
+        try:
+            reader_note = reader_planner_note(self)
+        except Exception:
+            reader_note = ''
+        if reader_note:
+            config['editor_planner_note'] = '\n\n'.join(
+                part for part in (str(config.get('editor_planner_note', '') or ''), reader_note) if part)
         # the conversation's group: its folders are background for planning and retrieval
         try:
             group_context = conversation_group_context(str(config.get('conversation_path', '') or ''))
@@ -129550,6 +135162,9 @@ end run'''"""
         if 'autonomy' not in config:
             config['autonomy'] = self._autonomy_config_for_request(config)
         run = self._register_agent_run(config, 'preflight')
+        if str(config.get('conversation_path', '') or '').strip() == str(self._active_conversation_path or '').strip() \
+                and getattr(self, '_attachment_tray', None) is not None:
+            run['tray_paths_at_start'] = list(self._attachment_tray.get_paths())
         run.setdefault('_send_monotonic', time.monotonic())
         config['supplement_provider'] = lambda rid=run['run_id']: self._take_agent_supplements_for_run(rid)
         run['progress_lines'] = []
@@ -131319,6 +136934,8 @@ end run'''"""
                             show_error=False,
                             caller='external_target',
                             result_callback=capture_send_wait,
+                            # same last resort as the visible page, for sends without files
+                            key_fallback=not has_uploads,
                         ),
                     )
 
@@ -135573,6 +141190,7 @@ end run'''"""
                             if getattr(self, 'open_connector', None) is not None else None)
         if connector_source is not None and bool(globals_store.get(OPEN_CONNECTOR_ENABLED_KEY, False)):
             mcp_sources.append(connector_source)   # built in: never stored in the settings
+        mcp_sources.extend(load_app_connector_sources(globals_store))   # other apps' cards: not stored either
         plan_uses_terminal_command = any(
             str(step.get('capability', '') or '').strip() == TERMINAL_COMMAND_CAPABILITY
             for step in (plan or {}).get('steps', []) if isinstance(step, dict)
@@ -137340,6 +142958,11 @@ end run'''"""
         run = self._active_agent_run()
         if run is None:
             return
+        self._stop_agent_run(run)
+
+    def _stop_agent_run(self, run: dict):
+        """Stop for one run — the open conversation's (the Stop button) or any other one's (Broccoli's own
+        tools, 2026-11-25)."""
         # Stop outranks whatever the run waits on: an open command approval closes as
         # cancelled and a command running in the terminal is ended, which also releases
         # the step or tool call that asked for it.
@@ -137561,13 +143184,56 @@ end run'''"""
         if screen is None:
             self._show_broccoli_message(_tr("Screenshot"), _tr("No available screen found for capturing."))
             return
+        self._close_screenshot_siblings()
         overlay = ScreenshotSelectionOverlay(screen)
         overlay.screenshot_confirmed.connect(self._on_region_capture_confirmed)
         overlay.overlay_closed.connect(self._clear_region_capture_overlay)
+        overlay.selection_started.connect(lambda o=overlay: self._promote_screenshot_overlay(o))
         self._screenshot_overlay = overlay
+        # 2026-11-24 (Ryan: "我有多个外接屏，似乎都没法在别的外接屏上截屏…修复"): every other screen gets
+        # an overlay too — the area can be dragged out on any of them; the first press decides which one
+        # stays (the others close). Esc on the one under the pointer closes them all.
+        siblings = []
+        for other in QGuiApplication.screens() or []:
+            if other is screen or other.geometry() == screen.geometry():
+                continue
+            sibling = ScreenshotSelectionOverlay(other)
+            sibling.screenshot_confirmed.connect(self._on_region_capture_confirmed)
+            sibling.overlay_closed.connect(self._clear_region_capture_overlay)
+            sibling.selection_started.connect(lambda o=sibling: self._promote_screenshot_overlay(o))
+            siblings.append(sibling)
+        self._screenshot_siblings = siblings
+        for sibling in siblings:
+            sibling.show()
+            sibling.raise_()
         overlay.show()
         overlay.raise_()
         overlay.activateWindow()
+
+    def _promote_screenshot_overlay(self, overlay):
+        """A drag began on `overlay`: it is THE screenshot overlay now, the other screens' ones close."""
+        siblings = list(getattr(self, '_screenshot_siblings', []) or [])
+        current = self._screenshot_overlay
+        if overlay is current and not siblings:
+            return
+        self._screenshot_siblings = []
+        self._screenshot_overlay = overlay
+        for other in siblings + ([current] if current is not None else []):
+            if other is overlay:
+                continue
+            try:
+                other.close()       # its overlay_closed is ignored: it is not the current one any more
+            except RuntimeError:
+                pass
+
+    def _close_screenshot_siblings(self):
+        siblings = list(getattr(self, '_screenshot_siblings', []) or [])
+        self._screenshot_siblings = []
+        for sibling in siblings:
+            try:
+                sibling.close()
+            except RuntimeError:
+                pass
 
     def _clear_region_capture_overlay(self):
         # FIX-44: a PARKED dormant overlay shares this slot's signal — when the
@@ -137581,8 +143247,12 @@ end run'''"""
                 return
         if (sender is not None and self._screenshot_overlay is not None
                 and sender is not self._screenshot_overlay):
+            siblings = getattr(self, '_screenshot_siblings', None)
+            if siblings and sender in siblings:
+                siblings.remove(sender)
             return
         self._screenshot_overlay = None
+        self._close_screenshot_siblings()     # Esc / done on the current one: the other screens' go too
         self._screenshot_target_dock = None
         self._screenshot_target_panel = None
 
@@ -137915,8 +143585,10 @@ end run'''"""
         followup_path = conversation_path
         answer_text = payload.get('answer', '')
         # the model that really answered (a failover may have switched it after the heading was made)
-        answer_model_label = model_profile_label(payload.get('model') or config.get('model', ''),
-                                                 payload.get('profile_name') or config.get('profile_name', ''))
+        answer_model_label = model_profile_label(
+            payload.get('model') or config.get('model', ''),
+            payload.get('profile_name') or config.get('profile_name', ''),
+            take_mcp_sources_used(config.get('run_id', '') or run.get('run_id', '')))
         pipeline_prefix = str(config.get('pipeline_prefix', '') or '').strip()
         pipeline_heading = str(config.get('pipeline_heading', '') or '').strip()
         if pipeline_heading and answer_model_label:
@@ -138319,6 +143991,9 @@ end run'''"""
     def _on_external_agent_task_received(self, payload: dict):
         if not isinstance(payload, dict):
             return
+        if payload.get('stage') is True:
+            self._stage_external_context(payload)
+            return
         prompt = str(payload.get('prompt', '') or payload.get('instruction', '') or '').strip()
         if not prompt:
             return
@@ -138327,10 +144002,28 @@ end run'''"""
         metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
         if not self._external_task_clear_of_standby(payload, metadata):
             return     # a standby Mac ran it already, or the word of that is waited for (asked again)
+        # 2026-11-21: "thread" — requests of one source with the same thread name share ONE conversation and
+        # run in it one after another (a request without a thread is a new conversation each time, as before)
+        thread = str(payload.get('thread', '') or '').strip()[:120]
+        thread_key = (source, thread) if thread else None
+        path, made_at = self._external_threads.get(thread_key, ('', 0.0)) if thread_key else ('', 0.0)
+        if path and (conversation_write_forbidden(conversation_id_from_path(path))
+                     or (not os.path.exists(path) and time.time() - made_at > 30)):
+            path = ''     # deleted (a conversation just made is written a moment later: not "gone" yet)
+        if path:
+            if self._agent_run_for_path(path) is not None or self._external_pending.get(path):
+                self._external_pending.setdefault(path, []).append(payload)   # waits for the answer before it
+                return
+            self._start_external_request(path, payload, prompt, source, title)
+            return
         record = self._create_empty_agent_conversation_record(title, source=source, metadata=metadata)
         path = str(record.get('path', '') or '').strip()
         if not path:
+            self._write_external_reply({'id': payload.get('id'), 'thread': thread, 'reply_to': payload.get('reply_to'),
+                                        'title': title}, '', 'failed', '')
             return
+        if thread_key:
+            self._external_threads[thread_key] = (path, time.time())
         # 2026-11-17: the sender may name the group this conversation belongs in (made when missing) —
         # before the run starts, so the run already uses the group's models and autonomous switch
         try:
@@ -138340,11 +144033,89 @@ end run'''"""
         except Exception:
             logging.exception('Putting the conversation of an outside request into its group failed.')
         self._refresh_history_panel()
-        started = self._start_agent_prompt_for_conversation(path, prompt, source=source)
+        self._start_external_request(path, payload, prompt, source, record.get('title', title))
+
+    def _stage_external_context(self, payload: dict):
+        """2026-11-24 "stage": true — the sender hands over material, NOT a question (Ryan, of Watermelon's
+        Send to Broccoli: "不是要你当成问题直接发送，而是让你把选中的文字…当成背景语境，然后用户再去 broccoli 里问
+        问题"). Broccoli comes out with a blank conversation on the Agent page (it joins "group" when it is
+        first sent), the files in the attachment tray, the cursor in the prompt — nothing runs until the
+        person asks. An optional "prompt" is put in the input as a draft, not sent."""
+        attachments = []
+        for item in (payload.get('attachments') if isinstance(payload.get('attachments'), list) else [])[:20]:
+            item = os.path.expanduser(str(item or '').strip())
+            if item and os.path.isabs(item) and os.path.isfile(item):
+                attachments.append(item)
+        if not attachments and not str(payload.get('prompt', '') or '').strip():
+            return
+        group_id = ''
+        try:
+            group_id = ensure_named_conversation_group(payload.get('group')) or ''
+        except Exception:
+            logging.exception('The group of staged material could not be made.')
+        if self._is_main_window_pinned_collapsed() or not self.isVisible():
+            if self.i % 2 == 0:
+                self.i += 1
+            self.pin_a_tab()
+        elif str(getattr(self, '_edge_auto_hidden_side', '') or ''):
+            self._show_window_from_screen_edge()
+        self.start_new_conversation_in_group(group_id)      # (a blank one; ClearX empties the tray first)
+        for path in attachments:
+            self._attachment_tray.add_file(path)
+        if attachments:
+            self._attachment_tray.show_drop_hint(False)
+            self._show_tray_animated()
+        draft = str(payload.get('prompt', '') or '').strip()
+        if draft:
+            self.text1.setPlainText(draft)
+        self._bring_broccoli_forward()
+        try:
+            self.activateWindow()
+            self.text1.setFocus(Qt.FocusReason.OtherFocusReason)
+            cursor = self.text1.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.text1.setTextCursor(cursor)
+        except Exception:
+            pass
+        reply = {'id': str(payload.get('id', '') or ''), 'thread': '',
+                 'reply_to': str(payload.get('reply_to', '') or '').strip(), 'title': str(payload.get('title', '') or '')}
+        if reply['reply_to']:      # the sender may want to know it arrived
+            self._write_external_reply(reply, '', 'staged', '')
+        # 2026-11-25 "write_back" (Ryan, of Watermelon / Strawberry: "让 broccoli 在此处续写…用户输入写作需求，然后
+        # 完成之后 broccoli 内有记录，而且还自动把输出的内容 type 到对应的…位置"): the first answer in this blank
+        # conversation goes back to the sender, who types it in at the marked spot
+        write_back = payload.get('write_back')
+        if (write_back is True or isinstance(write_back, dict)) and reply['reply_to'] and reply['id'] and attachments:
+            marker = str((write_back if isinstance(write_back, dict) else {}).get('marker', '') or '').strip()[:40] or '⟦WRITE HERE⟧'
+            self._pending_write_back = {
+                'reply': reply,
+                'note': external_write_back_note(str(payload.get('source', '') or 'another app').strip()[:60],
+                                                 os.path.basename(attachments[0]), marker),
+            }
+
+    def _start_external_request(self, path: str, payload: dict, prompt: str, source: str, title: str):
+        """Run one outside request in its conversation. Optional parts (2026-11-21): "attachments" (local
+        files sent with the question) and "reply_to" (a folder the answer is written to when the run ends)."""
+        attachments = []
+        for item in (payload.get('attachments') if isinstance(payload.get('attachments'), list) else [])[:20]:
+            item = os.path.expanduser(str(item or '').strip())
+            if item and os.path.isabs(item) and os.path.isfile(item):
+                attachments.append(item)
+        reply = {'id': str(payload.get('id', '') or ''), 'thread': str(payload.get('thread', '') or '').strip()[:120],
+                 'reply_to': str(payload.get('reply_to', '') or '').strip(), 'title': str(title or '')}
+        if attachments:
+            started = self._start_agent_prompt_for_conversation(path, prompt, source=source, attachment_paths=attachments)
+        else:
+            started = self._start_agent_prompt_for_conversation(path, prompt, source=source)
         if not started:
-            self._show_agent_conversation_badge(path, status='failed', title=record.get('title', title))
+            self._show_agent_conversation_badge(path, status='failed', title=title)
             self._refresh_agent_conversation_shelf()
-        elif payload.get('show') is True:
+            self._write_external_reply(reply, path, 'failed', '')
+            self._start_next_external_request(path)
+            return
+        if reply['reply_to']:
+            self._external_replies[path] = reply
+        if payload.get('show') is True:
             # 2026-11-17: the sender asks for this conversation to be shown (the person is about to
             # talk in it) — the main window out, Broccoli forward, the conversation opened. Without
             # "show" a request stays in the background as before.
@@ -138352,6 +144123,69 @@ end run'''"""
                 self._open_circle_conversation_in_main(path)
             except Exception:
                 logging.exception('Showing the conversation of an outside request failed.')
+
+    def _start_next_external_request(self, path: str):
+        waiting = self._external_pending.get(path) or []
+        if not waiting:
+            self._external_pending.pop(path, None)
+            return
+        payload = waiting.pop(0)
+        if not waiting:
+            self._external_pending.pop(path, None)
+        prompt = str(payload.get('prompt', '') or payload.get('instruction', '') or '').strip()
+        source = str(payload.get('source', '') or 'external_automation').strip()
+        QTimer.singleShot(0, lambda: self._start_external_request(
+            path, payload, prompt, source, str(payload.get('title', '') or '').strip() or prompt))
+
+    def _external_request_released(self, run: dict, outcome: str):
+        """A run ended: if an outside request asked for its answer, write it; then the next one of its thread."""
+        config = run.get('config') if isinstance(run.get('config'), dict) else {}
+        path = str(run.get('conversation_path', '') or config.get('conversation_path', '') or '').strip()
+        if not path:
+            return
+        reply = self._external_replies.pop(path, None)
+        if reply and outcome == 'waiting_for_user' and path in self._write_back_notes:
+            # "write here", but the model asked the person something first: that question is not the text for the
+            # spot — the text comes with the answer after the person replies
+            self._external_replies[path] = reply
+            reply = None
+        else:
+            self._write_back_notes.pop(path, None)     # a "write here" note is for its first answer only
+        if reply:
+            answer = ''
+            try:
+                record = load_conversation_record(path, include_retrieval=False) or {}
+                for item in reversed(record.get('messages', []) or []):
+                    if isinstance(item, dict) and str(item.get('role', '')).strip().lower() == 'assistant':
+                        answer = str(item.get('content', '') or '')
+                        break
+            except Exception:
+                logging.exception('Reading the answer for an outside request failed.')
+            self._write_external_reply(reply, path, outcome, answer)
+        if path in self._external_pending:
+            self._start_next_external_request(path)
+
+    def _write_external_reply(self, reply: dict, path: str, status: str, answer: str):
+        """<reply_to>/<id>.json, written whole and then moved into place, on a thread of its own."""
+        folder = os.path.expanduser(str((reply or {}).get('reply_to', '') or '').strip())
+        request_id = re.sub(r'[^A-Za-z0-9._-]+', '_', str((reply or {}).get('id', '') or '').strip())[:80]
+        if not folder or not os.path.isabs(folder) or not request_id:
+            return
+        data = {'id': request_id, 'thread': str(reply.get('thread', '') or ''), 'status': str(status or ''),
+                'title': str(reply.get('title', '') or ''), 'conversation': conversation_id_from_path(path) if path else '',
+                'answer': str(answer or ''), 'finished_at': datetime.datetime.now().isoformat(timespec='seconds')}
+
+        def work():
+            try:
+                os.makedirs(folder, exist_ok=True)
+                target = os.path.join(folder, request_id + '.json')
+                with open(target + '.tmp', 'w', encoding='utf-8') as handle:
+                    json.dump(data, handle, ensure_ascii=False)
+                os.replace(target + '.tmp', target)
+            except Exception:
+                logging.exception('Writing the answer of an outside request failed.')
+
+        threading.Thread(target=work, daemon=True, name='broccoli-external-reply').start()
 
     def _on_translate_popup_request(self, payload: dict):
         selected_text = (
@@ -138466,7 +144300,7 @@ end run'''"""
             return ed
         return None
 
-    def open_reader_window(self, path):
+    def open_reader_window(self, path, page=None):
         # FIX-39: lazy singleton reader window — ONE window, one document at a
         # time (opening another file replaces the content). True top-level.
         reader = getattr(self, '_reader_window', None)
@@ -138479,8 +144313,78 @@ end run'''"""
                 reader.apply_reader_theme(dark_mode)
             except Exception:
                 pass
-        reader.open_path(path)
+        reader.open_path(path, page=page)
         return reader
+
+    # ── 🥦 menu: Editor / Reader with the conversation they go with (2026-11-25) ─────────────────────────
+    COMPANION_MENU_RECENT = 8
+
+    def fill_companion_menu(self, menu, kind: str):
+        """The submenu of 📝 Editor / 📖 Reader: the conversation open now, the latest others, a new one."""
+        menu.clear()
+        active = str(getattr(self, '_active_conversation_path', '') or '').strip()
+        active_cid = active_conversation_cid(self)
+        if active:
+            record = load_conversation_record(active, include_retrieval=False) or {}
+            title = str(record.get('title', '') or '').strip() or _tr('Untitled')
+            action = menu.addAction(_tr('Current: {title}').format(title=title))
+            action.triggered.connect(lambda _c=False, k=kind, p=active: self.open_companion_for_conversation(k, p))
+            menu.addSeparator()
+        rows = []
+        for record in conversation_history_index_records():
+            cid = str(record.get('conversation_id', '') or '')
+            if not cid or cid == active_cid:
+                continue
+            rows.append(record)
+        rows.sort(key=lambda item: str(item.get('updated_at', '') or ''), reverse=True)
+        for record in rows[:self.COMPANION_MENU_RECENT]:
+            title = str(record.get('title', '') or '').strip() or _tr('Untitled')
+            if len(title) > 48:
+                title = title[:47] + '…'
+            action = menu.addAction(title)
+            action.triggered.connect(lambda _c=False, k=kind, cid=str(record.get('conversation_id', '') or ''):
+                                     self.open_companion_for_conversation(k, resolve_conversation_path(cid)))
+        if rows:
+            menu.addSeparator()
+        action = menu.addAction(_tr('New conversation'))
+        action.triggered.connect(lambda _c=False, k=kind: self.open_companion_for_conversation(k, None))
+
+    def open_companion_for_conversation(self, kind: str, path):
+        """The main window goes to that conversation (None = a new one), then the editor / reader opens with
+        that conversation's files; a conversation that read nothing yet: choose a file to read."""
+        try:
+            self.show_main_window_from_tray()
+        except Exception:
+            pass
+        try:
+            self._select_main_tab(TAB_API)
+        except Exception:
+            pass
+        if path is None:
+            self.ClearX()
+        elif str(path or '').strip() and str(path) != str(getattr(self, '_active_conversation_path', '') or ''):
+            self._load_conversation_from_path(str(path))
+        if kind == 'editor':
+            return self.open_editor_window([])
+        binding = reader_binding_for(active_conversation_cid(self))
+        current = binding.get('current', '')
+        if current:
+            reader = self.open_reader_window(current, page=binding.get('pages', {}).get(current))
+            return reader
+        chosen = self._choose_file_to_read()
+        if not chosen:
+            return None
+        if not reader_supported_file(chosen):
+            self._show_broccoli_message(_tr('Reader'), _tr('The Reader cannot open this kind of file.'))
+            return None
+        return self.open_reader_window(chosen)
+
+    def _choose_file_to_read(self) -> str:
+        exts = sorted(READER_DOC_EXTS | READER_IMAGE_EXTS | {'.txt', '.md', '.json', '.py', '.html'})
+        pattern = ' '.join('*' + ext for ext in exts)
+        path, _filter = QFileDialog.getOpenFileName(self, _tr('Choose a file to read'), os.path.expanduser('~'),
+                                                    f'{_tr("Readable files")} ({pattern});;{_tr("All files")} (*)')
+        return str(path or '')
 
     def reader_window_if_open(self):
         reader = getattr(self, '_reader_window', None)
@@ -138827,10 +144731,22 @@ end run'''"""
         return items
 
     def _usage_strip_wanted(self) -> bool:
-        """On, a CodexBar build found, and a reading (or its error) for a shown provider."""
-        if not self._usage_bar_config()['enabled'] or not self.usage_monitor.cli_info():
+        """On, a CodexBar build found, and a reading (or its error) for a shown provider. Not
+        chosen by the user (the default): only once a shown provider has a real number."""
+        config = self._usage_bar_config()
+        if not config['enabled'] or not self.usage_monitor.cli_info():
             return False
+        if not config.get('chosen'):
+            return self._usage_strip_has_numbers()
         return any(self.usage_monitor.reading(provider) for provider in self._usage_strip_selected())
+
+    def _usage_strip_has_numbers(self) -> bool:
+        """A shown provider has a real number (not just "no reading yet" or a sign-in error)."""
+        if not hasattr(self, 'usage_monitor') or not self.usage_monitor.cli_info():
+            return False
+        mode = self._usage_bar_config()['window']
+        return any(usage_bar_pick_window(self.usage_monitor.reading(provider), mode)[0] is not None
+                   for provider in self._usage_strip_selected())
 
     def _set_usage_strip_row_visible(self, visible: bool):
         self._usage_strip_shown = bool(visible)
@@ -139034,6 +144950,12 @@ end run'''"""
         blocks = []
         try:
             block = editor_build_context_block(self)
+            if block:
+                blocks.append(block)
+        except Exception:
+            pass
+        try:
+            block = reader_build_context_block(self)     # the reader's state, the same way (2026-11-25)
             if block:
                 blocks.append(block)
         except Exception:
@@ -140368,10 +146290,10 @@ end run'''"""
         as `base`.wav), else the Mac's own recognizer (`base`.caf)."""
         model_id = local_speech_model_id_for_dictation()
         if model_id:
-            return voice_input.LocalVoiceSession(
+            return voice_live_session(voice_input.LocalVoiceSession(
                 voice_helper_path(), local_speech_engine(), model_id, voice_input_locale().split('-')[0].lower(),
                 voice_input_device(), audio_file=audio_file, save_path=(base + '.wav') if base else '',
-                parent=parent, source=source)
+                parent=parent, source=source))
         return voice_input.VoiceInputSession(
             voice_helper_path(), voice_input_locale(), voice_input_device(), audio_file=audio_file,
             save_path=(base + '.caf') if base else '', parent=parent, source=source)
@@ -140724,6 +146646,7 @@ end run'''"""
         if final and final != heard:
             messages.append({'role': 'assistant', 'content': final, 'timestamp': timestamp,
                              'source': f'{VOICE_DICTATION_SOURCE} · tidied'})
+        self._circle_record_saved_path = path       # (the words edited on the card afterwards update it)
         record = write_conversation_record(
             path,
             {
@@ -140998,6 +146921,7 @@ end run'''"""
             supplement_callback=self._handle_remote_supplement_restart,
             queue_callback=self._handle_remote_supplement_queue,
         )
+        self._remote_task_lifecycle_manager.interaction_handler = self._handle_remote_interaction_response
         transport.control_handler = self._handle_icloud_control
         transport.task_gate = self._remote_task_gate
         self._standby_desk = StandbyDesk(transport, device_options=self._remote_new_conversation_service.device_options)
@@ -141043,6 +146967,14 @@ end run'''"""
         self._guest_share_host = GuestShareHost(device_id=BROCCOLI_LOCAL_DEVICE_ID, owner_user_id=BROCCOLI_LOCAL_USER_ID)
         transport.maintenance_handlers.append(self._guest_share_host.scan)
         transport.request_terminal_handlers.append(self._guest_share_host.on_request_terminal)
+
+        def sync_memory():
+            # Poll thread: this person's memory with their other Macs (2026-11-23, Ryan: "同一个账户、
+            # 同一个人嘛，那他的这个记忆就应该是同步的"); a change here is shown through the queued signal.
+            if sync_owner_memory_with_icloud(transport.backend.root, materializer=transport.backend.materializer):
+                self.memory_synced.emit()
+
+        transport.maintenance_handlers.append(sync_memory)
         QTimer.singleShot(8000, self._ensure_shared_mac_answer_timer)   # answers to questions this person sent
         if getattr(self, '_power_state_observer', None) is None:
             self._power_state_observer = install_power_state_observer(self._on_system_power_state)
@@ -141823,6 +147755,8 @@ end run'''"""
             self._restore_send_button()
             return
         label = _tr('📥 Queue') if queue_mode else _tr('⛔️ Stop')
+        if queue_mode and self._remote_question_state()[1] is not None:
+            label = _tr('💬 Reply')          # the typed text answers the other Mac's question (2026-11-25)
         if not force and self.btn_sub1.text() == label:
             return
         try:
@@ -141948,6 +147882,11 @@ end run'''"""
             # in the prompt until the ack; never send it a second time locally.
             return True
         text = self.text1.toPlainText().strip()
+        _state, remote_question = self._remote_question_state()
+        if text and remote_question is not None and self._answer_remote_question(remote_question.get('interaction_id', ''), text):
+            self._clear_and_hide_agent_prompt_after_send()
+            self._refresh_agent_send_button_state()
+            return True
         if text and self._agent_prompt_has_request_text():
             queue_items = self._agent_queue_for_path(path)
             queue_items.append({
@@ -142001,6 +147940,8 @@ end run'''"""
             profile_line,
             error_line,
         )
+        if isinstance(card.get('question'), dict):
+            markdown_text += '\n\n' + ask_user_card_text(card['question'])
         self.render_stream_preview(markdown_text)
 
     def _clear_prompt_after_remote_ack(self):
@@ -142057,6 +147998,7 @@ end run'''"""
         service.poll_acknowledgements(clear_callback=self._clear_prompt_after_remote_ack)
         for task_id, entry in list(watch.items()):
             displayed = self._remote_task_displayed(entry)
+            known_outputs = self._remote_known_output_ids(entry) if displayed else set()
             synced = service.refresh_remote_state(task_id)
             if synced is not None:
                 self._finish_remote_task(task_id)
@@ -142064,6 +148006,9 @@ end run'''"""
                 if displayed:
                     self._restore_send_button()
                     self._load_conversation_from_path(path)
+                    # Outputs the other Mac made show here as they do there (2026-11-22, Ryan: "远程的
+                    # 电脑会自己自动打开输出块，但是远距离的终端却不会自己跳出来").
+                    self._auto_show_remote_outputs(path, known_outputs)
                 else:
                     try:
                         self._refresh_history_panel()
@@ -142089,6 +148034,24 @@ end run'''"""
                         self.text1.setPlainText(str(request.get('question', '') or ''))
         if not watch:
             self._icloud_remote_poll_timer.stop()
+
+    def _remote_known_output_ids(self, entry: dict) -> set:
+        """The outputs the conversation a remote task answers into already has here (none for a new
+        conversation): what the answer brings beyond these is new."""
+        path = str((entry or {}).get('display_path') or '')
+        if not path:
+            return set()
+        record = load_conversation_record(path, include_retrieval=False) or {}
+        return {str(item.get('id', '') or '') for item in (record.get('outputs') or []) if isinstance(item, dict)}
+
+    def _auto_show_remote_outputs(self, path: str, known_ids: set):
+        record = load_conversation_record(path, include_retrieval=False) if path else None
+        if not isinstance(record, dict) or str(record.get('path', '') or path) != str(self._active_conversation_path or ''):
+            return
+        fresh = [item for item in (record.get('outputs') or [])
+                 if isinstance(item, dict) and str(item.get('id', '') or '') not in (known_ids or set())]
+        if fresh:
+            self._auto_show_outputs_panel_for_new_outputs(fresh, visible_conversation=True)
 
     def _icloud_deferred_remote_runs_store(self) -> dict:
         store = getattr(self, '_icloud_deferred_remote_runs', None)
@@ -142162,6 +148125,17 @@ end run'''"""
         if not request or not conversation_path:
             return
         transport = getattr(self, '_icloud_task_transport', None)
+        finder = getattr(self, '_pending_user_question_for_path', None)   # (test harnesses borrow this method)
+        pending_question = finder(conversation_path) if callable(finder) else None
+        reply = str(request.get('question', '') or '').strip()
+        if pending_question is not None and reply:
+            # A step of this conversation waits for an answer (2026-11-25): the message from the iPhone (or
+            # another device) is that answer — not a new turn behind it.
+            if self.answer_user_question(pending_question.get('interaction_id', ''),
+                                         ask_user_answer_from_text(pending_question, reply), 'remote'):
+                if isinstance(transport, ICloudTaskTransport):
+                    transport._terminal_event_for_request(request, 'completed', '')
+                return
         if self._agent_run_for_path(conversation_path) is not None:
             # The conversation is busy here (a local question or an earlier remote
             # one). Run after it, like the local queue; the sender sees "queued".
@@ -142758,6 +148732,7 @@ end run'''"""
         self.trans = 0
         self._active_conversation_path = None
         self._pending_new_conversation_group_id = ''   # start_new_conversation_in_group sets it after this
+        self._cancel_pending_write_back()              # (and a stage sets a new "write here" after this)
         self._pending_model_roles = None   # models chosen for the blank conversation that was here
         self._pending_new_conversation_remote_target = None   # 🔸 New runs here again
         self._mcp_conversation_allowlist = set()
@@ -145874,6 +151849,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.external_context_enabled_checkbox.setChecked(bool(globals_store.get('external_context_enabled', True)))
         self.external_context_embedding_checkbox.setChecked(bool(globals_store.get('external_context_use_embedding', True)))
         self.mcp_tool_runtime_checkbox.setChecked(bool(globals_store.get('mcp_tool_runtime_enabled', True)))
+        self.app_mcp_service_checkbox.setChecked(bool(globals_store.get(APP_MCP_SERVICE_ENABLED_KEY, True)))
         self.external_context_limit_input.setText(str(normalize_external_context_max_chars(
             globals_store.get('external_context_max_chars', DEFAULT_EXTERNAL_CONTEXT_MAX_CHARS)
         )))
@@ -146298,6 +152274,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             'custom_prompt': serialize_custom_prompt_storage(self._prompt_records),
             'skills': serialize_skill_records(self._current_skill_records(), validate=True),
             'app_skills_disabled': self._current_app_skills_disabled(),
+            'app_connectors_disabled': self._current_app_connectors_disabled(),
             'languages': self._current_languages(),
             'always_on_top': self.checkBox_top.isChecked(),
             'editor_always_on_top': self.checkBox_editor_top.isChecked(),
@@ -146349,6 +152326,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             'external_context_enabled': self.external_context_enabled_checkbox.isChecked(),
             'external_context_use_embedding': self.external_context_embedding_checkbox.isChecked(),
             'mcp_tool_runtime_enabled': self.mcp_tool_runtime_checkbox.isChecked(),
+            APP_MCP_SERVICE_ENABLED_KEY: self.app_mcp_service_checkbox.isChecked(),
             'external_context_max_chars': normalize_external_context_max_chars(self.external_context_limit_input.text()),
             'external_context_sources': self._current_external_context_sources(),
             'code_execution_enabled': self.code_execution_enabled_checkbox.isChecked(),
@@ -146629,6 +152607,8 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             window.apply_usage_bar_settings(globals_store)
         if hasattr(window, 'apply_ai_tasks_settings'):
             window.apply_ai_tasks_settings(globals_store)
+        if hasattr(window, 'apply_app_mcp_service_settings'):
+            window.apply_app_mcp_service_settings(bool(globals_store.get(APP_MCP_SERVICE_ENABLED_KEY, True)))
         self._apply_online_memory_timer_settings()
         self._capture_baseline()
 
@@ -148999,6 +154979,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                     caller='online_memory',
                     show_error=False,
                     result_callback=after_send_wait,
+                    key_fallback=True,     # text only
                 ),
             )
 
@@ -150113,15 +156094,62 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             item.setCheckState(Qt.CheckState.Checked if record.get('enabled', True) else Qt.CheckState.Unchecked)
             item.setData(Qt.ItemDataRole.UserRole, record)
             self.external_context_list_widget.addItem(item)
+        # then the tools other apps brought (the AppConnectors folder): read only, each can be unticked
+        switched_off = set(normalize_app_connectors_disabled(
+            (self.settings_store.get('globals') or {}).get('app_connectors_disabled', [])
+            if isinstance(getattr(self, 'settings_store', None), dict) else []))
+        for card in load_app_connector_cards():
+            status = _tr('running') if card.get('running') else _tr('opened when needed')
+            detail = card.get('description') or ''
+            text = (f"{card['name']} · {_tr('from another app')}\n"
+                    + _tr('{count} tools').format(count=len(card.get('tools') or [])) + ' · ' + status
+                    + (f' · {detail}' if detail else ''))
+            item = QListWidgetItem(text)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            item.setCheckState(Qt.CheckState.Unchecked if card['id'].lower() in switched_off else Qt.CheckState.Checked)
+            item.setData(Qt.ItemDataRole.UserRole, {'app_connector_id': card['id']})
+            self.external_context_list_widget.addItem(item)
         self.external_context_delete_button.setEnabled(False)
         if hasattr(self, 'external_context_edit_button'):
             self.external_context_edit_button.setEnabled(False)
         self._external_context_updating = False
 
+    def _copy_app_mcp_setup(self):
+        """The lines another AI app's MCP settings take (Broccoli started with --mcp-stdio) → the clipboard."""
+        QApplication.clipboard().setText(broccoli_bridge_setup_json())
+        button = self.app_mcp_setup_button
+        PyQt6.QtWidgets.QToolTip.showText(
+            button.mapToGlobal(QPoint(0, button.height() + 4)),
+            _tr("Copied. Paste it into your AI app's MCP settings (for example Claude Desktop or Cursor)."), button)
+
+    @staticmethod
+    def _external_item_app_connector_id(item) -> str:
+        data = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        return str(data.get('app_connector_id', '') or '') if isinstance(data, dict) else ''
+
+    def _current_app_connectors_disabled(self) -> list:
+        """Ids of other apps' tool cards that are turned off: those unticked in the list, and those turned
+        off earlier whose card is not there right now (the app may bring it back)."""
+        listed, off = set(), []
+        for index in range(self.external_context_list_widget.count()):
+            item = self.external_context_list_widget.item(index)
+            card_id = self._external_item_app_connector_id(item).lower()
+            if not card_id:
+                continue
+            listed.add(card_id)
+            if item.checkState() != Qt.CheckState.Checked:
+                off.append(card_id)
+        stored = (self.settings_store.get('globals') or {}).get('app_connectors_disabled', []) \
+            if isinstance(getattr(self, 'settings_store', None), dict) else []
+        off.extend(name for name in normalize_app_connectors_disabled(stored) if name not in listed)
+        return normalize_app_connectors_disabled(off)
+
     def _current_external_context_sources(self) -> list[dict]:
         records = []
         for index in range(self.external_context_list_widget.count()):
             item = self.external_context_list_widget.item(index)
+            if self._external_item_app_connector_id(item):
+                continue                                   # another app's card: not one of the person's sources
             record = normalize_external_context_source_record(item.data(Qt.ItemDataRole.UserRole), index + 1)
             if record is None:
                 continue
@@ -150130,12 +156158,16 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         return records
 
     def _on_external_context_selection_changed(self, current, _previous):
-        self.external_context_delete_button.setEnabled(current is not None)
+        own = current is not None and not self._external_item_app_connector_id(current)   # a card: no Edit, no Delete
+        self.external_context_delete_button.setEnabled(own)
         if hasattr(self, 'external_context_edit_button'):
-            self.external_context_edit_button.setEnabled(current is not None)
+            self.external_context_edit_button.setEnabled(own)
 
     def _on_external_context_item_changed(self, item: QListWidgetItem):
         if self._external_context_updating or item is None:
+            return
+        if self._external_item_app_connector_id(item):
+            self._mark_dirty_if_needed()
             return
         record = normalize_external_context_source_record(item.data(Qt.ItemDataRole.UserRole), self.external_context_list_widget.row(item) + 1)
         if record is not None:
@@ -150227,7 +156259,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
 
     def _edit_external_context_source(self):
         item = self.external_context_list_widget.currentItem()
-        if item is None:
+        if item is None or self._external_item_app_connector_id(item):
             return
         row = self.external_context_list_widget.row(item)
         record = normalize_external_context_source_record(item.data(Qt.ItemDataRole.UserRole), row + 1)
@@ -150277,7 +156309,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
 
     def _delete_external_context_source(self):
         row = self.external_context_list_widget.currentRow()
-        if row < 0:
+        if row < 0 or self._external_item_app_connector_id(self.external_context_list_widget.item(row)):
             return
         self.external_context_list_widget.takeItem(row)
         if self.external_context_list_widget.count() > 0:
@@ -150627,7 +156659,9 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         scroll area, and record it for the page list and the settings search.
 
         The header stays put; only the content scrolls, so a page taller than
-        the fixed 500×760 panel scrolls instead of being squeezed."""
+        the panel (500 wide, at most 760 tall, shorter in a short main window)
+        scrolls instead of being squeezed. scrollable=False only records that
+        the page's own table fills it (every page gets the scroller)."""
         if not hasattr(self, '_settings_pages_meta'):
             self._settings_pages_meta = {}
         frame = QWidget()
@@ -150649,36 +156683,38 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             header_layout.addWidget(hint_label)
         frame_layout.addWidget(header)
         scroll = None
-        if scrollable:
-            # 页宽恒等于可视宽度（第 1 页内容的最小宽度提示 636px > 可视 444px，
-            # 默认滚动区会撑宽并裁掉右侧），页高取该宽度下的最小高度，见
-            # SettingsPageScrollArea。
-            scroll = SettingsPageScrollArea(frame)
-            scroll.setFrameShape(QFrame.Shape.NoFrame)
-            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            scroll.setStyleSheet(settings_scroll_area_style())
-            keep_scroll_bar_knob(scroll, getattr(self, '_force_dark', False) or is_dark_theme(app))
-            scroll.viewport().setAutoFillBackground(False)
-            page.setAutoFillBackground(False)
-            scroll.setWidget(page)
-            frame_layout.addWidget(scroll, 1)
-            # 页面能滚动时给内容右侧让出 12px：系统滚动条（样式书 5.9）滚动时浮在内容上，
-            # 滑块不压住输入框右边框；"始终显示滚动条"时系统自己会把内容区让窄，不再多让。
-            # 不滚动的页面布局不变。
-            page_layout = page.layout()
-            if page_layout is not None:
-                base_margins = page_layout.contentsMargins()
+        # Pages whose list or table fills the page (scrollable=False) get the same scroller since
+        # 2026-11-22: when the page fits it is exactly as tall as the view, so the table still fills
+        # it; only when the panel is shorter than the page needs (the main window on a small or
+        # scaled screen) does it scroll — before, those pages pushed Save below the panel's bottom.
+        # Ryan: "分辨率调大了之后这个设置窗口会变得无比大，save 按钮到看不见的下面去了".
+        # 页宽恒等于可视宽度（第 1 页内容的最小宽度提示 636px > 可视 444px，
+        # 默认滚动区会撑宽并裁掉右侧），页高取该宽度下的最小高度，见
+        # SettingsPageScrollArea。
+        scroll = SettingsPageScrollArea(frame, table_page=not scrollable)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(settings_scroll_area_style())
+        keep_scroll_bar_knob(scroll, getattr(self, '_force_dark', False) or is_dark_theme(app))
+        scroll.viewport().setAutoFillBackground(False)
+        page.setAutoFillBackground(False)
+        scroll.setWidget(page)
+        frame_layout.addWidget(scroll, 1)
+        # 页面能滚动时给内容右侧让出 12px：系统滚动条（样式书 5.9）滚动时浮在内容上，
+        # 滑块不压住输入框右边框；"始终显示滚动条"时系统自己会把内容区让窄，不再多让。
+        # 不滚动的页面布局不变。
+        page_layout = page.layout()
+        if page_layout is not None:
+            base_margins = page_layout.contentsMargins()
 
-                def reserve_scrollbar_gutter(_minimum, maximum, layout=page_layout, base=base_margins, area=scroll):
-                    bar = area.verticalScrollBar()
-                    floating = bool(area.style().styleHint(QStyle.StyleHint.SH_ScrollBar_Transient, None, bar))
-                    right = base.right() + (12 if maximum > 0 and floating else 0)
-                    if layout.contentsMargins().right() != right:
-                        layout.setContentsMargins(base.left(), base.top(), right, base.bottom())
+            def reserve_scrollbar_gutter(_minimum, maximum, layout=page_layout, base=base_margins, area=scroll):
+                bar = area.verticalScrollBar()
+                floating = bool(area.style().styleHint(QStyle.StyleHint.SH_ScrollBar_Transient, None, bar))
+                right = base.right() + (12 if maximum > 0 and floating else 0)
+                if layout.contentsMargins().right() != right:
+                    layout.setContentsMargins(base.left(), base.top(), right, base.bottom())
 
-                scroll.verticalScrollBar().rangeChanged.connect(reserve_scrollbar_gutter)
-        else:
-            frame_layout.addWidget(page, 1)
+            scroll.verticalScrollBar().rangeChanged.connect(reserve_scrollbar_gutter)
         self._settings_pages_meta.setdefault(int(category), []).append({
             'category': int(category),
             'title': title,
@@ -152191,6 +158227,25 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         explain.setStyleSheet(caption)
         layout.addWidget(explain)
         layout.addSpacing(6)
+        # the sound before a downloaded model hears it (2026-11-21): three switches
+        sound_title = QLabel(_tr('Sound for the downloaded speech models'), self)
+        layout.addWidget(sound_title)
+        self.voice_sound_detector_checkbox = QCheckBox(_tr('Find the speech with a voice detector'), self)
+        self.voice_sound_gain_checkbox = QCheckBox(_tr('Make quiet sound louder'), self)
+        self.voice_sound_denoise_checkbox = QCheckBox(_tr('Remove noise such as typing'), self)
+        for box in (self.voice_sound_detector_checkbox, self.voice_sound_gain_checkbox, self.voice_sound_denoise_checkbox):
+            box.toggled.connect(self._mark_dirty_if_needed)
+            layout.addWidget(box)
+        sound_explain = QLabel(_tr(
+            'These work on the sound before Qwen3, SenseVoice or Whisper hears it; Apple Speech listens by itself '
+            'and is not changed. The voice detector hears quiet and far-away voices that a loudness threshold '
+            'misses. Removing noise helps when you type while you speak; it needs the voice detector, and it '
+            'can cost a little accuracy on clean sound. A saved recording keeps the sound as the microphone '
+            'gave it.'), self)
+        sound_explain.setWordWrap(True)
+        sound_explain.setStyleSheet(caption)
+        layout.addWidget(sound_explain)
+        layout.addSpacing(6)
         self.voice_tidy_checkbox = QCheckBox(_tr('Tidy what was heard with the default chat model'), self)
         self.voice_tidy_checkbox.toggled.connect(self._mark_dirty_if_needed)
         layout.addWidget(self.voice_tidy_checkbox)
@@ -152535,6 +158590,9 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
             VOICE_INPUT_DEVICE_NAME_KEY: name if device else '',
             VOICE_INPUT_LANGUAGE_KEY: str(self.voice_language_combo.currentData() or ''),
             VOICE_INPUT_TIDY_KEY: self.voice_tidy_checkbox.isChecked(),
+            VOICE_SOUND_DETECTOR_KEY: self.voice_sound_detector_checkbox.isChecked(),
+            VOICE_SOUND_GAIN_KEY: self.voice_sound_gain_checkbox.isChecked(),
+            VOICE_SOUND_DENOISE_KEY: self.voice_sound_denoise_checkbox.isChecked(),
             VOICE_INPUT_TIDY_PROMPTS_KEY: normalize_voice_tidy_prompts(self._voice_prompts),
             VOICE_INPUT_TIDY_PROMPT_KEY: self._voice_prompt_in_use(),
             VOICE_INPUT_CIRCLE_COPY_KEY: self.voice_circle_copy_checkbox.isChecked(),
@@ -152548,6 +158606,9 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self._fill_voice_language_combo(str(globals_store.get(VOICE_INPUT_LANGUAGE_KEY, '') or ''))
         self._fill_voice_device_combo(device, self._voice_stored_device_name)
         self.voice_tidy_checkbox.setChecked(bool(globals_store.get(VOICE_INPUT_TIDY_KEY, False)))
+        self.voice_sound_detector_checkbox.setChecked(bool(globals_store.get(VOICE_SOUND_DETECTOR_KEY, True)))
+        self.voice_sound_gain_checkbox.setChecked(bool(globals_store.get(VOICE_SOUND_GAIN_KEY, True)))
+        self.voice_sound_denoise_checkbox.setChecked(bool(globals_store.get(VOICE_SOUND_DENOISE_KEY, False)))
         self.voice_circle_copy_checkbox.setChecked(bool(globals_store.get(VOICE_INPUT_CIRCLE_COPY_KEY, True)))
         self.voice_circle_history_checkbox.setChecked(bool(globals_store.get(VOICE_INPUT_CIRCLE_HISTORY_KEY, True)))
         self._voice_form_loading = True
@@ -152916,7 +158977,19 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
 
     def _load_usage_bar_form(self, globals_store: dict):
         config = usage_bar_config_from_globals(globals_store)
-        self.usage_bar_checkbox.setChecked(config['enabled'])
+        # not chosen yet: the box shows what the window does (ticked once a provider has numbers);
+        # Save writes a choice only when the user changed the box (_current_usage_bar_settings)
+        choice = usage_bar_enabled_choice(globals_store)
+        if choice is None:
+            monitor = self._usage_monitor()
+            shown = usage_bar_state_has_numbers(globals_store, monitor.state if monitor is not None
+                                                else load_usage_bar_cache())
+        else:
+            shown = choice
+        self._usage_bar_enabled_loaded = (choice, bool(shown))
+        self.usage_bar_checkbox.blockSignals(True)
+        self.usage_bar_checkbox.setChecked(bool(shown))
+        self.usage_bar_checkbox.blockSignals(False)
         self._usage_bar_colors_form = dict(config['colors'])
         self._fill_usage_provider_combos(usage_bar_selected_providers(
             {'usage_bar_providers': config['providers']}, self._usage_available_providers()))
@@ -152934,8 +159007,15 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         selected = self._usage_selected_in_form()
         colors = dict(self._usage_bar_colors_form)
         colors.update(self._usage_form_colors())   # a shown provider keeps the color it showed with
+        loaded_choice, loaded_shown = getattr(self, '_usage_bar_enabled_loaded', (None, False))
+        ticked = self.usage_bar_checkbox.isChecked()
+        if ticked != loaded_shown:
+            choice, chosen = ticked, True                       # the user's own choice from now on
+        else:
+            choice, chosen = loaded_choice, loaded_choice is not None
         return {
-            USAGE_BAR_ENABLED_KEY: self.usage_bar_checkbox.isChecked(),
+            USAGE_BAR_ENABLED_KEY: choice,
+            USAGE_BAR_ENABLED_CHOSEN_KEY: chosen,
             'usage_bar_providers': selected,
             'usage_bar_window': normalize_usage_bar_window(self.usage_bar_window_combo.currentData()),
             'usage_bar_display': normalize_usage_bar_display(self.usage_bar_display_combo.currentData()),
@@ -154691,6 +160771,16 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.external_context_enabled_checkbox = QCheckBox(_tr('Use external context / MCP sources'), self)
         self.external_context_embedding_checkbox = QCheckBox(_tr('Use embedding for external context when long'), self)
         self.mcp_tool_runtime_checkbox = QCheckBox(_tr('Allow MCP tools during chat (confirm write / non-read-only calls)'), self)
+        # Broccoli's own tools for other AI apps (2026-11-24): the family card + the bridge; the button copies
+        # the lines an AI app's MCP settings take
+        self.app_mcp_service_checkbox = QCheckBox(_tr("Let other AI apps use Broccoli's tools (MCP)"), self)
+        self.app_mcp_service_checkbox.setToolTip(_tr(
+            'AI apps that support MCP (Claude Desktop, Cursor, …) can then read and manage your conversations, '
+            'models, memory and scheduled tasks — and the tools of your other apps on this Mac. '
+            'Copy setup gives the lines to paste into that app.'))
+        self.app_mcp_service_checkbox.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.app_mcp_setup_button = MacNormalButton(_tr('Copy setup'), self)
+        self.app_mcp_setup_button.clicked.connect(self._copy_app_mcp_setup)
         self.external_context_limit_input = QLineEdit(self)
         self.external_context_limit_input.setPlaceholderText(str(DEFAULT_EXTERNAL_CONTEXT_MAX_CHARS))
         self.external_context_limit_input.setFixedHeight(22)
@@ -155223,6 +161313,13 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         general_page_3_layout.addWidget(self.external_context_enabled_checkbox)
         general_page_3_layout.addWidget(self.external_context_embedding_checkbox)
         general_page_3_layout.addWidget(self.mcp_tool_runtime_checkbox)
+        app_mcp_row = QWidget()
+        app_mcp_row_layout = QHBoxLayout(app_mcp_row)
+        app_mcp_row_layout.setContentsMargins(0, 0, 0, 0)
+        app_mcp_row_layout.setSpacing(8)
+        app_mcp_row_layout.addWidget(self.app_mcp_service_checkbox, 1)
+        app_mcp_row_layout.addWidget(self.app_mcp_setup_button)
+        general_page_3_layout.addWidget(app_mcp_row)
         general_page_3_layout.addWidget(external_limit_row)
         general_page_3_layout.addWidget(QLabel(_tr('External context / MCP sources')))
         general_page_3_layout.addWidget(self.external_context_list_widget, 1)
@@ -156595,6 +162692,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         self.external_context_enabled_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.external_context_embedding_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.mcp_tool_runtime_checkbox.toggled.connect(self._mark_dirty_if_needed)
+        self.app_mcp_service_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.code_execution_enabled_checkbox.toggled.connect(self._mark_dirty_if_needed)
         self.external_context_list_widget.currentItemChanged.connect(self._mark_dirty_if_needed)
         self.external_context_list_widget.itemChanged.connect(self._mark_dirty_if_needed)
@@ -156706,6 +162804,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 'custom_prompt': serialize_custom_prompt_storage(self._prompt_records),
                 'skills': serialize_skill_records(self._current_skill_records(), validate=False),
                 'app_skills_disabled': self._current_app_skills_disabled(),
+                'app_connectors_disabled': self._current_app_connectors_disabled(),
                 'languages': self._current_languages(),
                 'always_on_top': self.checkBox_top.isChecked(),
                 'editor_always_on_top': self.checkBox_editor_top.isChecked(),
@@ -156771,6 +162870,7 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
                 'external_context_enabled': self.external_context_enabled_checkbox.isChecked(),
                 'external_context_use_embedding': self.external_context_embedding_checkbox.isChecked(),
                 'mcp_tool_runtime_enabled': self.mcp_tool_runtime_checkbox.isChecked(),
+                APP_MCP_SERVICE_ENABLED_KEY: self.app_mcp_service_checkbox.isChecked(),
                 'external_context_max_chars': normalize_external_context_max_chars(self.external_context_limit_input.text()),
                 'external_context_sources': self._current_external_context_sources(),
                 'code_execution_enabled': self.code_execution_enabled_checkbox.isChecked(),
@@ -157056,7 +163156,9 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
     def adopt_saved_memory_text(self):
         """Permanent memory changed on disk (the memory tool, /remember): show it here too, unless
         the user has unsaved memory edits in the panel (then their Save decides)."""
-        fresh = str((load_settings_store().get('globals') or {}).get('memory_text', '') or '')
+        fresh_globals = load_settings_store().get('globals') or {}
+        self._adopt_saved_memory_items(fresh_globals.get('memory_items', []))
+        fresh = str(fresh_globals.get('memory_text', '') or '')
         base = str((self._settings_globals_baseline or {}).get('memory_text', '') or '')
         if fresh == base or self.memory_text_edit.toPlainText() != base:
             return
@@ -157071,6 +163173,28 @@ class SettingsPanel(SmoothPanelWidget):  # Customization settings
         snapshot_globals = (self._baseline_snapshot or {}).get('globals')
         if isinstance(snapshot_globals, dict):
             snapshot_globals['memory_text'] = self.memory_text_edit.toPlainText()
+        self._mark_dirty_if_needed()
+
+    def _adopt_saved_memory_items(self, fresh_items):
+        """The dated memory notes changed on disk (a sync from another Mac): show them, unless the
+        list here has unsaved edits (then Save merges them)."""
+        if not hasattr(self, 'memory_list_widget') or self._settings_globals_baseline is None:
+            return
+        fresh = normalize_memory_item_records(fresh_items)
+        base = normalize_memory_item_records(self._settings_globals_baseline.get('memory_items', []))
+        if fresh == base or self._current_memory_items() != base:
+            return
+        was_updating = self._updating_form
+        self._updating_form = True
+        try:
+            self._set_memory_items(fresh)
+        finally:
+            self._updating_form = was_updating
+        self._settings_globals_baseline['memory_items'] = copy.deepcopy(fresh)
+        self.settings_store.setdefault('globals', {})['memory_items'] = copy.deepcopy(fresh)
+        snapshot_globals = (self._baseline_snapshot or {}).get('globals')
+        if isinstance(snapshot_globals, dict) and 'memory_items' in snapshot_globals:
+            snapshot_globals['memory_items'] = self._current_memory_items()
         self._mark_dirty_if_needed()
 
     def reload_from_store(self):
@@ -166380,6 +172504,66 @@ def editor_planner_note(main_window):
     )
 
 
+# ── the reader's state in a question, like the editor's (2026-11-25) ──────────────────────────────────
+# Ryan: "编辑器状态和阅读器状态，两个应该是一样的，就是同时加在这个里面作为状态的一个写法加进去". While the Reader is
+# open, each question carries what it shows: the file (its path), the page and that page's text (cut short).
+# The file is not attached: the model reads it from its path only when the question needs more than the page.
+READER_CONTEXT_PAGE_CHARS = 4000
+READER_CONTEXT_SHEET_ROWS = 60
+
+
+def _reader_visible_document(main_window):
+    try:
+        reader = main_window.reader_window_if_open()
+    except Exception:
+        reader = None
+    doc = getattr(reader, '_doc', None) if reader is not None else None
+    if doc is None or not str(getattr(doc, 'path', '') or ''):
+        return None, None, -1
+    pages = list(getattr(doc, 'pages', None) or [])
+    index = int(getattr(getattr(reader, 'view', None), '_current', 0) or 0)
+    return reader, doc, (index if 0 <= index < len(pages) else -1)
+
+
+def reader_planner_note(main_window):
+    """One line for the planner (GUI thread): the Reader is open on this file."""
+    _reader, doc, index = _reader_visible_document(main_window)
+    if doc is None:
+        return ''
+    total = len(doc.pages or [])
+    where = ' (page %d / %d)' % (index + 1, total) if total > 1 and index >= 0 else ''
+    return ('Reader status: the Broccoli Reader window is OPEN on %s%s. The text of the page it shows is in the '
+            'answer step\'s context; "this page" / "what I am reading" means it. Plan steps that read the file only '
+            'when more than that page is needed.' % (os.path.abspath(doc.path), where))
+
+
+def reader_build_context_block(main_window):
+    """The Reader's state for the model (GUI thread): file, page, the page's text (excerpt)."""
+    _reader, doc, index = _reader_visible_document(main_window)
+    if doc is None:
+        return ''
+    path = os.path.abspath(doc.path)
+    pages = list(doc.pages or [])
+    page = pages[index] if index >= 0 else None
+    lines = ['=== Reader window (the document the user is reading) ===',
+             'File: %s  [%s]' % (os.path.basename(path) or path, path),
+             'Kind: %s' % str(getattr(doc, 'kind', '') or '')]
+    if len(pages) > 1 and page is not None:
+        label = str(getattr(page, 'label', '') or '').strip()
+        lines.append('Page shown: %d / %d%s' % (index + 1, len(pages), (' — ' + label) if label else ''))
+    text = str(getattr(page, 'plain_text', '') or '') if page is not None else ''
+    if not text.strip() and page is not None and isinstance(getattr(page, 'rows', None), list):
+        text = '\n'.join('\t'.join(str(cell) for cell in (row or [])) for row in page.rows[:READER_CONTEXT_SHEET_ROWS])
+    if text.strip():
+        lines.append('Text of the page shown (excerpt):')
+        lines.append(_editor_fenced_block(text, max_lines=200, max_chars=READER_CONTEXT_PAGE_CHARS))
+    else:
+        lines.append('The page shown has no text (a picture or a scan).')
+    lines.append('The file is NOT attached. "This page", "here" or "what I am reading" means the page above; read '
+                 'the file from its path only when the request needs more than this page.')
+    return '\n'.join(lines)
+
+
 def editor_build_context_block(main_window):
     editor = _editor_visible_window(main_window)
     if editor is None:
@@ -169165,6 +175349,78 @@ def reader_supported_file(path):
         return False
 
 
+# ── the reader remembers each conversation's files (2026-11-25, like the editor's FIX-3 bindings) ──────
+# Ryan: the editor and the reader in the 🥦 menu, each choosing the conversation it goes with; the reader
+# follows the conversation as the editor does: its files (at most READER_BINDING_MAX_FILES), the one open, the
+# page each was at. Keyed by conversation id; the unsaved new conversation keeps nothing.
+READER_BINDING_MAX_FILES = 10
+
+
+def _reader_bindings_path():
+    return os.path.join(EDITOR_DATA_DIR, 'reader_conversations.json')
+
+
+def reader_load_conversation_bindings() -> dict:
+    try:
+        with open(_reader_bindings_path(), 'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def reader_save_conversation_bindings(bindings: dict) -> bool:
+    try:
+        os.makedirs(EDITOR_DATA_DIR, exist_ok=True)
+        tmp = _reader_bindings_path() + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as handle:
+            json.dump(bindings if isinstance(bindings, dict) else {}, handle, ensure_ascii=False, indent=1)
+        os.replace(tmp, _reader_bindings_path())
+        return True
+    except Exception:
+        logging.exception('The reader\'s conversation list could not be saved.')
+        return False
+
+
+def reader_binding_for(cid: str) -> dict:
+    binding = reader_load_conversation_bindings().get(str(cid or '')) if cid else None
+    if not isinstance(binding, dict):
+        return {}
+    files = [str(path) for path in (binding.get('files') or []) if reader_supported_file(str(path))]
+    current = str(binding.get('current', '') or '')
+    if current not in files:
+        current = files[-1] if files else ''
+    pages = binding.get('pages') if isinstance(binding.get('pages'), dict) else {}
+    return {'files': files, 'current': current, 'pages': {k: int(v) for k, v in pages.items() if isinstance(v, int)}}
+
+
+def reader_record_binding(cid: str, path: str, page: int | None = None) -> None:
+    """The file (and its page) read in this conversation."""
+    if not cid or not path:
+        return
+    bindings = reader_load_conversation_bindings()
+    binding = bindings.get(cid) if isinstance(bindings.get(cid), dict) else {}
+    files = [item for item in (binding.get('files') or []) if item != path] + [path]
+    pages = binding.get('pages') if isinstance(binding.get('pages'), dict) else {}
+    if page is not None:
+        pages[path] = int(page)
+    files = files[-READER_BINDING_MAX_FILES:]
+    bindings[cid] = {'files': files, 'current': path, 'pages': {k: v for k, v in pages.items() if k in files},
+                     'at': datetime.datetime.now().isoformat(timespec='seconds')}
+    reader_save_conversation_bindings(bindings)
+
+
+def active_conversation_cid(main) -> str:
+    """The id of the conversation open in the main window ('' for a new one not sent yet)."""
+    path = str(getattr(main, '_active_conversation_path', '') or '').strip()
+    if not path:
+        return ''
+    try:
+        return conversation_id_for_reference(path) or Path(path).stem
+    except Exception:
+        return ''
+
+
 def _reader_prefs_path():
     return os.path.join(READER_DATA_DIR, 'prefs.json')
 
@@ -170901,6 +177157,15 @@ class ReaderWindow(QWidget):
         self._load_workers = []
         self._prefs = reader_prefs_load()
         self._orientation_before_translate = None
+        self._bound_cid = None            # the conversation whose files are shown (2026-11-25)
+        self._restore_page = {}           # path → page to go to once it is loaded
+        self._page_save_timer = QTimer(self)
+        self._page_save_timer.setSingleShot(True)
+        self._page_save_timer.setInterval(600)
+        self._page_save_timer.timeout.connect(self._record_page)
+        self._follow_timer = QTimer(self)
+        self._follow_timer.setInterval(800)
+        self._follow_timer.timeout.connect(self.sync_conversation_binding)
         self._dock_anim = None
         self._main_move_anim = None
         try:
@@ -170977,9 +177242,39 @@ class ReaderWindow(QWidget):
         self.panel.auto_translate = bool(self._prefs.get('auto_translate'))
         self.panel._update_controls()
 
+    # ---- the conversation it goes with (2026-11-25) ----
+    def sync_conversation_binding(self):
+        """The main window opened another conversation: show the file read last in it (where it was left);
+        a conversation that read nothing here leaves the reader as it is."""
+        cid = active_conversation_cid(self._main)
+        if cid == self._bound_cid:
+            return
+        self._bound_cid = cid
+        binding = reader_binding_for(cid)
+        current = binding.get('current', '')
+        if current and (self._doc is None or os.path.abspath(self._doc.path) != os.path.abspath(current)):
+            self.open_path(current, page=binding.get('pages', {}).get(current), activate=False, remember=False)
+
+    def _record_page(self):
+        doc = self._doc
+        if doc is not None and self._bound_cid:
+            reader_record_binding(self._bound_cid, os.path.abspath(doc.path), int(getattr(self.view, '_current', 0) or 0))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._follow_timer.start()
+
     # ---- open / load (generation token: a newer open supersedes the load) ----
-    def open_path(self, path):
+    def open_path(self, path, page=None, activate=True, remember=True):
         path = os.path.abspath(str(path or ''))
+        if remember:
+            # opened by the person: it belongs to the conversation open now (and opens where it was left)
+            self._bound_cid = active_conversation_cid(self._main)
+            if page is None:
+                page = reader_binding_for(self._bound_cid).get('pages', {}).get(path)
+            reader_record_binding(self._bound_cid, path, page)
+        if page is not None:
+            self._restore_page[path] = int(page)
         self._load_generation += 1
         generation = self._load_generation
         self.panel.stop_workers()
@@ -171014,8 +177309,9 @@ class ReaderWindow(QWidget):
         if not self.isVisible():
             self.position_beside_main()   # same dock as the editor
             self.show()
-        self.raise_()
-        self.activateWindow()
+        if activate:
+            self.raise_()
+            self.activateWindow()
 
     def position_beside_main(self, animated=False):
         """Re-dock (SIZE + POSITION) — the same dock as the editor: as tall as the main
@@ -171070,11 +177366,14 @@ class ReaderWindow(QWidget):
             self._orientation_before_translate = orientation
             orientation = 'vertical'
         self.view.set_document(doc, orientation)
+        page = self._restore_page.pop(os.path.abspath(doc.path), None)
+        if page:
+            self.view.go_to(page)
         self.panel.attach_document(doc.path)
         self.title_lbl.setText(os.path.basename(doc.path))
         note = doc.note or (doc.pages[0].note if doc.pages else '')
         self.title_lbl.setToolTip((doc.path + ('\n' + note if note else '')))
-        self._on_page_changed(0)
+        self._on_page_changed(int(getattr(self.view, '_current', 0) or 0))
         self.apply_reader_theme(self._dark_mode)
 
     def _position_initial(self):
@@ -171092,6 +177391,8 @@ class ReaderWindow(QWidget):
     # ---- paging / translate plumbing ----
     def _on_page_changed(self, index):
         doc = self._doc
+        if doc is not None and self._bound_cid:
+            self._page_save_timer.start()     # where it is read up to, for this conversation
         total = len(doc.pages) if doc else 0
         label = doc.pages[index].label if doc and 0 <= index < total else ''
         self.page_lbl.setText('%d / %d' % (index + 1, total) if total > 1 else label)
@@ -171187,6 +177488,7 @@ class ReaderWindow(QWidget):
 
     def hideEvent(self, event):
         self.panel.stop_workers()
+        self._follow_timer.stop()
         super().hideEvent(event)
 
     # ---- theme ----
@@ -171704,6 +178006,8 @@ def _install_liquid_glass_surfaces():
 
 
 _install_liquid_glass_surfaces()
+_DIALOG_PLACEMENT_FILTER = _DialogPlacementFilter(app)
+app.installEventFilter(_DIALOG_PLACEMENT_FILTER)
 # The system's traffic lights (style book 5.7.2): the compact transparent title bar is set just
 # before each show — installed after the glass, so it runs first. (Background vision toasts set it
 # themselves: they are utility panels, see BackgroundVisionToast._setup_native_window.)
@@ -171796,6 +178100,9 @@ if __name__ == '__main__':
     action1.triggered.connect(w1.activate)
     action2.triggered.connect(w2.activate)
     action3.triggered.connect(w3.show_main_window_from_tray)
+    for _companion_menu, _companion_kind in ((companion_editor_menu, 'editor'), (companion_reader_menu, 'reader')):
+        w3.fill_companion_menu(_companion_menu, _companion_kind)       # never empty (a native submenu needs items)
+        _companion_menu.aboutToShow.connect(lambda m=_companion_menu, k=_companion_kind: w3.fill_companion_menu(m, k))
     action4.triggered.connect(w3.show_settings_panel)
     action7.triggered.connect(w3.toggle_show_on_all_spaces)
     action11.toggled.connect(w3.toggle_external_target_debug_page)

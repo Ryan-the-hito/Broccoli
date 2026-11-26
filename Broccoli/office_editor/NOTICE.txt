@@ -1,0 +1,195 @@
+NOTICE
+======
+
+This product is a derivative work of ONLYOFFICE.
+
+The site (https://edit.chaxus.com/, https://github.com/ranuts/document) is
+licensed under the GNU Affero General Public License version 3 -- see LICENSE.
+It embeds the ONLYOFFICE document editors, which are distributed under the same
+license with the additional terms permitted by Section 7 of the GNU AGPL. The
+received upstream notice is reproduced verbatim below for provenance. Valid
+additional terms remain applicable; the logo-retention term is addressed
+separately below rather than adopted as a downstream requirement.
+
+
+1. ONLYOFFICE editors (sdkjs, web-apps)
+---------------------------------------
+
+Copyright (C) Ascensio System SIA. All rights reserved.
+https://www.onlyoffice.com/
+
+Upstream sources:
+  https://github.com/ONLYOFFICE/sdkjs
+  https://github.com/ONLYOFFICE/web-apps
+
+Version shipped in this repository: 9.3.0.133 (build:1), under public/sdkjs/
+and public/web-apps/. It is a third-party compiled offline build of those two
+projects; the corresponding source is the 9.3.0 release of the repositories
+above.
+
+The notice carried by the upstream source files, reproduced in full:
+
+    (c) Copyright Ascensio System SIA 2010-2024
+
+    This program is a free software product. You can redistribute it and/or
+    modify it under the terms of the GNU Affero General Public License (AGPL)
+    version 3 as published by the Free Software Foundation. In accordance with
+    Section 7(a) of the GNU AGPL its Section 15 shall be amended to the effect
+    that Ascensio System SIA expressly excludes the warranty of non-infringement
+    of any third-party rights.
+
+    This program is distributed WITHOUT ANY WARRANTY; without even the implied
+    warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR  PURPOSE. For
+    details, see the GNU AGPL at: http://www.gnu.org/licenses/agpl-3.0.html
+
+    You can contact Ascensio System SIA at 20A-6 Ernesta Birznieka-Upish
+    street, Riga, Latvia, EU, LV-1050.
+
+    The  interactive user interfaces in modified source and object code versions
+    of the Program must display Appropriate Legal Notices, as required under
+    Section 5 of the GNU AGPL version 3.
+
+    Pursuant to Section 7(b) of the License you must retain the original Product
+    logo when distributing the program. Pursuant to Section 7(e) we decline to
+    grant you any rights under trademark law for use of our trademarks.
+
+    All the Product's GUI elements, including illustrations and icon sets, as
+    well as technical writing content are licensed under the terms of the
+    Creative Commons Attribution-ShareAlike 4.0 International. See the License
+    terms at http://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+
+Neutral presentation and retained legal notices (2026-09-26)
+-----------------------------------------------------------
+
+The interface uses descriptive functional names without project or upstream
+product logos, promotional branding, or ecosystem advertising. The editor's
+About pane stays reachable, retains the upstream version and publisher, and
+adds copyright attribution, a modified-version notice, the warranty disclaimer,
+license and source links. Site footers retain the trademark attribution and
+non-affiliation notice. Source copyright headers are not removed.
+
+The upstream notice reproduced above requires retention of the original product
+logo. In its statement of 15 April 2026, the Free Software Foundation identified
+that requirement as an AGPLv3-incompatible further restriction removable under
+Section 7:
+  https://www.fsf.org/blogs/licensing/agpl-is-not-a-tool-for-taking-freedom-away
+
+This project relies on that interpretation in omitting product-logo displays.
+The quoted upstream notice is kept as a record of the terms received, not an
+assertion that logo retention is a valid obligation for downstream recipients.
+ONLYOFFICE has asserted a different interpretation; its position is available at:
+  https://www.onlyoffice.com/license-faq
+
+The FSF statement is a license interpretation, not a court judgment. This
+branding decision does not claim that the dispute is judicially resolved or
+that removing logos alone satisfies all copyright, source-distribution or
+trademark obligations. Other valid additional terms and third-party licenses
+remain unaffected, including the GUI material's CC BY-SA 4.0 license.
+
+lib/onlyoffice/guards/chrome.ts hides the header and About product marks,
+independently of the legal text. Vendor entry HTML has matching styles to avoid
+showing those marks during startup, neutral titles and no branded favicon.
+lib/onlyoffice-editor.ts keeps About enabled, and
+lib/onlyoffice/guards/about-source.ts provides the legal and source links.
+test/unit/branding-notice.test.ts and test/e2e/vendor-branding.spec.ts verify
+neutral presentation alongside accessible legal attribution.
+
+Section 7(e) -- trademarks. ONLYOFFICE and the ONLYOFFICE logo are trademarks
+of Ascensio System SIA. No rights under trademark law are granted by the
+license, and none are claimed here. This project is not an official ONLYOFFICE
+product and is not affiliated with, sponsored by or endorsed by Ascensio System
+SIA. The name is used only to identify the engine this site is built on.
+
+Section 5(a) -- modifications. The vendor tree under public/ is not pristine.
+The changes made to it are:
+
+  * public/sdkjs/common/wasm/x2t/x2t_helper.js -- patched to load the x2t
+    WebAssembly module through `Module.instantiateWasm` straight off the
+    response, so the 42 MB binary is never materialised in memory, and to
+    report load failures to the host page. Also made to run in a worker as
+    well as in the editor frame (it branches on `typeof document` in three
+    places), so conversion happens in a realm whose memory can be handed
+    back. See docs/changelogs/2026-08-20-issue-144-memory-and-delivery.md and
+    docs/explorations/2026-09-12-x2t-in-a-worker.md. Modified 2026-09-26 to
+    send exported file bytes only to the immediate parent; outer ancestors
+    no longer receive an unsolicited copy.
+  * public/sdkjs/common/wasm/x2t/x2t.worker.js -- added by this project. It
+    loads the file above and drives it; no vendor code is reimplemented in it.
+  * public/sdkjs/common/wasm/x2t/x2t.wasm -- published brotli-compressed only
+    (x2t.wasm.br), because the uncompressed file exceeds the host's per-file
+    limit; every host declares `Content-Encoding: br` for it, so the browser
+    decodes it. The decompressed bytes are unmodified and pinned by sha256 in
+    test/unit/vendor-contract.test.ts.
+  * public/sdkjs/common/Images/fonts_thumbnail*.png and *.png.bin -- the font
+    picker's name sprites, extended from 193 tiles to 202 so every family in
+    the catalog has one. The vendor's own tiles are untouched; the nine added
+    are rendered by bin/font-thumbnails.mjs. Without them the editor threw on
+    scrolling the font list to the end (GitHub #218).
+  * public/web-apps/apps/*/main/locale/*.json -- missing keys filled in from
+    en.json by bin/locale-fill.mjs for the seven site languages. Untranslated
+    keys returned `undefined` and crashed the tooltip renderer. Values only;
+    no key is removed.
+  * public/web-apps/apps/api/documents/api.js -- modified 2026-10-15 to
+    register the Safari mousewheel compatibility listener as a function rather
+    than an inline event attribute, preserving the editor's strict CSP.
+  * public/web-apps help content trimmed from the shipped tree.
+  * public/web-apps/apps/{common,*/main}/index*.html -- entry shells with
+    branded titles now use neutral titles and an empty favicon. An inline
+    stylesheet suppresses header and About product marks before the
+    iframe paints. Copyright, publisher and version information remain.
+    Changed 2026-09-26.
+  * public/fonts/ -- the font catalog's proprietary font files were replaced
+    with redistributable open-source families (see docs/font-licenses.md and
+    docs/changelogs/2026-08-22-font-licensing.md).
+  * public/sdkjs/common/AllFonts.js -- the catalog registry that goes with
+    those files. Rows for the replaced families now point at the open-source
+    face standing in for each, so a document asking for a proprietary name
+    still resolves, and nine families were added for scripts the remaining set
+    did not cover.
+
+Other than the changes listed above, public/sdkjs/ and public/web-apps/
+are not edited. The behavioural
+patches this site needs are applied at runtime from lib/onlyoffice/guards/,
+which leaves the rest of the vendor files byte-identical to the build they
+came from.
+
+
+2. x2t WebAssembly converter
+----------------------------
+
+The document converter (x2t) is part of ONLYOFFICE core (AGPL-3.0, Ascensio
+System SIA) compiled to WebAssembly. The build used here comes from the
+third-party project https://github.com/cryptpad/onlyoffice-x2t-wasm.
+
+
+3. Other components
+-------------------
+
+  * ranui / ranuts (https://github.com/chaxus/ran) -- the design system and
+    utilities this site's own interface is built with.
+  * Fonts under public/fonts/ and public/ran-fonts/ -- see docs/font-licenses.md
+    for the license of each family.
+  * Monaco Editor, under public/web-apps/vendor/monaco/ -- shipped by the
+    vendor build; see the LICENSE and ThirdPartyNotices.txt files in that
+    directory.
+
+Other trademarks named in this repository and on the site (Microsoft Word,
+Excel, PowerPoint, and others) are the property of their respective owners and
+are used only to describe the file formats this editor reads and writes.
+
+The application icon is an independently drawn, neutral document illustration.
+It contains no upstream product logo, trademark or project initials.
+
+4. Optional local AI runtime
+----------------------------
+
+wllama 3.6.1 (https://github.com/ngxson/wllama), Copyright (c) 2024
+Xuan Son NGUYEN, is distributed under the MIT license. Its WASM runtime
+includes llama.cpp. License copies are shipped in public/licenses/.
+Model weights are not bundled; their licenses are independent of the runtime.
+The matching optional @wllama/wllama-compat 3.6.1 package is also MIT licensed.
+The local pnpm patch modifies wllama's memory64 capability detection and
+propagates fatal worker errors and explicit termination to pending and
+subsequent tasks; see
+patches/@wllama__wllama@3.6.1.patch.

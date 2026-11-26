@@ -15,7 +15,15 @@
 #   the editor — see "Office editor" below),
 #   cli_proxy/ (2026-11-12: CLIProxyAPI for subscription sign-ins — Settings › Models › Subscriptions).
 # A missing one stops the build (REQUIRED below) instead of shipping an app without it.
-# (Last synced from the source folder 2026-11-19, Broccoli_26new-537 = 2.0.20;
+# (Last synced from the source folder 2026-11-26, Broccoli_26new-569 = 2.0.22 (546-569: Broccoli's own 69 tools
+#  + other apps' tools through app_mcp_host.py, a step can ask the person, skill-creator, editor / reader in the menu,
+#  memory sync between Macs, web send / capture rules, MCP names after the model); agentsview v0.48.0, CLIProxyAPI v8.1.4;
+#  libraries: claude-agent-sdk 0.2.189 (Claude Code 2.1.332), openai 3.59.0, openai-codex-cli-bin 0.172.0 (LICENSE /
+#  NOTICE same as rust-v0.172.0), watchdog 7.1.1. Before that: 2026-11-22, Broccoli_26new-545 = 2.0.22 (the circle's
+#  "Don't Insert"; its choosers used at once, what was said heard again; its dictated words editable on the card);
+#  CodexBar v0.85.0, CLIProxyAPI v8.1.0 (same day); other outside programs and libraries as below. Before that: 2026-11-21, Broccoli_26new-541 = 2.0.21; Open Connector v1.10.1,
+#  CLIProxyAPI v8.0.80. Libraries that day: claude-agent-sdk 0.2.187 (Claude Code 2.1.330), openai 3.57.0,
+#  openai-codex-cli-bin 0.171.0 (Codex 0.171.0; LICENSE / NOTICE checked against rust-v0.171.0), sherpa-onnx 2.0.2. Before that: 2026-11-19, Broccoli_26new-537 = 2.0.20;
 #  browser-use 0.13.14, checked at build time below. Before that: 2026-11-17, Broccoli_26new-524; Open Connector v1.10.0,
 #  CodexBar v0.84.0, agentsview v0.47.0, CLIProxyAPI v8.0.76, Office editor v0.0.9 — all the latest
 #  releases on 2026-11-17; claude-agent-sdk 0.2.183 (Claude Code 2.1.326), openai 3.52.0,
@@ -179,16 +187,20 @@ REQUIRED = [
     # 2026-11-16: voice input — the module and the dictation helper (built by voice_input/build.sh
     # from voice_input/voice_input_helper.swift; Apple's on-device recognizer, macOS 26+)
     'voice_input.py', 'voice_input/BroccoliVoice',
+    # 2026-11-21: the sound before a downloaded speech model hears it — the voice detector's and the
+    # noise remover's small models (Silero VAD, GTCRN; both MIT), found by voice_sound_models_dir()
+    'voice_input/silero_vad.onnx', 'voice_input/gtcrn_simple.onnx',
     # 2026-11-16: the models on this Mac as ordinary profiles (a small local server answered by BroccoliVoice)
     'local_models.py',
     # 2026-11-16: the speech models Broccoli downloads and runs itself (runtime: sherpa-onnx, pip)
     'local_speech.py',
     # 2026-11-10: the bundled Codex's licence (Apache-2.0) and notice, from openai/codex rust-v0.167.0
-    # (2026-11-19: byte-identical in rust-v0.170.0, the bundled version now)
+    # (2026-11-21: byte-identical in rust-v0.171.0, the bundled version now)
     'codex_cli/LICENSE.txt', 'codex_cli/NOTICE.txt',
     # 2026-11-11: Word / Excel / PowerPoint in the editor — the two modules, the component, what it
     # was taken from and its licence (AGPL-3.0) and notice
     'office_files.py', 'office_editor_bridge.py',
+    'app_mcp_host.py',   # 2026-11-26: Broccoli's own tools for other AI apps + the family's shared tool host (since 551)
     'office_editor/manifest.json', 'office_editor/LICENSE.txt', 'office_editor/NOTICE.txt',
     'office_editor/site/editor.html', 'office_editor/site/sdkjs/common/AllFonts.js',
     'office_editor/site/sdkjs/common/wasm/x2t/x2t.wasm.br',
@@ -305,7 +317,7 @@ common_hiddenimports = [
     *collect_submodules('claude_agent_sdk'),
     'codex_cli_bin',             # 2026-11-10: finds the bundled Codex (bundled_codex_path)
     # 2026-11-11: office files in the editor (imported inside try blocks in Broccoli.py)
-    'voice_input', 'local_models', 'local_speech', 'sherpa_onnx', 'office_files', 'office_editor_bridge', 'docx', 'pptx', 'openpyxl', 'lxml.etree',
+    'voice_input', 'local_models', 'local_speech', 'sherpa_onnx', 'office_files', 'office_editor_bridge', 'app_mcp_host', 'docx', 'pptx', 'openpyxl', 'lxml.etree',
     'openpyxl.formula.translate', 'openpyxl.styles.numbers', 'openpyxl.utils.datetime',
     *collect_submodules('mcp'),
     *browser_automation_hiddenimports,
@@ -377,6 +389,7 @@ resource_datas = [
     # CLIProxyAPI (subscription sign-ins): what it was taken from (the settings page shows its
     # version) and its licence
     ('cli_proxy/manifest.json', 'cli_proxy'),
+    ('voice_input/silero_vad.onnx', 'voice_input'), ('voice_input/gtcrn_simple.onnx', 'voice_input'),
     ('cli_proxy/LICENSE.txt', 'cli_proxy'),
     # the bundled Codex: its licence and notice beside it
     ('codex_cli/LICENSE.txt', 'codex_cli_bin'),

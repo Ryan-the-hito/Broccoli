@@ -133,6 +133,32 @@ FEATURE_TRANSLATIONS = {
     'Hold while speaking, let go to end': ('按住说话，松手结束', '押している間だけ聞き取る'),
     'Let go and keep speaking, click to end': ('松手后继续听，再点一下结束', '離しても聞き取りを続け、クリックで終了'),
     'click the circle to stop': ('再点一下小圆点结束', '丸ボタンをクリックで終了'),
+    # the sound before a downloaded model hears it (2026-11-21): three switches
+    'Sound for the downloaded speech models': ('下载的语音模型：听之前先处理声音', 'ダウンロードした音声モデル：聞き取る前の音の処理'),
+    'Find the speech with a voice detector': ('用人声检测找出说话的部分', '音声検出で話している部分を見つける'),
+    'Make quiet sound louder': ('把小的声音放大', '小さい音を大きくする'),
+    'Remove noise such as typing': ('去掉键盘声之类的杂音', 'キーボードの音などの雑音を取り除く'),
+    'These work on the sound before Qwen3, SenseVoice or Whisper hears it; Apple Speech listens by itself '
+    'and is not changed. The voice detector hears quiet and far-away voices that a loudness threshold '
+    'misses. Removing noise helps when you type while you speak; it needs the voice detector, and it '
+    'can cost a little accuracy on clean sound. A saved recording keeps the sound as the microphone '
+    'gave it.': (
+        '这三项是在 Qwen3、SenseVoice、Whisper 听之前先处理声音；Apple Speech 自己听，不受影响。人声检测能听出只看音量会漏掉的小声和远处的说话声。'
+        '去杂音在边说边打字时有用；它要和人声检测一起开，对本来就干净的声音可能略微影响准确度。保存下来的录音仍是麦克风原样的声音。',
+        'これらは Qwen3・SenseVoice・Whisper が聞き取る前の音に働きます。Apple Speech は自分で聞き取るため、影響を受けません。音声検出は、音量だけでは拾えない小さな声や遠くの声を聞き取ります。'
+        '雑音の除去は、話しながらキーを打つときに役立ちます。音声検出と一緒に使う必要があり、もともときれいな音では精度が少し下がることがあります。保存される録音は、マイクが拾ったままの音です。'),
+    # the language and the model choosers on the circle's card (2026-11-21; at once, for all of it: 2026-11-22)
+    'The language you speak. A change is used at once: what you have said so far is heard again in it.': (
+        '你说的语言。换了马上生效：已经说过的话也会按新的语言重新听一遍。',
+        '話す言語。変更はすぐに使われ、それまでに話した内容も新しい言語で聞き直されます。'),
+    'The speech model that listens. A change is used at once: what you have said so far is heard '
+    'again by it.': (
+        '用来听写的语音模型。换了马上生效：已经说过的话也会用新的模型重新听一遍。',
+        '聞き取りに使う音声モデル。変更はすぐに使われ、それまでに話した内容も新しいモデルで聞き直されます。'),
+    'Hearing what you said again with the new choice…': (
+        '正在按新的选择重新听你说过的话…',
+        '新しい設定で、話した内容を聞き直しています…'),
+    'Could not switch: {reason}': ('没能切换：{reason}', '切り替えられませんでした：{reason}'),
     # dictations in the history; groups made automatically (2026-11-16)
     'Dictation': ('听写', '音声入力'),
     'Translation': ('翻译', '翻訳'),
@@ -242,4 +268,21 @@ FEATURE_TRANSLATIONS = {
         'システムの音だけ：相手の声はきれいに録音されますが、自分の声は録音されません。\n'
         '両方録音：自分の声も録音されますが、相手の言葉が一部重複します。\n\n'
         'ヘッドホンを使えばこの問題は起きません。'),
+    "Don't Insert": ('不插入', '挿入しない'),
+    'Insert After All': ('还是插入', 'やはり挿入'),
+    'Keep listening, but do not put the words into the app in front (another app that follows the live transcript still gets them)': ('继续听，但不把字打进前台的软件（订阅实时转写的软件照样收得到）', '聞き取りは続けますが、手前のアプリには入力しません（リアルタイム文字起こしを受け取るアプリには届きます）'),
+    '→ Nowhere: only heard': ('→ 不插入：只听写', '→ 入力しない：聞き取りのみ'),
+    'Not inserted: only heard (kept in the dictation history)': ('没有插入：只听写了（已存进听写记录）', '入力していません：聞き取りのみ（音声入力の履歴に保存）'),
+    # 2026-11-22: the dictated words on the circle's card can be edited (style book 5.1.18)
+    'Done editing (⌘↩)': ('改好了（⌘↩）', '編集を終える（⌘↩）'),
+    'Editing: press ✓ when done. Broccoli learns from what you change.': ('正在修改：改好按 ✓。Broccoli 会从你的修改里学习。', '編集中：終わったら ✓ を押してください。Broccoli は直した内容から学びます。'),
+    'Press ✓ when it reads right.': ('改对了就按 ✓。', '正しくなったら ✓ を押してください。'),
+    'Press ✓ when it reads right: then it goes into {app}.': ('改对了就按 ✓，然后填进 {app}。', '正しくなったら ✓ を押してください。{app} に入力します。'),
+    'Press ✓ when it reads right: then it is copied.': ('改对了就按 ✓，然后复制到剪贴板。', '正しくなったら ✓ を押してください。クリップボードにコピーします。'),
+    'Learned: {pairs}': ('学到了：{pairs}', '学習しました：{pairs}'),
+    'Kept as it was.': ('保持原样。', '元のままにしました。'),
+    'Copied as you changed it.': ('已按你改的复制。', '直した内容でコピーしました。'),
+    'Kept as you changed it.': ('已按你改的保存。', '直した内容で保存しました。'),
+    'Copied as you changed it. {app} still has the words as they were.': ('已按你改的复制。{app} 里的字没有改。', '直した内容でコピーしました。{app} の文字は元のままです。'),
+    'Kept as you changed it. {app} still has the words as they were.': ('已按你改的保存。{app} 里的字没有改。', '直した内容で保存しました。{app} の文字は元のままです。'),
 }

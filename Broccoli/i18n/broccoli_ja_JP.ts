@@ -276,8 +276,20 @@ It will not use the AI model open in this web page.</source>
         <translation>新しい言語や口調（例：日本語（上司向け、丁寧語））</translation>
     </message>
     <message>
+        <source>A picture of this report — of the selected text, when some is selected</source>
+        <translation>このレポートを画像にします。文字を選択しているときは、その部分だけ</translation>
+    </message>
+    <message>
         <source>A provider has the same color here as on the usage bars. Green, grey, orange and red are kept for a task’s state and for a nearly used-up bar.</source>
         <translation>同じプロバイダはここと使用量バーで同じ色です。緑・グレー・オレンジ・赤はタスクの状態と残りわずかの使用量バー用です。</translation>
+    </message>
+    <message>
+        <source>A question for you — {title}</source>
+        <translation>あなたへの質問があります — {title}</translation>
+    </message>
+    <message>
+        <source>A question from the Mac</source>
+        <translation>Mac からの質問</translation>
     </message>
     <message>
         <source>A script runs at once, without the AI. A question goes to the Agent as a new conversation; its answer comes out of the collapsed button. New commands go to layer 2 of its grid: rest the pointer on the collapsed button, then scroll in the grid or click its page dots.</source>
@@ -302,6 +314,10 @@ It will not use the AI model open in this web page.</source>
     <message>
         <source>AI Name This</source>
         <translation>AI に命名させる</translation>
+    </message>
+    <message>
+        <source>AI apps that support MCP (Claude Desktop, Cursor, …) can then read and manage your conversations, models, memory and scheduled tasks — and the tools of your other apps on this Mac. Copy setup gives the lines to paste into that app.</source>
+        <translation>MCP に対応した AI アプリ（Claude Desktop、Cursor など）から、会話・モデル・メモリ・定期タスクを見たり管理したり、この Mac のほかのアプリのツールを使ったりできるようになります。「設定をコピー」で、そのアプリに貼り付ける設定が得られます。</translation>
     </message>
     <message>
         <source>AI tasks</source>
@@ -586,6 +602,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>すべて</translation>
     </message>
     <message>
+        <source>All files</source>
+        <translation>すべてのファイル</translation>
+    </message>
+    <message>
         <source>All profiles finished</source>
         <translation>すべてのプロファイルが完了後</translation>
     </message>
@@ -668,6 +688,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
     <message>
         <source>Answer ready — {title}</source>
         <translation>回答の準備完了 — {title}</translation>
+    </message>
+    <message>
+        <source>Answer: {answer}</source>
+        <translation>回答：{answer}</translation>
     </message>
     <message>
         <source>Answering @{alias} ...</source>
@@ -1218,6 +1242,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
         <translation>Broccoli モデルプロファイル (*.{ext});;すべてのファイル (*)</translation>
     </message>
     <message>
+        <source>Broccoli on the Mac needs your answer to go on. In the Shortcut, choose this conversation and send your answer (a number picks that choice). With no answer within 10 minutes it goes on with the recommended one. The full answer arrives as a separate note.</source>
+        <translation>Mac の Broccoli が続けるにはあなたの答えが必要です。ショートカットでこの会話を選び、答えを送ってください（数字を送るとその選択肢になります）。10 分以内に答えがなければ、おすすめで進めます。最終的な回答は別のメモで届きます。</translation>
+    </message>
+    <message>
         <source>Broccoli on the Mac quit before the answer was finished.</source>
         <translation>回答が終わる前に Mac の Broccoli が終了しました。</translation>
     </message>
@@ -1512,6 +1540,10 @@ Authorization と読み取り専用ヘッダーは上の欄から自動生成さ
     <message>
         <source>Choose File to Compare</source>
         <translation>比較するファイルを選択</translation>
+    </message>
+    <message>
+        <source>Choose a file to read</source>
+        <translation>読むファイルを選択</translation>
     </message>
     <message>
         <source>Choose a model with a larger context window in Settings, then press Retry.</source>
@@ -1934,6 +1966,18 @@ Reason: {reason}</source>
         <translation>総合調整の記録</translation>
     </message>
     <message>
+        <source>Copied as you changed it.</source>
+        <translation>直した内容でコピーしました。</translation>
+    </message>
+    <message>
+        <source>Copied as you changed it. {app} still has the words as they were.</source>
+        <translation>直した内容でコピーしました。{app} の文字は元のままです。</translation>
+    </message>
+    <message>
+        <source>Copied. Paste it into your AI app's MCP settings (for example Claude Desktop or Cursor).</source>
+        <translation>コピーしました。お使いの AI アプリの MCP 設定に貼り付けてください（例：Claude Desktop、Cursor）。</translation>
+    </message>
+    <message>
         <source>Copied: paste with ⌘V.</source>
         <translation>コピーしました。⌘V で貼り付けてください。</translation>
     </message>
@@ -1984,6 +2028,10 @@ Reason: {reason}</source>
     <message>
         <source>Copy resume command</source>
         <translation>再開コマンドをコピー</translation>
+    </message>
+    <message>
+        <source>Copy setup</source>
+        <translation>設定をコピー</translation>
     </message>
     <message>
         <source>Copy to this Mac (new conversation)</source>
@@ -2130,6 +2178,10 @@ Reason: {reason}</source>
         <translation>開始できません（API 設定を確認してください）</translation>
     </message>
     <message>
+        <source>Could not switch: {reason}</source>
+        <translation>切り替えられませんでした：{reason}</translation>
+    </message>
+    <message>
         <source>Could not type into {app}. Copied: paste with ⌘V.</source>
         <translation>{app} に入力できませんでした。コピー済みです。⌘V で貼り付けてください。</translation>
     </message>
@@ -2180,6 +2232,10 @@ Reason: {reason}</source>
     <message>
         <source>Current version: v{v}</source>
         <translation>現在のバージョン: v{v}</translation>
+    </message>
+    <message>
+        <source>Current: {title}</source>
+        <translation>現在の会話：{title}</translation>
     </message>
     <message>
         <source>Custom ({color})</source>
@@ -2476,12 +2532,20 @@ Endpoint URL is empty.</source>
         <translation>書類</translation>
     </message>
     <message>
+        <source>Don't Insert</source>
+        <translation>挿入しない</translation>
+    </message>
+    <message>
         <source>Done</source>
         <translation>完了</translation>
     </message>
     <message>
         <source>Done before this task (in other conversations):</source>
         <translation>このタスクの前に（別の会話で）済んだこと：</translation>
+    </message>
+    <message>
+        <source>Done editing (⌘↩)</source>
+        <translation>編集を終える（⌘↩）</translation>
     </message>
     <message>
         <source>Done — answer ready ({count} chars).</source>
@@ -2634,6 +2698,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Edit the selected skill. Required frontmatter: name and description.</source>
         <translation>選択したスキルを編集します。frontmatter の必須項目: name と description。</translation>
+    </message>
+    <message>
+        <source>Editing: press ✓ when done. Broccoli learns from what you change.</source>
+        <translation>編集中：終わったら ✓ を押してください。Broccoli は直した内容から学びます。</translation>
     </message>
     <message>
         <source>Editor</source>
@@ -2974,6 +3042,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Final response failed</source>
         <translation>最終回答が失敗</translation>
+    </message>
+    <message>
+        <source>Find the speech with a voice detector</source>
+        <translation>音声検出で話している部分を見つける</translation>
     </message>
     <message>
         <source>Finder shows the folder for {name}. Right-click it › Share › Share Folder, choose {name}, set "Only people you invite" and "Can make changes", then send the invitation.</source>
@@ -3342,6 +3414,10 @@ Endpoint URL is empty.</source>
         <translation>見出しと、それぞれに書く内容</translation>
     </message>
     <message>
+        <source>Hearing what you said again with the new choice…</source>
+        <translation>新しい設定で、話した内容を聞き直しています…</translation>
+    </message>
+    <message>
         <source>Heart</source>
         <translation>ハート</translation>
     </message>
@@ -3558,6 +3634,10 @@ Endpoint URL is empty.</source>
         <translation>インディゴ</translation>
     </message>
     <message>
+        <source>Insert After All</source>
+        <translation>やはり挿入</translation>
+    </message>
+    <message>
         <source>Inserted user-added instruction into specialized pipeline</source>
         <translation>ユーザーが追加した指示を専門パイプラインに挿入しました</translation>
     </message>
@@ -3654,6 +3734,10 @@ Endpoint URL is empty.</source>
         <translation>グループは残し、会話をアーカイブ</translation>
     </message>
     <message>
+        <source>Keep listening, but do not put the words into the app in front (another app that follows the live transcript still gets them)</source>
+        <translation>聞き取りは続けますが、手前のアプリには入力しません（リアルタイム文字起こしを受け取るアプリには届きます）</translation>
+    </message>
+    <message>
         <source>Keep the Broccoli iCloud folder downloaded on this Mac</source>
         <translation>iCloud の Broccoli フォルダをこの Mac に常にダウンロードしておく</translation>
     </message>
@@ -3668,6 +3752,18 @@ Endpoint URL is empty.</source>
     <message>
         <source>Keep what the circle heard in the history (group “Dictation”)</source>
         <translation>丸ボタンで聞き取った内容を履歴に残す（グループ「音声入力」）</translation>
+    </message>
+    <message>
+        <source>Kept as it was.</source>
+        <translation>元のままにしました。</translation>
+    </message>
+    <message>
+        <source>Kept as you changed it.</source>
+        <translation>直した内容で保存しました。</translation>
+    </message>
+    <message>
+        <source>Kept as you changed it. {app} still has the words as they were.</source>
+        <translation>直した内容で保存しました。{app} の文字は元のままです。</translation>
     </message>
     <message>
         <source>Kept conversations stay in the history, in no group. Archived conversations are hidden, not deleted: you can restore them in Settings › General › Archive &amp; delete history.</source>
@@ -3770,6 +3866,10 @@ Endpoint URL is empty.</source>
         <translation>好みを {n} 件記憶しました · 設定 → メモリ</translation>
     </message>
     <message>
+        <source>Learned: {pairs}</source>
+        <translation>学習しました：{pairs}</translation>
+    </message>
+    <message>
         <source>Left only</source>
         <translation>左側だけ</translation>
     </message>
@@ -3788,6 +3888,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Let my other Macs send tasks to this Mac</source>
         <translation>自分のほかの Mac からこの Mac へのタスク送信を許可</translation>
+    </message>
+    <message>
+        <source>Let other AI apps use Broccoli's tools (MCP)</source>
+        <translation>ほかの AI アプリから Broccoli のツールを使えるようにする（MCP）</translation>
     </message>
     <message>
         <source>Let other people send tasks to this Mac</source>
@@ -3946,6 +4050,10 @@ Endpoint URL is empty.</source>
         <translation>MCP {name}: 検索ステップ {step} を計画中</translation>
     </message>
     <message>
+        <source>MCP: {names}</source>
+        <translation>MCP：{names}</translation>
+    </message>
+    <message>
         <source>Magic</source>
         <translation>魔法</translation>
     </message>
@@ -3964,6 +4072,10 @@ Endpoint URL is empty.</source>
     <message>
         <source>Make an independent copy here. {device} keeps the original; the two no longer sync.</source>
         <translation>ここに独立したコピーを作ります。元の会話は {device} に残り、以後は同期しません。</translation>
+    </message>
+    <message>
+        <source>Make quiet sound louder</source>
+        <translation>小さい音を大きくする</translation>
     </message>
     <message>
         <source>Make the selected entries one entry (the top one keeps its name).</source>
@@ -4518,6 +4630,14 @@ Endpoint URL is empty.</source>
         <translation>@{alias} として登録された有効な Web・Localhost・ターミナルのターゲットはありません。</translation>
     </message>
     <message>
+        <source>No answer by {time}: the recommended answer is used.</source>
+        <translation>{time} までに答えがなければ、おすすめで進めます。</translation>
+    </message>
+    <message>
+        <source>No answer in time — the recommended answer was used: {answer}</source>
+        <translation>時間内に答えがなかったので、おすすめで進めました：{answer}</translation>
+    </message>
+    <message>
         <source>No answer.</source>
         <translation>回答がありません。</translation>
     </message>
@@ -4812,6 +4932,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
         <translation>グリッドに置かない</translation>
     </message>
     <message>
+        <source>Not inserted: only heard (kept in the dictation history)</source>
+        <translation>入力していません：聞き取りのみ（音声入力の履歴に保存）</translation>
+    </message>
+    <message>
         <source>Not on this Mac: {name}</source>
         <translation>この Mac にはありません：{name}</translation>
     </message>
@@ -4854,6 +4978,10 @@ Web search shape: POST {endpoint}/api/web_search with Bearer key (e.g. endpoint 
     <message>
         <source>Not written: “{name}” is being written by something else right now.</source>
         <translation>書き込みませんでした：「{name}」は別の処理が書き込み中です。</translation>
+    </message>
+    <message>
+        <source>Not yet</source>
+        <translation>まだ保存しない</translation>
     </message>
     <message>
         <source>Notes / traits</source>
@@ -5284,6 +5412,10 @@ GITHUB_PERSONAL_ACCESS_TOKEN=...</translation>
         <translation>今日の会話を整理しています…</translation>
     </message>
     <message>
+        <source>Original format</source>
+        <translation>元の形式</translation>
+    </message>
+    <message>
         <source>Other</source>
         <translation>その他</translation>
     </message>
@@ -5314,6 +5446,10 @@ GITHUB_PERSONAL_ACCESS_TOKEN=...</translation>
     <message>
         <source>Overwrite text</source>
         <translation>テキストを上書き</translation>
+    </message>
+    <message>
+        <source>PDF</source>
+        <translation>PDF</translation>
     </message>
     <message>
         <source>PDF attachment: max pages (All = no limit)</source>
@@ -5540,6 +5676,18 @@ Goal: {goal}</source>
     <message>
         <source>Press shortcut...</source>
         <translation>ショートカットを押してください…</translation>
+    </message>
+    <message>
+        <source>Press ✓ when it reads right.</source>
+        <translation>正しくなったら ✓ を押してください。</translation>
+    </message>
+    <message>
+        <source>Press ✓ when it reads right: then it goes into {app}.</source>
+        <translation>正しくなったら ✓ を押してください。{app} に入力します。</translation>
+    </message>
+    <message>
+        <source>Press ✓ when it reads right: then it is copied.</source>
+        <translation>正しくなったら ✓ を押してください。クリップボードにコピーします。</translation>
     </message>
     <message>
         <source>Previous command is still running...</source>
@@ -5824,6 +5972,10 @@ Goal: {goal}</source>
         <translation>読み込み済み：{title}（{chars} 文字）</translation>
     </message>
     <message>
+        <source>Readable files</source>
+        <translation>リーダーで開けるファイル</translation>
+    </message>
+    <message>
         <source>Reader</source>
         <translation>リーダー</translation>
     </message>
@@ -5926,6 +6078,10 @@ Goal: {goal}</source>
     <message>
         <source>Recognizing text on the page…</source>
         <translation>ページの文字を認識中…</translation>
+    </message>
+    <message>
+        <source>Recommended: {answer}</source>
+        <translation>おすすめ：{answer}</translation>
     </message>
     <message>
         <source>Record AI tasks shortcut</source>
@@ -6116,6 +6272,10 @@ Reason: {reason}</source>
     <message>
         <source>Remove key</source>
         <translation>キーを削除</translation>
+    </message>
+    <message>
+        <source>Remove noise such as typing</source>
+        <translation>キーボードの音などの雑音を取り除く</translation>
     </message>
     <message>
         <source>Remove this saved comment from the menu</source>
@@ -6500,6 +6660,10 @@ Query: {query}</source>
         <translation>{n} 個のステップを並列実行中（グループ「{group}」）</translation>
     </message>
     <message>
+        <source>Runs by itself — the recommended answer was used: {answer}</source>
+        <translation>自動で実行中のため、おすすめで進めました：{answer}</translation>
+    </message>
+    <message>
         <source>Runs on another device</source>
         <translation>別のデバイスで実行</translation>
     </message>
@@ -6586,6 +6750,10 @@ Query: {query}</source>
     <message>
         <source>Save share image</source>
         <translation>共有画像を保存</translation>
+    </message>
+    <message>
+        <source>Save the skill "{name}" in Settings › Skills?</source>
+        <translation>スキル「{name}」を 設定 › Skills に保存しますか？</translation>
     </message>
     <message>
         <source>Save to permanent memory</source>
@@ -6850,6 +7018,10 @@ Query: {query}</source>
     <message>
         <source>Send a new conversation to another device</source>
         <translation>新しい会話を別のデバイスへ送信</translation>
+    </message>
+    <message>
+        <source>Send a number to choose, or type your answer.</source>
+        <translation>番号を送って選ぶか、答えを入力して送信してください。</translation>
     </message>
     <message>
         <source>Send new conversations to the device I picked last with 🎛️ Move to</source>
@@ -7230,6 +7402,10 @@ Reason: {reason}</source>
         <translation>一部の会話をアーカイブできませんでした。</translation>
     </message>
     <message>
+        <source>Sound for the downloaded speech models</source>
+        <translation>ダウンロードした音声モデル：聞き取る前の音の処理</translation>
+    </message>
+    <message>
         <source>Sources</source>
         <translation>情報源</translation>
     </message>
@@ -7404,6 +7580,10 @@ Goal: {goal}</source>
     <message>
         <source>Stop, queue, follow-ups and comments reach the executing device as events; it confirms before anything is shown as done. (M5 · BROCCOLI_M5_REMOTE_LIFECYCLE)</source>
         <translation>停止・キュー・追加質問・コメントはイベントとして実行デバイスに届き、確認されてから完了と表示されます。（M5 · BROCCOLI_M5_REMOTE_LIFECYCLE）</translation>
+    </message>
+    <message>
+        <source>Stopped before an answer came.</source>
+        <translation>答えが来る前に停止しました。</translation>
     </message>
     <message>
         <source>Stopped on the Mac before the answer was finished.</source>
@@ -7784,6 +7964,10 @@ Goal: {goal}</source>
         <translation>この PDF にはページがありません。</translation>
     </message>
     <message>
+        <source>The Reader cannot open this kind of file.</source>
+        <translation>リーダーではこの種類のファイルを開けません。</translation>
+    </message>
+    <message>
         <source>The URLs and files that online memory reads from and writes to.</source>
         <translation>オンラインメモリが読み書きする URL とファイル。</translation>
     </message>
@@ -7952,6 +8136,10 @@ Goal: {goal}</source>
         <translation>言語設定は Broccoli の再起動後に適用されます。</translation>
     </message>
     <message>
+        <source>The language you speak. A change is used at once: what you have said so far is heard again in it.</source>
+        <translation>話す言語。変更はすぐに使われ、それまでに話した内容も新しい言語で聞き直されます。</translation>
+    </message>
+    <message>
         <source>The last update could not be installed ({reason}). Click Update Now to try again.</source>
         <translation>前回のアップデートをインストールできませんでした（{reason}）。「今すぐ更新」で再試行してください。</translation>
     </message>
@@ -8076,6 +8264,10 @@ Goal: {goal}</source>
         <translation>この言語の音声モデルをダウンロードできませんでした。ネットワークを確認して、もう一度お試しください。</translation>
     </message>
     <message>
+        <source>The speech model that listens. A change is used at once: what you have said so far is heard again by it.</source>
+        <translation>聞き取りに使う音声モデル。変更はすぐに使われ、それまでに話した内容も新しいモデルで聞き直されます。</translation>
+    </message>
+    <message>
         <source>The spreadsheet has no sheets.</source>
         <translation>このスプレッドシートにはシートがありません。</translation>
     </message>
@@ -8174,6 +8366,10 @@ Goal: {goal}</source>
     <message>
         <source>These models run on this Mac: what you say or write to them does not leave it. A model that is ready is used through an ordinary profile — choose it on the Model roles page like any other. The ones built into macOS get their profile by themselves.</source>
         <translation>これらのモデルはこの Mac 上で動きます。話した内容や書いた内容がこの Mac の外に出ることはありません。準備ができたモデルは通常のプロファイルとして使い、ほかと同じように「モデルの役割」ページで選びます。macOS に内蔵のモデルにはプロファイルが自動で作られます。</translation>
+    </message>
+    <message>
+        <source>These work on the sound before Qwen3, SenseVoice or Whisper hears it; Apple Speech listens by itself and is not changed. The voice detector hears quiet and far-away voices that a loudness threshold misses. Removing noise helps when you type while you speak; it needs the voice detector, and it can cost a little accuracy on clean sound. A saved recording keeps the sound as the microphone gave it.</source>
+        <translation>これらは Qwen3・SenseVoice・Whisper が聞き取る前の音に働きます。Apple Speech は自分で聞き取るため、影響を受けません。音声検出は、音量だけでは拾えない小さな声や遠くの声を聞き取ります。雑音の除去は、話しながらキーを打つときに役立ちます。音声検出と一緒に使う必要があり、もともときれいな音では精度が少し下がることがあります。保存される録音は、マイクが拾ったままの音です。</translation>
     </message>
     <message>
         <source>They become one new conversation, in this order (oldest first):
@@ -8574,6 +8770,10 @@ With headphones this does not happen.</source>
     <message>
         <source>Type what to remember after {command}.</source>
         <translation>{command} の後に覚えておく内容を入力してください。</translation>
+    </message>
+    <message>
+        <source>Type your answer and send it.</source>
+        <translation>入力欄に答えを書いて送信してください。</translation>
     </message>
     <message>
         <source>URL</source>
@@ -8994,6 +9194,10 @@ With headphones this does not happen.</source>
     <message>
         <source>Web conversation is being captured in the background.</source>
         <translation>ウェブ会話をバックグラウンドで取得しています。</translation>
+    </message>
+    <message>
+        <source>Web page (HTML)</source>
+        <translation>Web ページ（HTML）</translation>
     </message>
     <message>
         <source>Web pages</source>
@@ -9824,6 +10028,10 @@ With headphones this does not happen.</source>
         <translation>未解決</translation>
     </message>
     <message>
+        <source>opened when needed</source>
+        <translation>必要なときに開きます</translation>
+    </message>
+    <message>
         <source>outside Broccoli</source>
         <translation>Broccoli 以外</translation>
     </message>
@@ -9876,6 +10084,10 @@ With headphones this does not happen.</source>
         <translation>直近の未達: {reason}</translation>
     </message>
     <message>
+        <source>recommended</source>
+        <translation>おすすめ</translation>
+    </message>
+    <message>
         <source>refs: </source>
         <translation>参照: </translation>
     </message>
@@ -9914,6 +10126,10 @@ With headphones this does not happen.</source>
     <message>
         <source>run alongside</source>
         <translation>並行して実行</translation>
+    </message>
+    <message>
+        <source>running</source>
+        <translation>実行中</translation>
     </message>
     <message>
         <source>saving took too long there</source>
@@ -10142,6 +10358,10 @@ With headphones this does not happen.</source>
     <message>
         <source>{count} sections reused from the cache</source>
         <translation>{count} 区間はキャッシュを再利用</translation>
+    </message>
+    <message>
+        <source>{count} tools</source>
+        <translation>ツール {count} 個</translation>
     </message>
     <message>
         <source>{days} d {hours} h left</source>
@@ -10580,6 +10800,10 @@ With headphones this does not happen.</source>
         <translation>→ 進む</translation>
     </message>
     <message>
+        <source>→ Nowhere: only heard</source>
+        <translation>→ 入力しない：聞き取りのみ</translation>
+    </message>
+    <message>
         <source>→ {app}</source>
         <translation>→ {app}</translation>
     </message>
@@ -10740,8 +10964,20 @@ With headphones this does not happen.</source>
         <translation>💤（オフライン）</translation>
     </message>
     <message>
+        <source>💬 Reply</source>
+        <translation>💬 回答</translation>
+    </message>
+    <message>
         <source>📌 Board · %d facts · %d disputed · %d proposed</source>
         <translation>📌 ボード · 事実 %d 件 · 異論 %d 件 · 提案 %d 件</translation>
+    </message>
+    <message>
+        <source>📖 Reader</source>
+        <translation>📖 リーダー</translation>
+    </message>
+    <message>
+        <source>📝 Editor</source>
+        <translation>📝 エディタ</translation>
     </message>
     <message>
         <source>📝 Your note reached the running step: {notes}</source>

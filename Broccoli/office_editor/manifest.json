@@ -1,0 +1,41 @@
+{
+  "version": "v0.0.9",
+  "published_at": "2026-11-02T03:36:21Z",
+  "release_url": "https://github.com/ranuts/document/releases/tag/v0.0.9",
+  "source": "ghcr.io/ranuts/document:0.0.9",
+  "image_digest": "sha256:fd71a0a4a82d2ba0bd9338f5b0cfae3609314763d3b1d4e35e7b2e5c89c297be",
+  "build_identity": {
+    "schema": 1,
+    "revision": "cf4e9a7f10fd8581740f453c33c01900e94dbfdf",
+    "contentSha256": "76275df90ba0e6ca318b1c1c879ae795513a5b2059f8d8394359c9213d414350"
+  },
+  "adapter": "ranuts-document",
+  "entry": "editor.html",
+  "files": 2921,
+  "size": 528066201,
+  "license_name": "AGPL-3.0",
+  "license_sha256": "91b65277959ec273763d28ef002e83a6b3fba57c7a35436c9e5b66536333d720",
+  "taken_at": "2026-11-11T12:41:12+0900",
+  "test_run": {
+    "adapter": "ranuts-document",
+    "fixups": {
+      "/sdkjs/common/AllFonts.js": "applied"
+    },
+    "timings": {
+      "docx_open_s": 18.3,
+      "xlsx_open_s": 3.1,
+      "pptx_open_s": 3.4
+    },
+    "console_errors": 0,
+    "checks": 28,
+    "seconds": 27.9
+  },
+  "fixups": [
+    {
+      "path": "/sdkjs/common/AllFonts.js",
+      "find": "[\"Calibri\",115,0,-1,-1,-1,-1,-1,-1]",
+      "replace": "[\"Calibri\",115,0,114,0,112,0,113,0]",
+      "note": "Calibri is listed with a regular face only, so bold / italic Latin text in Calibri (Word's default font) is drawn as wrong glyphs. Point it at the four faces of Carlito, the metric-compatible font the component already ships (seen 2026-11-11, image 0.0.9)."
+    }
+  ]
+}

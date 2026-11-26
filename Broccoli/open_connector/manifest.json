@@ -1,0 +1,25 @@
+{
+  "version": "v1.10.1",
+  "published_at": "2026-11-20T05:48:08Z",
+  "release_url": "https://github.com/oomol-lab/open-connector/releases/tag/v1.10.1",
+  "assets": {
+    "open-connector-darwin-arm64": {
+      "sha256": "95fe81092db0362b4268a89299b8912a7997ec5f673609e10eab9ed647854539",
+      "size": 236696288
+    }
+  },
+  "license_name": "Apache License 2.0 with OOMOL conditions (LICENSE.txt)",
+  "license_sha256": "bff0662e71e2eb066441a8ba4a2e92a2e6555e796b939f76c95455eb9d089377",
+  "taken_at": "2026-11-21T13:21:49+0900",
+  "test_run": {
+    "ready_seconds": 1.89,
+    "tools": [
+      "execute_action",
+      "get_action_guide",
+      "list_apps",
+      "list_connections",
+      "search_actions"
+    ],
+    "public_action": "hackernews.get_top_stories ok"
+  }
+}

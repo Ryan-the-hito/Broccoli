@@ -20,6 +20,7 @@ the recognizer itself runs outside Python's lock (onnxruntime).
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import queue
@@ -34,6 +35,7 @@ import urllib.request
 import wave
 
 SAMPLE_RATE = 16000
+_LOG = logging.getLogger(__name__)
 _RELEASES = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/'
 
 # The models offered on the Local models page, in its order.
@@ -279,6 +281,11 @@ class SpeechEngine:
         self._lock = threading.Lock()
         self._loaded = {}           # (model id, language) → [recognizer, last used]
         self._use = threading.Lock()    # one recognition at a time (they would only slow each other)
+        # how the sound is treated before it is recognized (SoundTreatment below): a function that
+        # gives {'detector', 'gain', 'denoise'} when a listening starts, and the folder with the two
+        # small models. None = nothing is treated (the way it was before 2026-11-21).
+        self.sound_options = None
+        self.sound_models = ''
 
     def loaded(self) -> list:
         with self._lock:
@@ -341,7 +348,9 @@ class SpeechEngine:
         each piece recognized, the texts joined."""
         samples = read_sound_file(path)
         pieces = []
-        for start, end in cut_at_pauses(samples):
+        treatment = SoundTreatment.of(self)
+        samples = treatment.whole(samples)
+        for start, end in treatment.cut(samples):
             text = self.recognize(model_id, samples[start:end], language)
             if text:
                 pieces.append(text)
@@ -413,6 +422,207 @@ def cut_at_pauses(samples, pause_seconds: float = 0.6, max_seconds: float = 25.0
             for a, b in pieces if (b - a) * FRAME_SECONDS >= 0.25]
 
 
+# ── treating the sound before it is recognized (2026-11-21) ──────────────────────────────────
+# Measured that day on 90 s of a voice across a large room (loudness about 0.011): the loudness
+# threshold above (PauseDetector) took 5.8 s of it for speech, and nothing at all once the sound
+# was a third as loud — the models themselves still wrote the whole talk at a tenth of the
+# loudness. So three things, each with its own switch in Settings → Voice input (Ryan: "三样是不是
+# 都可以做成开关"), and only for the downloaded models (Apple's recognizer listens by itself):
+#   detector  a small model says where there is a voice (Silero VAD) instead of "louder than X"
+#   gain      quiet sound is made louder (never more than 30 times, never quieter)
+#   denoise   keys, fans and the like are taken out (GTCRN) before anything else hears the sound
+# Order: gain → denoise → detector → the speech model. The noise remover is only any good WITH the
+# detector (it turns pauses into pure silence, which the loudness threshold cuts to crumbs), and
+# the detector alone hears no voice at all when quiet speech has loud keys over it.
+SOUND_DEFAULTS = {'detector': True, 'gain': True, 'denoise': False}
+VAD_MODEL_FILE = 'silero_vad.onnx'          # MIT (snakers4/silero-vad), 0.6 MB
+DENOISE_MODEL_FILE = 'gtcrn_simple.onnx'    # MIT (Xiaobin-Rong/gtcrn), 0.5 MB
+GAIN_TARGET = 0.08                          # the loudness that loud frames are brought to
+GAIN_MAX = 30.0
+
+
+def loudness_of(samples) -> float:
+    import numpy as np
+    return float(np.sqrt(np.mean(samples * samples))) if len(samples) else 0.0
+
+
+class SoundTreatment:
+    """What one listening (or one file) does to its sound. Anything that cannot be set up (a model
+    file missing, the runtime too old) is simply left out — the listening goes on without it."""
+
+    def __init__(self, options=None, models_dir: str = ''):
+        options = options if isinstance(options, dict) else {}
+        self.gain = bool(options.get('gain'))
+        self.denoise = bool(options.get('denoise'))
+        self.detector = bool(options.get('detector'))
+        self._models_dir = str(models_dir or '')
+        self._loud = 0.02               # the loudness of the loud frames lately (gain = target / this)
+        self._factor = 1.0
+        self._pauses = PauseDetector()
+        self._vad = None
+        self._vad_window = 512
+        self._vad_pending = None
+        self._online = None
+        if self.detector:
+            try:
+                self._vad = self._make_vad(0.1)
+            except Exception as error:
+                _LOG.warning('The voice detector could not be set up: %s', error)
+                self.detector = False
+        if self.denoise:
+            try:
+                import sherpa_onnx
+                self._online = sherpa_onnx.OnlineSpeechDenoiser(sherpa_onnx.OnlineSpeechDenoiserConfig(
+                    model=self._denoise_model_config()))
+            except Exception as error:
+                _LOG.warning('The noise remover could not be set up: %s', error)
+                self.denoise = False
+
+    @classmethod
+    def of(cls, engine) -> 'SoundTreatment':
+        """The treatment an engine asks for now (its `sound_options()`); none for an engine that
+        does not say (the stand-ins of the tests, an engine nobody configured)."""
+        asks = getattr(engine, 'sound_options', None)
+        try:
+            options = asks() if callable(asks) else None
+        except Exception:
+            options = None
+        return cls(options, getattr(engine, 'sound_models', ''))
+
+    def describe(self) -> dict:
+        return {'detector': self.detector, 'gain': self.gain, 'denoise': self.denoise}
+
+    @property
+    def lead_frames(self) -> int:
+        """How many frames before the first "speech" frame belong to the sentence: the detector
+        needs a moment longer than the loudness threshold to be sure."""
+        return 10 if self.detector else 7
+
+    def _file(self, name: str) -> str:
+        path = os.path.join(self._models_dir, name)
+        if not os.path.isfile(path):
+            raise OSError('missing ' + path)
+        return path
+
+    def _make_vad(self, min_silence: float):
+        import sherpa_onnx
+        config = sherpa_onnx.VadModelConfig()
+        config.silero_vad.model = self._file(VAD_MODEL_FILE)
+        config.silero_vad.min_silence_duration = float(min_silence)
+        config.silero_vad.min_speech_duration = 0.1
+        config.silero_vad.max_speech_duration = 25.0
+        config.sample_rate = SAMPLE_RATE
+        self._vad_window = int(config.silero_vad.window_size)
+        return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=60)
+
+    def _denoise_model_config(self):
+        import sherpa_onnx
+        return sherpa_onnx.OfflineSpeechDenoiserModelConfig(
+            gtcrn=sherpa_onnx.OfflineSpeechDenoiserGtcrnModelConfig(model=self._file(DENOISE_MODEL_FILE)),
+            num_threads=1, provider='cpu')
+
+    # ── as the sound comes (a listening) ──
+    def clean(self, samples):
+        """The next piece of sound, treated. With the noise remover on, what comes back may be a
+        little shorter or longer than what went in (it works in its own frames); finish() gives
+        the rest."""
+        import numpy as np
+        samples = np.asarray(samples, dtype='float32')
+        if self.gain and len(samples):
+            samples = self._louder(samples)
+        if self._online is not None and len(samples):
+            samples = np.asarray(self._online.run(samples, SAMPLE_RATE).samples, dtype='float32')
+        return samples
+
+    def finish(self):
+        import numpy as np
+        if self._online is None:
+            return np.zeros(0, dtype='float32')
+        try:
+            return np.asarray(self._online.flush().samples, dtype='float32')
+        except Exception:
+            return np.zeros(0, dtype='float32')
+
+    def _louder(self, samples):
+        import numpy as np
+        # the loud frames lately: up at once, down with a half-life of 0.7 s (by the length of the
+        # sound, whatever the size of the pieces it comes in)
+        values = _frame_loudness(samples)
+        if len(values):
+            fall = 0.5 ** (len(samples) / len(values) / SAMPLE_RATE / 0.7)
+            for value in values:
+                self._loud = max(float(value), self._loud * fall)
+        else:
+            self._loud = max(loudness_of(samples), self._loud * 0.5 ** (len(samples) / SAMPLE_RATE / 0.7))
+        self._loud = max(self._loud, GAIN_TARGET / GAIN_MAX)
+        wanted = max(1.0, min(GAIN_MAX, GAIN_TARGET / self._loud))
+        ramp = np.linspace(self._factor, wanted, len(samples), dtype='float32')     # (no step: no click)
+        self._factor = wanted
+        return np.clip(samples * ramp, -1.0, 1.0)
+
+    def is_speech(self, frame) -> bool:
+        """Is someone speaking in this frame of (treated) sound?"""
+        import numpy as np
+        if self._vad is None:
+            return self._pauses.is_speech(float(np.sqrt(np.mean(frame * frame))) if len(frame) else 0.0)
+        pending = frame if self._vad_pending is None else np.concatenate([self._vad_pending, frame])
+        while len(pending) >= self._vad_window:
+            self._vad.accept_waveform(pending[:self._vad_window])
+            pending = pending[self._vad_window:]
+        self._vad_pending = pending
+        while not self._vad.empty():        # (its own pieces are not used: only "speaking now?")
+            self._vad.pop()
+        return bool(self._vad.is_speech_detected())
+
+    # ── a whole recording at once (a file) ──
+    def whole(self, samples):
+        import numpy as np
+        samples = np.asarray(samples, dtype='float32')
+        if not len(samples):
+            return samples
+        if self.gain:
+            loudness = _frame_loudness(samples)
+            if len(loudness):
+                loud = float(np.percentile(loudness, 95))
+                peak = float(np.abs(samples).max())
+                factor = max(1.0, min(GAIN_MAX, GAIN_TARGET / max(loud, 1e-6), 0.98 / max(peak, 1e-6)))
+                samples = samples * np.float32(factor)
+        if self.denoise:
+            try:
+                import sherpa_onnx
+                remover = sherpa_onnx.OfflineSpeechDenoiser(sherpa_onnx.OfflineSpeechDenoiserConfig(
+                    model=self._denoise_model_config()))
+                samples = np.asarray(remover.run(samples, SAMPLE_RATE).samples, dtype='float32')
+            except Exception as error:
+                _LOG.warning('The noise remover failed on a file: %s', error)
+        return samples
+
+    def cut(self, samples, max_seconds: float = 25.0) -> list:
+        """[(start, end)] in samples: the stretches of speech."""
+        if not self.detector:
+            return cut_at_pauses(samples, max_seconds=max_seconds)
+        try:
+            vad = self._make_vad(0.6)
+            window, pad, pieces = self._vad_window, int(0.2 * SAMPLE_RATE), []
+
+            def take():
+                while not vad.empty():
+                    piece = vad.front
+                    start, length = int(piece.start), len(piece.samples)
+                    vad.pop()
+                    if length >= int(0.25 * SAMPLE_RATE):
+                        pieces.append((max(0, start - pad), min(len(samples), start + length + pad)))
+            for index in range(0, len(samples) - window + 1, window):
+                vad.accept_waveform(samples[index:index + window])
+                take()
+            vad.flush()
+            take()
+            return pieces
+        except Exception as error:
+            _LOG.warning('The voice detector failed on a file: %s', error)
+            return cut_at_pauses(samples, max_seconds=max_seconds)
+
+
 class LocalDictation:
     """One listening with a downloaded model.
 
@@ -425,15 +635,24 @@ class LocalDictation:
 
     A sentence ends at a pause of `pause_seconds`. While one is being spoken, what there is of it
     is recognized again every `partial_seconds` (None = only finished sentences are reported).
+
+    keep_heard: the sound of every finished sentence is kept, so that a switch() to another model or
+    language hears all of it again and reports the whole text anew:
+        on_rewrite(text)   every finished sentence so far, as the new model / language hears them
     """
 
     def __init__(self, engine: SpeechEngine, model_id: str, language: str, sound,
                  on_partial=None, on_final=None, on_level=None, on_done=None, on_error=None, on_tone=None,
-                 pause_seconds: float = 0.7, partial_seconds: float | None = 1.0, max_seconds: float = 25.0):
+                 pause_seconds: float = 0.7, partial_seconds: float | None = 1.0, max_seconds: float = 25.0,
+                 keep_heard: bool = False, on_rewrite=None):
         self._engine = engine
         self._model_id = model_id
         self._language = language
         self._sound = sound
+        self._keep_heard = bool(keep_heard)
+        self._heard = []            # (keep_heard) the sound of each finished sentence, in order
+        self._redo_seq = 0          # the latest switch that asked for everything to be heard again
+        self._on_rewrite = on_rewrite or (lambda text: None)
         self._on_partial = on_partial or (lambda text: None)
         self._on_final = on_final or (lambda text: None)
         self._on_level = on_level or (lambda value: None)
@@ -459,6 +678,23 @@ class LocalDictation:
         """Stop at once: what is not final yet is dropped."""
         self._cancelled.set()
 
+    def switch(self, model_id: str = '', language=None) -> bool:
+        """Another model and / or language while it listens ('' / None = leave as it is). Used at once
+        for what is recognized next; with keep_heard, every sentence already finished is heard again
+        too and on_rewrite reports them anew (2026-11-22, Ryan: "我现在已经说了这么多了，难道我还要把这个
+        东西重说一遍吗"). True = something changed."""
+        changed = False
+        if model_id and str(model_id) != self._model_id:
+            self._model_id = str(model_id)
+            changed = True
+        if language is not None and str(language) != self._language:
+            self._language = str(language)
+            changed = True
+        if changed and self._keep_heard:
+            self._redo_seq += 1
+            self._jobs.put(('redo', self._redo_seq))
+        return changed
+
     def join(self, timeout=None):
         self._listener.join(timeout)
         self._worker.join(timeout)
@@ -466,13 +702,47 @@ class LocalDictation:
     # ── the listening thread: sound in, sentences out ──
     def _listen(self):
         import numpy as np
-        detector = PauseDetector()
+        treatment = SoundTreatment.of(self._engine)
+        self.treatment = treatment.describe()
+        lead = treatment.lead_frames
         pending = b''
+        carry = np.zeros(0, dtype='float32')    # treated sound that does not fill a frame yet
         before = []                 # the last quiet frames: kept so a sentence's first sound is not cut off
         sentence = []               # frames of the sentence being spoken
         quiet = 0
         last_partial = time.monotonic()
         last_level = 0.0
+
+        def hear(treated):
+            """Treated sound → whole frames → sentences."""
+            nonlocal carry, before, sentence, quiet, last_partial
+            carry = np.concatenate([carry, treated]) if len(carry) else treated
+            count = len(carry) // FRAME
+            for index in range(count):
+                frame = carry[index * FRAME:(index + 1) * FRAME]
+                now = time.monotonic()
+                speaking = treatment.is_speech(frame)
+                if not sentence:
+                    if speaking:
+                        sentence = before[-lead:] + [frame]       # with 0.2–0.3 s of what came before
+                        quiet = 0
+                        last_partial = now
+                    else:
+                        before.append(frame)
+                        del before[:-12]
+                    continue
+                sentence.append(frame)
+                quiet = 0 if speaking else quiet + 1
+                if quiet >= self._pause_frames or len(sentence) >= self._max_frames:
+                    # without the pause itself (0.2 s of it stays): a long quiet tail makes the
+                    # models repeat the last syllables ("settingsttings", SenseVoice, 2026-11-16)
+                    keep = len(sentence) - max(0, quiet - 7)
+                    self._jobs.put(('final', np.concatenate(sentence[:keep])))
+                    sentence, before, quiet = [], [], 0
+                elif self._partial_seconds and now - last_partial >= self._partial_seconds and quiet < 5:
+                    last_partial = now
+                    self._jobs.put(('partial', np.concatenate(sentence)))
+            carry = carry[count * FRAME:]
         try:
             for block in self._sound():
                 if self._cancelled.is_set():
@@ -483,38 +753,22 @@ class LocalDictation:
                     continue
                 samples = np.frombuffer(pending[:usable], dtype='<i2').astype('float32') / 32768.0
                 pending = pending[usable:]
+                # what the user is shown (the bars, the line behind the circle) follows the sound as
+                # the microphone gave it, not the treated one
                 for index in range(0, len(samples), FRAME):
-                    frame = samples[index:index + FRAME]
-                    loudness = float(np.sqrt(np.mean(frame * frame)))
                     now = time.monotonic()
                     if now - last_level >= 0.066:
+                        frame = samples[index:index + FRAME]
+                        loudness = float(np.sqrt(np.mean(frame * frame)))
                         last_level = now
                         self._on_level(max(0.0, min(1.0, (20 * math.log10(max(loudness, 1e-6)) + 50) / 50)))
                         # about the pitch: zero crossings a second / 2; 90 Hz … 2000 Hz → 0 … 1 (by octave)
                         crossings = int(np.count_nonzero((frame[1:] >= 0) != (frame[:-1] >= 0)))
                         hertz = crossings * SAMPLE_RATE / (2.0 * max(1, len(frame)))
                         self._on_tone(max(0.0, min(1.0, math.log2(max(hertz, 90.0) / 90.0) / math.log2(2000.0 / 90.0))))
-                    speaking = detector.is_speech(loudness)
-                    if not sentence:
-                        if speaking:
-                            sentence = before[-7:] + [frame]      # with 0.2 s of what came before
-                            quiet = 0
-                            last_partial = now
-                        else:
-                            before.append(frame)
-                            del before[:-10]
-                        continue
-                    sentence.append(frame)
-                    quiet = 0 if speaking else quiet + 1
-                    if quiet >= self._pause_frames or len(sentence) >= self._max_frames:
-                        # without the pause itself (0.2 s of it stays): a long quiet tail makes the
-                        # models repeat the last syllables ("settingsttings", SenseVoice, 2026-11-16)
-                        keep = len(sentence) - max(0, quiet - 7)
-                        self._jobs.put(('final', np.concatenate(sentence[:keep])))
-                        sentence, before, quiet = [], [], 0
-                    elif self._partial_seconds and now - last_partial >= self._partial_seconds and quiet < 5:
-                        last_partial = now
-                        self._jobs.put(('partial', np.concatenate(sentence)))
+                hear(treatment.clean(samples))
+            if not self._cancelled.is_set():
+                hear(treatment.finish())
             if sentence and not self._cancelled.is_set() and len(sentence) * FRAME_SECONDS >= 0.25:
                 self._jobs.put(('final', np.concatenate(sentence)))     # the last words when it stops
         except Exception as error:
@@ -530,6 +784,11 @@ class LocalDictation:
                     break
                 if self._cancelled.is_set():
                     continue
+                if kind == 'redo':
+                    self._redo(samples)
+                    continue
+                if kind == 'final' and self._keep_heard:
+                    self._heard.append(samples)
                 if kind == 'partial':
                     # behind already (a newer partial or the sentence's end is waiting)? skip this one
                     if not self._jobs.empty():
@@ -556,6 +815,30 @@ class LocalDictation:
                         self._on_partial('')        # a noise, not a sentence: take the grey text away
         finally:
             self._on_done()
+
+    def _redo(self, seq: int):
+        """(recognizing thread) Every finished sentence heard again with the model / language in use
+        now; the whole text goes to on_rewrite. A newer switch makes this one give way."""
+        if seq != self._redo_seq:
+            return                          # another switch came after this one: that one redoes it
+        texts, last = [], ''
+        for samples in list(self._heard):
+            if self._cancelled.is_set() or seq != self._redo_seq:
+                return
+            try:
+                text = self._engine.recognize(self._model_id, samples, self._language)
+            except Exception as error:
+                self._on_error('recognition_failed', str(error)[:300])
+                self._cancelled.set()
+                return
+            if text:
+                texts.append(' ' + text if last and last[-1].isascii() and text[:1].isascii()
+                             and not last[-1].isspace() else text)
+                last = text
+        if seq != self._redo_seq or self._cancelled.is_set():
+            return
+        self._last_final = last
+        self._on_rewrite(''.join(texts))
 
     def _spaced(self, text: str) -> str:
         """Latin sentences get a space between them; Chinese / Japanese ones do not."""

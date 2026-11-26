@@ -1,21 +1,21 @@
 {
-  "version": "v0.84.0",
-  "published_at": "2026-11-07T05:02:09Z",
-  "release_url": "https://github.com/steipete/CodexBar/releases/tag/v0.84.0",
+  "version": "v0.85.0",
+  "published_at": "2026-11-21T17:35:10Z",
+  "release_url": "https://github.com/steipete/CodexBar/releases/tag/v0.85.0",
   "asset": {
-    "name": "CodexBarCLI-v0.84.0-macos-arm64.tar.gz",
-    "sha256": "77a318c6b904983711f1b7d248211b1bbd4a77b5e038258a79ba2258683f2603",
-    "size": 14539456
+    "name": "CodexBarCLI-v0.85.0-macos-arm64.tar.gz",
+    "sha256": "741c2d6f18c895b1c2ccf79893f287deac1d62ececb31f5a338473eb1e69f308",
+    "size": 14743413
   },
   "license_name": "MIT",
   "license_sha256": "14293556b79940745123d0160c71d27ed0e9fe9b8a848093f3ed78f4853caafe",
-  "taken_at": "2026-11-07T18:01:57+0900",
+  "taken_at": "2026-11-22T20:01:58+0900",
   "test_run": {
-    "version": "CodexBar 0.84.0",
-    "providers": 114,
+    "version": "CodexBar 0.85.0",
+    "providers": 116,
     "readings": {
       "codex": "1 window(s)",
-      "claude": "2 window(s)",
+      "claude": "1 window(s)",
       "grok": "no reading here",
       "ollama": "2 window(s)"
     }
