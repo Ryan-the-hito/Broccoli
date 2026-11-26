@@ -9,7 +9,7 @@
 
 **Broccoli is an AI workstation that floats on your Mac desktop.** One small window holds your API models, the web versions of ChatGPT, Claude and Gemini, Claude Code / Codex, and a terminal. It still chats, translates, polishes and summarizes like it always did. It can now also make a plan and carry it out: run commands, drive a browser, use your computer and edit files. When several tasks run at once, a coordinator decides who goes first, so no task overwrites another's changes. Every conversation and setting stays on your own Mac.
 
-Latest version: **v2.0.21** · Interface: English / 简体中文 / 日本語
+Latest version: **v2.0.22** · Interface: English / 简体中文 / 日本語
 
 <details>
 <summary>The old introduction (v1, out of date)</summary>
@@ -180,7 +180,8 @@ A single click waits for the double-click interval before it acts, because Brocc
 - Long-press the circle with the left button to dictate into other apps (see the section above).
 - The default chat model can tidy up what was heard, with tidy-up prompts you write yourself. Dictation learns from your corrections: a word you fixed is fixed automatically next time.
 - Besides Apple's built-in recognizer, you can download the Qwen3, SenseVoice and Whisper speech models. The speech and chat models on this Mac are listed in Settings › Models › Local models.
-- While you dictate with a long press on the circle, the card has three small choosers at the bottom: how the text is tidied, the language you speak, and which speech model listens. With a downloaded model, a change is used from the next sentence.
+- While you dictate with a long press on the circle, the card has three small choosers at the bottom: how the text is tidied, the language you speak, and which speech model listens. A change is used at once: what you have already said is heard again with the new language or model and the words on the card are replaced, so you never have to say it again; changing the tidy-up while the words are being tidied starts the tidy-up again with the new one. The row ends with a "Don't Insert" button: press it and this recording is only heard and kept in the dictation history, not typed into the app in front and not copied; press it again ("Insert After All") to undo.
+- The dictated words on the card can be edited right there: click into them and type (the fainter words still being spoken can be changed once they are final), then ✓ or ⌘↩ to finish, Esc to take it back. Clicked into before the words went in, they wait for ✓ and then go in as edited; edited after they went in, the copy on the clipboard and the dictation history follow, and the app they went into keeps what it got. Every finished edit teaches Broccoli its small corrections ("Learned corrections"), so the same mistake is fixed by itself next time. An AI answer on the card still cannot be edited.
 - With a downloaded model (Qwen3, SenseVoice, Whisper), the sound is treated before it is recognized. Settings › General › Voice input has three switches: find the speech with a voice detector (on by default), make quiet sound louder (on by default), and remove noise such as typing (off by default). Quiet or far-away speech is still heard, and typing alone no longer turns into words. Apple Speech listens by itself and is not affected by these switches.
 
 ### And more
@@ -199,6 +200,11 @@ A single click waits for the double-click interval before it acts, because Brocc
 - **Merging conversations**: select several conversations in the history list and merge them into one new conversation. Conversations in the same group know about each other.
 - **Office files**: the editor opens and edits Word, Excel and PowerPoint files; AI changes are written to the file only after you approve them.
 - **Subscription sign-in**: in Settings › Models › Subscriptions, sign in to an AI subscription you already have in the browser and add its models as profiles in one click (CLIProxyAPI built in, used on this Mac only).
+- **Broccoli's own tools**: 69 tools for conversations, questions, memory, skills, scheduled tasks, deliverables, reports and more. Broccoli's own agent uses them; other AI apps (Claude Code, Codex and others) connect with "Copy setup" in Settings › External context & MCP. The tools of Tomato, Raspberry, Watermelon and Strawberry on the same Mac are attached by themselves. When an answer used MCP services, their names are written after the model.
+- **Writes its own skills, asks you midway**: ask Broccoli to save a way of working as a skill, or use the built-in `//skill-creator`; a skill or a step can ask you in the middle, you can answer from another Mac or the iPhone, and with no answer in time it goes on with the recommended one.
+- **Memory sync**: memory is synced by itself between your own Macs.
+- **Web AIs, more reliable**: when no send button is recognised, the general rule is tried and then the keyboard sends; conversations on Claude, ChatGPT, Gemini, Grok, Copilot, Perplexity, Lumo, Kimi, DeepSeek, z.ai, Doubao and Yuanbao can all be read off the page.
+- **The reader follows the conversation**: open the editor and the reader from the 🥦 menu; the reader remembers files and pages per conversation and sends the text of the current page with your question.
 - **Also**: background vision, skills, userscripts, MCP, running code locally, finish alerts (sound and Reminders), system notifications, keeping selected text in Broccoli or Notes, one-click updates.
 
 ### Local storage
@@ -354,7 +360,7 @@ When you upgrade from an old version, whatever is in `~/BroccoliAppPath` and `~/
 
 ## Download and install
 
-1. Download the latest DMG from [Releases](https://github.com/Ryan-the-hito/Broccoli/releases) (for example `Broccoli_v2.0.21.dmg`).
+1. Download the latest DMG from [Releases](https://github.com/Ryan-the-hito/Broccoli/releases) (for example `Broccoli_v2.0.22.dmg`).
 2. Open the DMG and accept the licence (GPL-3.0).
 3. Drag Broccoli into the Applications folder.
 4. Open Broccoli. A 🥦 icon appears in the menu bar, with "🥦 Start Broccoli!", "⚙️ Settings", "🌐 Language", "🆕 Check for Updates" and more.
